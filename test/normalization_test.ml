@@ -40,20 +40,28 @@ let reset ?(strict = true) () =
 let test_external_oracle_adapter () =
   reset ();
   let script = Filename.temp_file "greysynth-oracle-" ".sh" in
+  let marker = Filename.temp_file "greysynth-oracle-" ".calls" in
   Fun.protect
-    ~finally:(fun () -> try Sys.remove script with Sys_error _ -> ())
+    ~finally:(fun () ->
+      List.iter (fun path -> try Sys.remove path with Sys_error _ -> ()) [ script; marker ])
     (fun () ->
       Out_channel.with_open_text script (fun channel ->
-          output_string channel "#!/bin/sh\nprintf 'v0\\n'\n");
+          Printf.fprintf channel "#!/bin/sh\nprintf 'call\\n' >> %s\nprintf 'v0\\n'\n"
+            (Filename.quote marker));
       Unix.chmod script 0o700;
       C.c_mba_oracle := "rumba";
       C.c_mba_oracle_command := script;
       let x = var 64 "oracle_x" in
       let source = plus x (c 64 0) in
-      match N.oracle_candidate source with
+      (match N.oracle_candidate source with
       | Some candidate ->
           require (E.is_equal candidate x) "MBA oracle variable mapping changed"
-      | None -> failwith "MBA oracle adapter returned no candidate")
+      | None -> failwith "MBA oracle adapter returned no candidate");
+      let square = mul x x in
+      ignore (N.run (plus (plus square square) square));
+      let calls = In_channel.with_open_text marker In_channel.input_lines in
+      require (List.length calls = 2)
+        "MBA oracle did not prioritize the maximal root subtree")
 
 let test_fail_closed () =
   reset ();

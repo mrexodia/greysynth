@@ -734,6 +734,19 @@ let rec product_partition_candidate expression =
               | _ -> None))
   | _ -> None
 
+let oracle_compatible expression =
+  let width = E.sizeof expression in
+  let rec inspect = function
+    | E.Var variable -> variable.size = width
+    | E.Cst value -> Bitvector.size_of value = width
+    | E.Unary { f = (E.Not | E.Minus); x; _ } -> inspect x
+    | E.Binary { f = (E.Plus | E.Minus | E.Mul | E.And | E.Or | E.Xor);
+                 x; y; _ } -> inspect x && inspect y
+    | E.Binary { f = E.Lsl; x; y = (E.Cst _ as y); _ } -> inspect x && inspect y
+    | _ -> false
+  in
+  inspect expression
+
 let oracle_candidate expression =
   if !c_mba_oracle = "none" then None
   else
@@ -746,6 +759,7 @@ let oracle_candidate expression =
       | E.Unary { f = (E.Not | E.Minus); x; _ } -> inspect x
       | E.Binary { f = (E.Plus | E.Minus | E.Mul | E.And | E.Or | E.Xor);
                    x; y; _ } -> inspect x && inspect y
+      | E.Binary { f = E.Lsl; x; y = (E.Cst _ as y); _ } -> inspect x && inspect y
       | _ -> false
     in
     if not (inspect expression) then None
@@ -777,17 +791,23 @@ let oracle_candidate expression =
         | _ -> assert false
       in
       try
+        let timeout =
+          if !g_total_timeout <= 0. then !c_mba_oracle_timeout
+          else
+            let remaining =
+              !g_total_timeout -. (Unix.gettimeofday () -. !g_start_time)
+              |> floor |> int_of_float
+            in
+            if remaining <= 0 then raise Timeout_exception;
+            min !c_mba_oracle_timeout remaining
+        in
         let output =
-          Synth_backends.run_command ~timeout:!c_mba_oracle_timeout command
+          Synth_backends.run_command ~timeout command
           |> String.split_on_char '\n'
           |> List.filter (fun line -> String.trim line <> "")
           |> List.rev
         in
-        match output with
-        | [] -> None
-        | answer :: _ ->
-            let parsed = String_to_sexpr.parse ~default_size:width (String.trim answer) in
-            let rec restore = function
+        let rec restore = function
               | E.Var variable when String.length variable.name >= 2
                                   && variable.name.[0] = 'v' ->
                   let index =
@@ -803,8 +823,18 @@ let oracle_candidate expression =
               | E.Ite _ | E.Load _ -> failwith "MBA oracle returned an unsupported node"
               | node -> node
             in
-            let candidate = restore parsed in
-            if E.sizeof candidate = width then Some candidate else None
+        let rec parse = function
+          | [] -> None
+          | answer :: rest ->
+              (try
+                 let parsed =
+                   String_to_sexpr.parse ~default_size:width (String.trim answer)
+                 in
+                 let candidate = restore parsed in
+                 if E.sizeof candidate = width then Some candidate else parse rest
+               with _ -> parse rest)
+        in
+        parse output
       with
       | Config.Timeout_exception -> raise Config.Timeout_exception
       | exn ->
@@ -832,6 +862,18 @@ let run expression =
         Nodes.add sizes expression value;
         value
   in
+  let try_oracle current =
+    if !oracle_calls >= !c_mba_oracle_calls || cost current < 11
+       || !c_mba_oracle = "none" || not (oracle_compatible current)
+    then None
+    else (
+      incr oracle_calls;
+      match oracle_candidate current with
+      | Some candidate when cost candidate < cost current
+                           && Rewrite.accepts ~pass:"mba-oracle" current candidate ->
+          Some candidate
+      | _ -> None)
+  in
   let rec visit ?(allow_oracle = true) original =
     if !g_has_timedout then original
     else match Nodes.find_opt results original with
@@ -848,18 +890,7 @@ let run expression =
                  let c = visit c in let t = visit t in let e = visit e in E.ite c t e
              | _ -> original);
            if not !g_has_timedout then (
-             let oracle =
-               if allow_oracle && !oracle_calls < !c_mba_oracle_calls
-                  && cost !current >= 5 && !c_mba_oracle <> "none"
-               then (
-                 incr oracle_calls;
-                 match oracle_candidate !current with
-                 | Some candidate when cost candidate < cost !current
-                                      && Rewrite.accepts ~pass:"mba-oracle"
-                                           !current candidate -> Some candidate
-                 | _ -> None)
-               else None
-             in
+             let oracle = if allow_oracle then try_oracle !current else None in
              match oracle with
              | Some candidate -> current := candidate; current := visit ~allow_oracle:false candidate
              | None ->
@@ -896,4 +927,12 @@ let run expression =
         Nodes.replace results original !current;
         !current
   in
-  visit expression
+  let root_is_oracle_target =
+    !c_mba_oracle <> "none" && !c_mba_oracle_calls > 0
+    && cost expression >= 11 && oracle_compatible expression
+  in
+  if root_is_oracle_target then
+    match try_oracle expression with
+    | Some candidate -> visit ~allow_oracle:false candidate
+    | None -> visit ~allow_oracle:false expression
+  else visit expression
