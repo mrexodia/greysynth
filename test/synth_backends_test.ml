@@ -61,4 +61,27 @@ let () =
   | E.Unary { f = E.Uext 8; x = E.Var v; _ } ->
       require (v.name = "x" && v.size = 8) "variable identity changed"
   | _ -> failwith "mixed-width variable conversion has the wrong shape");
-  Printf.printf "synth_backends: complete Xyntia tree conversion passed\n"
+  let sample : B.sample = { args = [| bv 8 7 |]; res = bv 8 3 } in
+  let problem : B.problem =
+    {
+      inputs = [| { name = "v"; size = 8 } |];
+      output_size = 8;
+      samples = [| sample |];
+      constants = [ bv 8 0x2a ];
+      timeout = 1;
+      repeat = 1;
+    }
+  in
+  let sygus = B.cvc5_sygus_problem problem in
+  let contains needle =
+    try
+      ignore (Str.search_forward (Str.regexp_string needle) sygus 0);
+      true
+    with Not_found -> false
+  in
+  List.iter
+    (fun terminal ->
+      require (contains terminal) ("cvc5 grammar is missing " ^ terminal))
+    [ "#x2a"; "(bvudiv NT8 NT8)"; "(bvsdiv NT8 NT8)";
+      "(bvurem NT8 NT8)"; "(bvsrem NT8 NT8)" ];
+  Printf.printf "synth_backends: Xyntia conversion and cvc5 grammar passed\n"

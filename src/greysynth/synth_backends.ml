@@ -384,7 +384,7 @@ end
 
 (* ── cvc5 (external solver, SyGuS) ─────────────────────────────── *)
 
-module Cvc5_backend : BACKEND = struct
+module Cvc5_backend = struct
   let name = "cvc5"
 
   let binops =
@@ -411,7 +411,8 @@ module Cvc5_backend : BACKEND = struct
     [
       ("bvadd", 2); ("bvsub", 2); ("bvmul", 2); ("bvand", 2); ("bvor", 2);
       ("bvxor", 2); ("bvnot", 1); ("bvneg", 1); ("bvshl", 2); ("bvlshr", 2);
-      ("bvashr", 2);
+      ("bvashr", 2); ("bvudiv", 2); ("bvsdiv", 2); ("bvurem", 2);
+      ("bvsrem", 2);
     ]
 
   (* f(v0, ..., vn) with one non-terminal per bit width (operators, inputs of
@@ -438,8 +439,16 @@ module Cvc5_backend : BACKEND = struct
         Array.iteri
           (fun idx (i : input) -> if i.size = w then add "    %s\n" (positional_name idx))
           p.inputs;
-        add "    %s\n" (smtlib_literal (Bitvector.create Z.zero w));
-        add "    %s\n" (smtlib_literal (Bitvector.create (Z.pred (Z.shift_left Z.one w)) w));
+        let zero = Bitvector.create Z.zero w in
+        let fill = Bitvector.create (Z.pred (Z.shift_left Z.one w)) w in
+        add "    %s\n" (smtlib_literal zero);
+        add "    %s\n" (smtlib_literal fill);
+        p.constants
+        |> List.filter (fun value ->
+               Bitvector.size_of value = w
+               && not (Bitvector.equal value zero)
+               && not (Bitvector.equal value fill))
+        |> List.iter (fun value -> add "    %s\n" (smtlib_literal value));
         List.iter
           (fun (op, arity) ->
             if arity = 1 then add "    (%s %s)\n" op (nt w)
@@ -589,6 +598,8 @@ module Cvc5_backend : BACKEND = struct
       in
       parse_answer p out
 end
+
+let cvc5_sygus_problem = Cvc5_backend.sygus_problem
 
 (* ── Registry ──────────────────────────────────────────────────── *)
 
