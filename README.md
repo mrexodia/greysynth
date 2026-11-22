@@ -27,7 +27,11 @@ opam pin outside_tools/xyntia
 make && make install
 ```
 
-You can now run GreySynth direclty using `greysynth`.
+You can now run GreySynth directly using `greysynth`.
+
+Run the regression suite with `make test`. It exercises the evaluator, parser,
+SMT checker, OES, synthesis, and cache acceptance. An installed SMT backend is
+required for the proof tests.
 
 ## Running
 
@@ -66,30 +70,55 @@ The last argument is a JSON file; `default.json` is a working example.
 | `synthesis_timeout`, `synthesis_repeat` | Per-call synthesizer timeout (s) and attempts. |
 | `add_constants_to_synthesis` | Pass the sub-tree's constants to the synthesizer. |
 | `nb_samples` | Number of input samples used by OES and synthesis. |
-| `check_equiv`, `equiv_timeout` | Prove each pass's result equivalent to the ground truth with an SMT solver. |
-| `reject_non_equiv_simplifications` | Prove each synthesized rewrite and drop it if it is not equivalent. |
+| `check_equiv`, `equiv_timeout` | Check each pass against the ground truth, or the original input when no ground truth is supplied. The timeout also bounds individual rewrite proofs. |
+| `reject_non_equiv_simplifications` | Require a proof for every OES, relational, synthesis, and cache rewrite. Enabled in `default.json`; unknown, timeout, errors, and missing solvers reject the candidate. |
 | `total_timeout` | Overall time limit (s); the best result so far is reported. |
 | `balanced_tree`, `sampling_strategy` | Currently only recorded in the report. |
 
 
-## Known limitations
+## Correctness and validation
 
-**Shifts by a variable amount can be simplified unsoundly.** The sample
-evaluator (`src/greysynth/sample_evaluator.ml`) reduces shift amounts modulo
-64, as x86 does, whereas SMT-LIB bit-vector semantics, used for the
-equivalence checks, gives 0 (or the sign bits for `>>s`) once the amount
-reaches the bit width. Expressions that differ only for such large amounts get
-the same signature, and OES can merge them. For example
-`(x << (y & 63)) ^ (x << y)` is simplified to `0`, although it is not
-equivalent (counter-example: `x = 1`, `y = 2^63`).
+The default configuration requires an SMT proof before accepting a rewrite.
+A candidate must have the same bit width and a strictly smaller **restored**
+expression, agree with the complete synthesis sample bank and an independent
+validation bank, and pass the proof. This applies to OES, relational vocabulary,
+CHS, global synthesis, and cached results. Set
+`reject_non_equiv_simplifications` to `false` only when sample-based heuristic
+results are acceptable; finite agreement is not a proof.
 
-In addition, `eval_label`, which computes the synthesis samples of truncated
-sub-trees, does not reduce shift amounts, so a synthesis sample can mix both
-semantics.
+CHS checks a candidate after substituting its cut leaves back into the original
+context. The cut leaves can be correlated, so checking a template over
+independent fresh variables can reject valid contextual simplifications.
+Likewise, a small template can expand to a larger expression. Completed validated
+rewrites survive a later timeout; the remaining work is skipped. Algebraic
+postprocessing is checked too; the raw synthesis result is retained as a
+fallback if postprocessing fails or changes the meaning.
 
-Shifts by a constant smaller than the width, the common case in MBA, are not
-affected. With a ground truth and `check_equiv`, an affected result shows up as
-`"equiv": "no"`.
+Sample signatures retain every width-tagged output. A digest distributes hash
+buckets; collisions never establish equality. Evaluation caches use complete
+expression keys. Both ordinary and cut-leaf evaluation use the same total
+bitvector semantics: oversized logical shifts produce zero, arithmetic shifts
+produce the sign fill, rotations reduce their amount modulo the operand width,
+and division/remainder by zero follow SMT-LIB bitvector semantics.
+
+The JSON report includes `rewrite_validation` (`proved` or `sampled`) and
+`rewrite_checks` counters. `check_equiv` additionally checks the complete result;
+`equiv: "ukn"` is inconclusive and must never be counted as proved success.
+Similarly, `mba_equiv -sample N` reports finite agreement as
+`verification: "sampled"`, `sample_match: true`, and `equiv: "ukn"`.
+
+The default expression printer includes literal widths and preserves variable
+identity. Its output can be parsed again without discarding width annotations.
+The string input language is a pure bitvector language with C-like precedence,
+not a complete C implementation; see `string_to_sexpr.mli`.
+
+### Scope and remaining limitations
+
+These guarantees concern the parsed pure expression. Memory loads are not
+modeled. The C frontend extracts a return expression; it does not reconstruct
+arbitrary assignments or control flow. For arbitrary C or binary programs,
+validate the lifting/extraction stage independently. Solver timeouts can still
+prevent useful rewrites; their frequency is reported separately.
 
 # Cite us
 

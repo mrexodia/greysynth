@@ -19,12 +19,15 @@
 #                                                                        #
 ##########################################################################
 
-.PHONY: test
+.PHONY: all build install test clean
 
 all: build
 
 build:
 	@dune build @install
+
+test:
+	GREYSYNTH_REQUIRE_SOLVER=1 dune runtest
 
 install:
 	dune install

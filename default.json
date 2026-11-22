@@ -15,7 +15,7 @@
   "balanced_tree": true,
   "sampling_strategy": "real",
   "add_constants_to_synthesis": true,
-  "reject_non_equiv_simplifications": false,
+  "reject_non_equiv_simplifications": true,
   "nb_samples": 100,
   "total_timeout": 600,
   "xsmir_ops": ""

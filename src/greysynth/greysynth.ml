@@ -37,10 +37,17 @@ open Synthesis
    enabled *)
 let check_equiv gt ~tag (verdict : equiv_t ref) e =
   match gt with
+  | Some _ when !c_check_equiv && !g_has_timedout -> verdict := Timeout
   | Some gt when !c_check_equiv ->
-      let result, time, _ = are_equivalent e gt (Some !c_equiv_timeout) in
-      verdict := result;
-      _log_dim tag "equiv=%s (%.2fs)" (equiv_to_str result) time
+      (try
+         check_timeout ();
+         let result, time, _ = are_equivalent e gt (Some !c_equiv_timeout) in
+         verdict := result;
+         _log_dim tag "equiv=%s (%.2fs)" (equiv_to_str result) time;
+         check_timeout ()
+       with Timeout_exception ->
+         g_has_timedout := true;
+         verdict := Timeout)
   | _ -> verdict := Disabled
 
 (* One OES pass, without the logging and stats of [oes_with_logs]. *)
@@ -48,16 +55,18 @@ let oes_quiet e = fst (linear_simplify e)
 
 (* Synthesis at increasing horizons (2 .. depth), with an OES pass after
    each horizon when OES is enabled. Updates [best] after every horizon, so a
-   timeout keeps the horizons already done. *)
+   timeout keeps validated rewrites from the current partial horizon too. *)
 let chs gt best =
   c_current_mode_is_global := false;
   let start = Unix.gettimeofday () in
   let horizon = ref 2 in
-  while !horizon <= depth_of_expr !best do
-    check_timeout ();
-    best := simplify_with_horizon !horizon !c_synthesis_timeout !c_synthesis_repeat !best;
-    if !c_oes then best := oes_quiet !best;
-    incr horizon
+  while not !g_has_timedout && !horizon <= depth_of_expr !best do
+    try
+      check_timeout ();
+      best := simplify_with_horizon !horizon !c_synthesis_timeout !c_synthesis_repeat !best;
+      if !c_oes && not !g_has_timedout then best := oes_quiet !best;
+      incr horizon
+    with Timeout_exception -> g_has_timedout := true
   done;
   let time = Unix.gettimeofday () -. start in
   log_chs_size_after := size_of_expr !best;
@@ -66,27 +75,25 @@ let chs gt best =
   _log_ok "CHS" "done  size=%d  (%.2fs)" !log_chs_size_after time
 
 (* Run the enabled passes in order, each on the previous one's output, and
-   return the result. [best] is a ref rather than a value threaded through
-   the passes because the total timeout is an exception raised in the middle
-   of a pass: the ref still holds the output of the last completed pass, which
-   is what we return then. *)
+   return the result. Traversals retain validated partial results when the
+   budget expires; [best] records them before subsequent passes are skipped. *)
 let run_passes gt obf =
   let best = ref obf in
   (try
-     if !c_oes then (
+     if !c_oes && not !g_has_timedout then (
        best := oes_with_logs !best;
        check_equiv gt ~tag:"OES" log_linear_is_equiv !best);
 
      (* fast_simplify is the extension that was designed to extend OES by including more semantics in the OES's cache, it is NOT present in the CCS'26 paper *)
-     if !c_fast_simplify then (
+     if !c_fast_simplify && not !g_has_timedout then (
        best := fast_simplify_with_logs !best;
        check_equiv gt ~tag:"fast_simplify" log_linear_is_equiv !best);
 
-     if !c_global_synthesis then (
+     if !c_global_synthesis && not !g_has_timedout then (
        c_current_mode_is_global := true;
        best := simplify_global !c_synthesis_timeout !c_synthesis_repeat !best;
        check_equiv gt ~tag:"global" log_global_is_equiv !best);
-     if !c_chs then chs gt best
+     if !c_chs && not !g_has_timedout then chs gt best
    with Timeout_exception ->
      g_has_timedout := true;
      _log_warn "greysynth" "timeout reached");
@@ -179,6 +186,18 @@ let report_json ~initial_size ~total_time gt result =
         ("local_cache", `Bool !c_local_cache);
         ("balanced_tree", `Bool !c_balanced_tree);
         ("check_equiv", `Bool !c_check_equiv);
+        ( "rewrite_validation",
+          `String
+            (if !c_reject_non_equiv_simplifications then "proved" else "sampled") );
+        ( "rewrite_checks",
+          `Assoc
+            [
+              ("candidates", `Int !Rewrite.checked);
+              ("proved", `Int !Rewrite.proved);
+              ("sample_rejections", `Int !Rewrite.sample_rejections);
+              ("disproved", `Int !Rewrite.disproved);
+              ("inconclusive", `Int !Rewrite.inconclusive);
+            ] );
         ("sampling_strategy", `String (string_of_sampling !c_sampling_strategy));
         ("nb_samples", `Int !c_nb_samples);
         ("synthesizer", `String !c_synthesizer_name);
@@ -222,6 +241,8 @@ let run obf config gt =
   load_config_from_json config;
   log_obfuscated_expression := obf;
   g_start_time := Unix.gettimeofday ();
+  g_has_timedout := false;
+  Rewrite.reset ();
 
   let initial_size = size_of_expr obf in
   _log "greysynth" "input size=%d%s" initial_size
@@ -229,12 +250,19 @@ let run obf config gt =
        Printf.sprintf "  (timeout=%.0fs)" !g_total_timeout
      else "");
 
-  let result = run_passes gt obf in
+  (* Checking does not require a separate ground truth: the input is the
+     semantic reference when no ground truth was supplied. *)
+  let reference = Some (Option.value gt ~default:obf) in
+  let result = run_passes reference obf in
   (* final OES clean-up, skipped once out of time *)
   let result =
-    if !c_oes && not !g_has_timedout then oes_quiet result else result
+    if !c_oes && not !g_has_timedout then
+      try oes_quiet result with Timeout_exception ->
+        g_has_timedout := true;
+        result
+    else result
   in
-  check_equiv gt ~tag:"final" log_final_is_equiv result;
+  check_equiv reference ~tag:"final" log_final_is_equiv result;
 
   let total_time = Unix.gettimeofday () -. !g_start_time in
   print_summary ~initial_size ~total_time gt result;

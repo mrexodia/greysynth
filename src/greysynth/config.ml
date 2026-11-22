@@ -49,7 +49,7 @@ let c_equiv_timeout = ref 1
 let c_check_equiv = ref false
 let c_nb_samples = ref 100
 let c_current_mode_is_global = ref false
-let c_reject_non_equiv_simplifications = ref false
+let c_reject_non_equiv_simplifications = ref true
 let c_local_cache = ref false
 let c_add_constants_to_synthesis = ref false
 
@@ -114,6 +114,10 @@ let load_config_from_json json_file : unit =
     c_equiv_timeout := json |> member "equiv_timeout" |> to_int;
     c_check_equiv := json |> member "check_equiv" |> to_bool;
     c_nb_samples := json |> member "nb_samples" |> to_int;
+    if !c_nb_samples <= 0 then
+      failwith "config: nb_samples must be positive";
+    if !c_equiv_timeout <= 0 then
+      failwith "config: equiv_timeout must be positive";
     c_local_cache := json |> member "local_cache" |> to_bool;
     c_add_constants_to_synthesis :=
       json |> member "add_constants_to_synthesis" |> to_bool;

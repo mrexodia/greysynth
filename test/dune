@@ -13,6 +13,13 @@
   (run %{test} %{exe:../src/tooling/analysis/mba_equiv.exe})))
 
 (test
+ (name pipeline_test)
+ (modules pipeline_test)
+ (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
+            binsec.smt binsec.sse.term yojson unix)
+ (flags (:standard -open Binsec -open Libsse -open Libterm)))
+
+(test
  (name parser_test)
  (modules parser_test)
  (libraries greysynth.string_to_sexpr greysynth.utils

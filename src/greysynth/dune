@@ -2,7 +2,7 @@
 (library
  (public_name greysynth.core)
  (name greysynth)
- (modules greysynth logging config synth_backends oes synthesis)
+ (modules greysynth logging config synth_backends rewrite oes synthesis)
  (flags
   (:standard -open Binsec -open Smt -open Libsse -open Libterm -open Yojson -w "-58"))
  (libraries binsec.smt binsec.sse binsec.sse.term yojson greysynth.sample_evaluator greysynth.utils greysynth.string_to_sexpr containers str unix xyntia xyntia.utils))

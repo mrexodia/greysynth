@@ -176,17 +176,20 @@ let linear_simplify ?(seed = true) (expr : Sexpr.Expr.t) =
   in
 
   let rec first_pass n =
+    check_timeout ();
     let outhash = !evaluator.node_to_outhash n in
     Greysynth_utils.Utils.increment_counter log_linear_number_unique_hash_before
       outhash;
-    match !evaluator.is_node_constant n with
+    (match !evaluator.is_node_constant n with
     | Some cst ->
         (* [n] evaluates to a constant on every sample: cache the literal *)
         add_to_cache (Sexpr.Expr.constant cst) outhash
     | None ->
         add_to_cache n outhash;
-        if seed then seed_vocabulary n;
-        recurse_into_children n
+        if seed then seed_vocabulary n);
+    (* A constant-looking node may fail independent validation or proof.
+       Its children must still be available when that candidate is rejected. *)
+    recurse_into_children n
   and recurse_into_children n =
     match n with
     | Sexpr.Expr.Unary r -> first_pass r.x
@@ -199,28 +202,30 @@ let linear_simplify ?(seed = true) (expr : Sexpr.Expr.t) =
         first_pass r.e
     | _ -> ()
   in
-  first_pass expr;
+  let prepared =
+    if !g_has_timedout then false
+    else
+      try first_pass expr; true with Timeout_exception ->
+        g_has_timedout := true;
+        false
+  in
 
   let nb_simplifications = ref 0 in
 
   let rec second_pass n =
+    if !g_has_timedout then n
+    else try
+    check_timeout ();
     let outhash = !evaluator.node_to_outhash n in
 
     match n with
     | Sexpr.Expr.Cst _ -> n
     | _ -> (
         let cached_node =
-          try Hashtbl.find cache outhash
-          with _ ->
-            let error_message =
-              Format.sprintf "Not found in outhash:\n%s"
-                (Greysynth_utils.Utils.pp n)
-            in
-            failwith error_message
+          Option.value (Hashtbl.find_opt cache outhash) ~default:n
         in
         if
-          Greysynth_utils.Utils.size_of_expr cached_node
-          < Greysynth_utils.Utils.size_of_expr n
+          Rewrite.accepts ~pass:"OES" n cached_node
         then (
           nb_simplifications := !nb_simplifications + 1;
           cached_node)
@@ -228,13 +233,20 @@ let linear_simplify ?(seed = true) (expr : Sexpr.Expr.t) =
           match n with
           | Sexpr.Expr.Unary r -> Sexpr.Expr.unary r.f (second_pass r.x)
           | Sexpr.Expr.Binary r ->
-              Sexpr.Expr.binary r.f (second_pass r.x) (second_pass r.y)
+              let x = second_pass r.x in
+              let y = second_pass r.y in
+              Sexpr.Expr.binary r.f x y
           | Sexpr.Expr.Ite r ->
-              Sexpr.Expr.ite (second_pass r.c) (second_pass r.t)
-                (second_pass r.e)
+              let c = second_pass r.c in
+              let t = second_pass r.t in
+              let e = second_pass r.e in
+              Sexpr.Expr.ite c t e
           | _ -> n)
+    with Timeout_exception ->
+      g_has_timedout := true;
+      n
   in
-  let ret = second_pass expr in
+  let ret = if prepared then second_pass expr else expr in
   (ret, nb_simplifications)
 
 (* One timed OES pass over the whole tree, recording the per-pass metrics. *)
@@ -272,17 +284,22 @@ let oes_with_logs (expr : Sexpr.Expr.t) =
     let total_time = ref 0.0 in
     let total_simpl = ref 0 in
     let rec loop e iter =
+      if !g_has_timedout then e
+      else try
       check_timeout ();
       let e' = oes_single_pass e in
       total_time := !total_time +. !log_linear_time;
       total_simpl := !total_simpl + !log_linear_number_simplifications;
       let s = Greysynth_utils.Utils.size_of_expr e in
       let s' = Greysynth_utils.Utils.size_of_expr e' in
-      if s' < s then loop e' (iter + 1)
+      if s' < s && not !g_has_timedout then loop e' (iter + 1)
       else (
         _log_dim "OES" "fixed-point reached after %d iteration(s) (size=%d)"
           iter s';
         e')
+      with Timeout_exception ->
+        g_has_timedout := true;
+        e
     in
     let result = loop expr 1 in
     log_linear_time := !total_time;
@@ -304,50 +321,57 @@ let relational_pass (expr : Sexpr.Expr.t) : Sexpr.Expr.t * int =
   let size = Greysynth_utils.Utils.size_of_expr in
   let replacements = ref 0 in
   let rec go n =
-    match n with
-    | Sexpr.Expr.Cst _ -> n
-    | _ -> (
-        let target = !evaluator.node_to_outhash n in
-        let sz_n = size n in
-        let best = ref None in
-
-        let rec invert_kids n =
-          let g = Sexpr.Expr.unary Not n in
-          if size g < sz_n && !evaluator.node_to_outhash g = target then
+    if !g_has_timedout then n
+    else
+      match n with
+      | Sexpr.Expr.Cst _ -> n
+      | _ ->
+          let best = ref None in
+          (* Keep an already validated candidate if a later candidate or
+             descendant exhausts the budget. Never retain an unfinished proof. *)
+          (try
+             check_timeout ();
+             let target = !evaluator.node_to_outhash n in
+             let sz_n = size n in
+             let consider g =
+               check_timeout ();
+               if size g < sz_n && !evaluator.node_to_outhash g = target
+                  && Rewrite.accepts ~pass:"relational" n g then
+                 match !best with
+                 | Some previous when size previous <= size g -> ()
+                 | _ -> best := Some g
+             in
+             let rec invert_kids node =
+               consider (Sexpr.Expr.unary Not node);
+               match node with
+               | Sexpr.Expr.Unary r -> invert_kids r.x
+               | Sexpr.Expr.Binary r -> invert_kids r.x; invert_kids r.y
+               | _ -> ()
+             in
+             invert_kids n;
+             iter_relational_pairs (repeated_descendant_reps n) (fun op a b ->
+                 check_timeout ();
+                 if Sexpr.Expr.sizeof a = Sexpr.Expr.sizeof b then
+                   consider (Sexpr.Expr._binary op a b))
+           with Timeout_exception -> g_has_timedout := true);
+          let chosen =
             match !best with
-            | Some b0 when size b0 <= size g -> ()
-            | _ -> best := Some g
-          else ();
-          match n with
-          | Sexpr.Expr.Unary r -> invert_kids r.x
-          | Sexpr.Expr.Binary r ->
-              invert_kids r.x;
-              invert_kids r.y
-          | _ -> ()
-        in
-
-        invert_kids n;
-
-        iter_relational_pairs (repeated_descendant_reps n) (fun op a b ->
-            if Sexpr.Expr.sizeof a = Sexpr.Expr.sizeof b then
-              (* raw constructor: the smart [binary] would reassociate and
-                 dissolve [a]/[b] as intact subtrees, hiding them from the
-                 recursion below; keep them whole so children can simplify. *)
-              let g = Sexpr.Expr._binary op a b in
-              if size g < sz_n && !evaluator.node_to_outhash g = target then
-                match !best with
-                | Some b0 when size b0 <= size g -> ()
-                | _ -> best := Some g);
-        match !best with
-        | Some g ->
-            incr replacements;
-            recurse_children g
-        | None -> recurse_children n)
+            | Some candidate -> incr replacements; candidate
+            | None -> n
+          in
+          if !g_has_timedout then chosen else recurse_children chosen
   and recurse_children n =
     match n with
     | Sexpr.Expr.Unary r -> Sexpr.Expr.unary r.f (go r.x)
-    | Sexpr.Expr.Binary r -> Sexpr.Expr.binary r.f (go r.x) (go r.y)
-    | Sexpr.Expr.Ite r -> Sexpr.Expr.ite (go r.c) (go r.t) (go r.e)
+    | Sexpr.Expr.Binary r ->
+        let x = go r.x in
+        let y = go r.y in
+        Sexpr.Expr.binary r.f x y
+    | Sexpr.Expr.Ite r ->
+        let c = go r.c in
+        let t = go r.t in
+        let e = go r.e in
+        Sexpr.Expr.ite c t e
     | _ -> n
   in
   let ret = go expr in
@@ -364,10 +388,15 @@ let fast_simplify_counted (expr : Sexpr.Expr.t) : Sexpr.Expr.t * int * int =
   let base, base_simpl_ref = linear_simplify ~seed:false expr in
   let relational = ref 0 in
   let rec loop e =
-    check_timeout ();
-    let e', changed = relational_pass e in
-    relational := !relational + changed;
-    if changed > 0 && size e' < size e then loop e' else e'
+    if !g_has_timedout then e
+    else try
+      check_timeout ();
+      let e', changed = relational_pass e in
+      relational := !relational + changed;
+      if changed > 0 && size e' < size e && not !g_has_timedout then loop e' else e'
+    with Timeout_exception ->
+      g_has_timedout := true;
+      e
   in
   let ret = loop base in
   (ret, !base_simpl_ref, !relational)

@@ -99,7 +99,12 @@ let truncate (expr : Sexpr.Expr.t) (depth : int) =
 
     let label = greek_counter#lookup fingerprint in
     let labelled_var = Sexpr.Expr.var label (Sexpr.Expr.sizeof node) label in
-    Hashtbl.replace new_leafs labelled_var node;
+    (* Repeated value classes may contain very different-sized subtrees.
+       Restoring the smallest one gives synthesis the best chance to shrink
+       the original expression. The final contextual check remains mandatory. *)
+    (match Hashtbl.find_opt new_leafs labelled_var with
+    | Some previous when size_of_expr previous <= size_of_expr node -> ()
+    | _ -> Hashtbl.replace new_leafs labelled_var node);
     labelled_var
   in
 
@@ -145,24 +150,16 @@ let make_problem e new_leafs synthesis_timeout synthesis_repeat :
     |> Array.of_list
   in
 
-  (* A sample that divides by zero is skipped for the next sample id. *)
+  (* The evaluator uses total SMT-LIB semantics, so every subtree and
+     label is sampled on exactly the same input ids, including division by
+     zero. *)
   let samples =
-    let offset = ref 0 in
-    Array.init !c_nb_samples (fun sample_id ->
-        let rec retry () =
-          let id = sample_id + !offset in
-          try
-            let args =
-              List.map (fun leaf -> !evaluator.eval_label leaf id new_leafs) leaves
-              |> Array.of_list
-            in
-            { Synth_backends.args; res = !evaluator.eval_label e id new_leafs }
-          with Division_by_zero ->
-            offset := !offset + 1;
-            if !offset > 100 then failwith "Too many division by zero errors"
-            else retry ()
+    Array.init !c_nb_samples (fun id ->
+        let args =
+          List.map (fun leaf -> !evaluator.eval_label leaf id new_leafs) leaves
+          |> Array.of_list
         in
-        retry ())
+        { Synth_backends.args; res = !evaluator.eval_label e id new_leafs })
   in
 
   let constants =
@@ -208,7 +205,47 @@ let run_backend (problem : Synth_backends.problem) : Sexpr.Expr.t option * float
   in
   (result, Unix.gettimeofday () -. t0)
 
-let synthesize e new_leafs synthesis_timeout synthesis_repeat =
+let replace_greek_vars expr new_leafs =
+  let rec aux node =
+    match Hashtbl.find_opt new_leafs node with
+    | Some original -> original
+    | None -> (
+        match node with
+        | Sexpr.Expr.Unary r -> Sexpr.Expr.unary r.f (aux r.x)
+        | Sexpr.Expr.Binary r -> Sexpr.Expr.binary r.f (aux r.x) (aux r.y)
+        | Sexpr.Expr.Ite r -> Sexpr.Expr.ite (aux r.c) (aux r.t) (aux r.e)
+        | _ -> node)
+  in
+  aux expr
+
+(* The legacy algebraic simplifier is an optional candidate generator, not
+   a trusted step: some of its rules assume nonzero divisors or host-sized
+   shifts. Restore the raw backend result first so failed preparation or
+   rejected algebraic rewrites cannot lose an otherwise useful synthesis. *)
+let prepare_candidates synth_expr new_leafs =
+  try
+    let raw = replace_greek_vars synth_expr new_leafs in
+    try
+      let simplified =
+        replace_greek_vars
+          (Greysynth_utils.Utils.binsec_simplify synth_expr) new_leafs
+      in
+      if size_of_expr simplified < size_of_expr raw then [ simplified; raw ]
+      else [ raw ]
+    with
+    | Timeout_exception -> raise Timeout_exception
+    | exn ->
+        _log_warn "synth" "algebraic simplification failed: %s; validating raw result"
+          (Printexc.to_string exn);
+        [ raw ]
+  with
+  | Timeout_exception -> raise Timeout_exception
+  | exn ->
+      _log_warn "synth" "discarding an unusable backend result: %s"
+        (Printexc.to_string exn);
+      []
+
+let synthesize ~original e new_leafs synthesis_timeout synthesis_repeat =
   check_timeout ();
   let problem = make_problem e new_leafs synthesis_timeout synthesis_repeat in
   match run_backend problem with
@@ -224,42 +261,28 @@ let synthesize e new_leafs synthesis_timeout synthesis_repeat =
           :: !log_chs_synthesis_attempts;
         None)
   | Some synth_expr, time ->
-      let synth_size = Greysynth_utils.Utils.size_of_expr synth_expr in
-      let previous_size = Greysynth_utils.Utils.size_of_expr e in
-      let is_smaller = synth_size < previous_size in
-
-      (* Samples only show the result is plausible; optionally prove it.
-         Only a proven non-equivalence rejects (unknown/timeout keeps it). *)
-      let rejected =
-        is_smaller && !c_reject_non_equiv_simplifications
-        &&
-        let is_equiv, _time, _ =
-          Greysynth_utils.Utils.are_equivalent e synth_expr (Some 20)
-        in
-        match is_equiv with
-        | Yes ->
-            _log_ok "synth" "equivalence confirmed";
-            false
-        | No ->
-            _log_warn "synth" "NOT equivalent -- rejecting";
-            true
-        | _ ->
-            _log_warn "synth" "equivalence check timed out -- keeping";
-            false
-      in
-      let is_simplification = is_smaller && not rejected in
-
+      (* Cut leaves are correlated by the original expression. Check the
+         concrete replacement, after restoring them and simplifying, against
+         the original subtree. Template size/equivalence is insufficient. *)
+      let previous_size = Greysynth_utils.Utils.size_of_expr original in
       let mode = if !c_current_mode_is_global then "global" else "CHS" in
+      let candidate =
+        prepare_candidates synth_expr new_leafs
+        |> List.find_opt (Rewrite.accepts ~pass:mode original)
+      in
+      let is_simplification = Option.is_some candidate in
       if !c_current_mode_is_global then
         log_global_synthesis_attempts :=
-          (Greysynth_utils.Utils.size_of_expr e, true, time, is_simplification)
+          (previous_size, true, time, is_simplification)
           :: !log_global_synthesis_attempts
       else
         log_chs_synthesis_attempts :=
-          (Greysynth_utils.Utils.size_of_expr e, true, time, is_simplification)
+          (previous_size, true, time, is_simplification)
           :: !log_chs_synthesis_attempts;
 
-      if is_simplification then (
+      match candidate with
+      | Some candidate ->
+        let synth_size = Greysynth_utils.Utils.size_of_expr candidate in
         if !c_current_mode_is_global then
           log_global_number_simplifications :=
             !log_global_number_simplifications + 1
@@ -269,20 +292,9 @@ let synthesize e new_leafs synthesis_timeout synthesis_repeat =
 
         _log_ok mode "\027[32m%d -> %d\027[0m  (%.2fs)  %s" previous_size
           synth_size time
-          (Greysynth_utils.Utils.pp synth_expr);
-        Some (synth_expr, time))
-      else None
-
-let replace_greek_vars expr new_leafs =
-  let rec aux node =
-    if Hashtbl.mem new_leafs node then Hashtbl.find new_leafs node
-    else
-      match node with
-      | Sexpr.Expr.Unary r -> Sexpr.Expr.unary r.f (aux r.x)
-      | Sexpr.Expr.Binary r -> Sexpr.Expr.binary r.f (aux r.x) (aux r.y)
-      | _ -> node
-  in
-  aux expr
+          (Greysynth_utils.Utils.pp candidate);
+        Some (synth_expr, candidate, time)
+      | None -> None
 
 let simplify_with_horizon (horizon : int) synthesis_timeout synthesis_repeat
     (expr : Sexpr.Expr.t) =
@@ -297,12 +309,12 @@ let simplify_with_horizon (horizon : int) synthesis_timeout synthesis_repeat
     let n', new_leafs = truncate node horizon in
 
     let synthesized_expression =
-      synthesize n' new_leafs synthesis_timeout synthesis_repeat
+      synthesize ~original:node n' new_leafs synthesis_timeout synthesis_repeat
     in
 
     let ret =
       match synthesized_expression with
-      | Some (expr, time) ->
+      | Some (expr, candidate, time) ->
           if !c_current_mode_is_global then
             Hashtbl.replace log_global_rules_found (n', expr)
               (match Hashtbl.find_opt log_global_rules_found (n', expr) with
@@ -315,13 +327,14 @@ let simplify_with_horizon (horizon : int) synthesis_timeout synthesis_repeat
                   (count + 1, horizons @ [ horizon ], times @ [ time ])
               | None -> (1, [ horizon ], [ time ]));
 
-          let simplified_expr = Greysynth_utils.Utils.binsec_simplify expr in
-          replace_greek_vars simplified_expr new_leafs
+          candidate
       | None -> node
     in
     ret
   in
   let rec aux node =
+    if !g_has_timedout then node
+    else try
     check_timeout ();
     if Greysynth_utils.Utils.depth_of_expr node < horizon then node
     else
@@ -330,22 +343,35 @@ let simplify_with_horizon (horizon : int) synthesis_timeout synthesis_repeat
       match
         (!c_local_cache, Hashtbl.find_opt chs_cache_per_horizon outhash)
       with
-      | true, Some cached_node ->
+      | true, Some cached_node
+        when Sexpr.Expr.compare node cached_node = 0
+             || Rewrite.accepts ~pass:"CHS cache" node cached_node ->
           Greysynth_utils.Utils.increment_counter log_chs_cache_hits_per_horizon
             horizon;
           cached_node
-      | false, _ | true, None ->
+      | false, _ | true, _ ->
           let processed_node = process node in
           let simplified_node =
             match processed_node with
             | Sexpr.Expr.Unary r -> Sexpr.Expr.unary r.f (aux r.x)
-            | Sexpr.Expr.Binary r -> Sexpr.Expr.binary r.f (aux r.x) (aux r.y)
+            | Sexpr.Expr.Binary r ->
+                let x = aux r.x in
+                let y = aux r.y in
+                Sexpr.Expr.binary r.f x y
+            | Sexpr.Expr.Ite r ->
+                let c = aux r.c in
+                let t = aux r.t in
+                let e = aux r.e in
+                Sexpr.Expr.ite c t e
             | _ -> processed_node
           in
 
           if !c_local_cache then
             Hashtbl.add chs_cache_per_horizon outhash simplified_node;
           simplified_node
+    with Timeout_exception ->
+      g_has_timedout := true;
+      node
   in
   let ret = aux expr in
 
@@ -379,23 +405,22 @@ let simplify_global synthesis_timeout synthesis_repeat (expr : Sexpr.Expr.t) =
     else
       let n', new_leafs = truncate node h in
       let synthesized_expression =
-        synthesize n' new_leafs synthesis_timeout synthesis_repeat
+        synthesize ~original:node n' new_leafs synthesis_timeout synthesis_repeat
       in
       match synthesized_expression with
-      | Some (synth_expr, time) ->
+      | Some (synth_expr, candidate, time) ->
           Hashtbl.replace log_global_rules_found (n', synth_expr)
             (match Hashtbl.find_opt log_global_rules_found (n', synth_expr) with
             | Some (count, times) -> (count + 1, times @ [ time ])
             | None -> (1, [ time ]));
-          let simplified_expr =
-            Greysynth_utils.Utils.binsec_simplify synth_expr
-          in
-          replace_greek_vars simplified_expr new_leafs
+          candidate
       | None -> node
   in
 
   (* Bottom-up: simplify children first, then attempt synthesis on the node *)
   let rec aux node =
+    if !g_has_timedout then node
+    else try
     check_timeout ();
     match node with
     | Sexpr.Expr.Var _ | Sexpr.Expr.Cst _ -> node
@@ -403,23 +428,39 @@ let simplify_global synthesis_timeout synthesis_repeat (expr : Sexpr.Expr.t) =
         let outhash = !evaluator.node_to_outhash node in
         if !c_local_cache then (
           match Hashtbl.find_opt cache outhash with
-          | Some cached_node -> cached_node
-          | None ->
+          | Some cached_node
+            when Sexpr.Expr.compare node cached_node = 0
+                 || Rewrite.accepts ~pass:"global cache" node cached_node ->
+              cached_node
+          | _ ->
               let result = process_node node outhash in
               Hashtbl.replace cache outhash result;
               result)
         else process_node node outhash
+    with Timeout_exception ->
+      g_has_timedout := true;
+      node
   and process_node node _outhash =
     (* First, simplify children *)
     let children_simplified =
       match node with
       | Sexpr.Expr.Unary r -> Sexpr.Expr.unary r.f (aux r.x)
-      | Sexpr.Expr.Binary r -> Sexpr.Expr.binary r.f (aux r.x) (aux r.y)
-      | Sexpr.Expr.Ite r -> Sexpr.Expr.ite (aux r.c) (aux r.t) (aux r.e)
+      | Sexpr.Expr.Binary r ->
+          let x = aux r.x in
+          let y = aux r.y in
+          Sexpr.Expr.binary r.f x y
+      | Sexpr.Expr.Ite r ->
+          let c = aux r.c in
+          let t = aux r.t in
+          let e = aux r.e in
+          Sexpr.Expr.ite c t e
       | _ -> node
     in
-    (* Then, attempt synthesis on the whole subtree *)
-    process children_simplified
+    (* A parent timeout must preserve the completed child rewrites. *)
+    if !g_has_timedout then children_simplified
+    else try process children_simplified with Timeout_exception ->
+      g_has_timedout := true;
+      children_simplified
   in
   let ret = aux expr in
 
