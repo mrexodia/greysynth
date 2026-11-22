@@ -169,3 +169,14 @@ The second implementation review drove additional focused regressions:
 The current eight-worker C-Full deterministic run remains **1,000/1,000 proved,
 984 strict reductions, 16 unchanged** after structured real samples and the
 expanded local proof machinery.
+
+### Optional Rumba oracle smoke
+
+A Linux release build of sibling Rumba commit `a653aab` was supplied through the
+new `mba_oracle: "rumba"` adapter for the same 100 PLDI Non-Poly cases. Every
+output remained proved. Geometric quality improved slightly from 19.2494x to
+18.9725x and geometric compression from 2.5498x to 2.5870x, but strict
+reductions changed from 99 to 98 because locally accepted oracle forms altered
+later choices. The adapter therefore remains opt-in; it validates the protocol
+but does not replace general polynomial normalization or whole-pipeline
+portfolio extraction.
