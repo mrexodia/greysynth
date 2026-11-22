@@ -99,15 +99,19 @@ Ground-truth-aware reruns quantify why strict reduction alone is insufficient:
 | 100-case sample | Legacy geometric quality | Arithmetic quality | Geometric compression |
 |---|---:|---:|---:|
 | PLDI Poly | 1.0602x | 1.1033x | 3.0755x |
-| PLDI Non-Poly | 19.2494x | 39.8843x | 2.5498x |
+| PLDI Non-Poly (before ring kernel) | 19.2494x | 39.8843x | 2.5498x |
+| PLDI Non-Poly (ring-certified minterms) | **1.5868x** | **3.7286x** | **30.9318x** |
 | MBA-Obfuscator nonlinear | 11.4734x | 11.6924x | 1.0916x |
 | QSynth EA | 1.0073x | 1.3707x | 11.4693x |
 
 All 400 outputs are proved against their inputs. Short whole-expression checks
 against supplied ground truths prove 155 and leave 245 explicitly unknown;
 these ratios compare syntax/cost and do not claim that every supplied answer is
-semantically consistent. General non-polynomial and MBA-Obfuscator algebra are
-the next dominant quality gaps.
+semantically consistent. The native minterm + modular-ring pass subsequently
+moves PLDI Non-Poly geometric quality from **19.2494x to 1.5868x** and makes all
+100 cases strictly smaller. With a five-second replay schedule, all 100 outputs
+are established (2 direct and 98 compositional proofs). MBA-Obfuscator algebra
+is now the dominant remaining quality gap.
 
 ## Representative probes
 
