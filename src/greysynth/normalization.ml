@@ -347,6 +347,122 @@ let canonical_candidates expression =
         [ build_balanced E.Mul (sorted terms) ]
   | _ -> []
 
+let minterm_ring_proof original candidate =
+  let width = E.sizeof original in
+  if E.sizeof candidate <> width then None
+  else
+    let variables =
+      Sample_evaluator.variables_of_expr original
+      @ Sample_evaluator.variables_of_expr candidate
+      |> List.sort_uniq Stdlib.compare
+    in
+    if variables = [] || List.length variables > !c_normalization_max_atoms then None
+    else if List.exists (fun (_, size) -> size <> width) variables then None
+    else
+      let atoms =
+        variables |> List.map (fun (name, size) -> E.var name size name)
+        |> Array.of_list
+      in
+      let count = Array.length atoms in
+      let atom_index expression =
+        let rec find index =
+          if index = count then None
+          else if E.is_equal atoms.(index) expression then Some index
+          else find (index + 1)
+        in
+        find 0
+      in
+      let rec boolean_value assignment = function
+        | E.Var _ as variable ->
+            Option.map
+              (fun index -> assignment land (1 lsl index) <> 0)
+              (atom_index variable)
+        | E.Cst value when Bitvector.is_zeros value -> Some false
+        | E.Cst value when Bitvector.is_fill value -> Some true
+        | E.Unary { f = E.Not; x; _ } -> Option.map not (boolean_value assignment x)
+        | E.Binary { f = (E.And | E.Or | E.Xor as op); x; y; _ } ->
+            Option.bind (boolean_value assignment x) (fun left ->
+                Option.map
+                  (fun right ->
+                    match op with
+                    | E.And -> left && right
+                    | E.Or -> left || right
+                    | E.Xor -> left <> right
+                    | _ -> assert false)
+                  (boolean_value assignment y))
+        | _ -> None
+      in
+      let is_boolean expression =
+        let saw_variable = ref false in
+        let rec inspect = function
+          | E.Var _ -> saw_variable := true; true
+          | E.Cst value -> Bitvector.is_zeros value || Bitvector.is_fill value
+          | E.Unary { f = E.Not; x; _ } -> inspect x
+          | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } -> inspect x && inspect y
+          | _ -> false
+        in
+        inspect expression && !saw_variable
+      in
+      let minterms =
+        Array.init (1 lsl count) (fun assignment ->
+            Array.to_list atoms
+            |> List.mapi (fun index atom ->
+                   if assignment land (1 lsl index) = 0 then E.unary E.Not atom
+                   else atom)
+            |> function
+            | head :: tail -> List.fold_left (fun result term -> E.binary E.And result term) head tail
+            | [] -> assert false)
+      in
+      let rec sum = function
+        | [] -> zeros width
+        | [ term ] -> term
+        | head :: tail -> E.binary E.Plus head (sum tail)
+      in
+      let expansions = Hashtbl.create 32 in
+      let smt_edges = ref [] in
+      let expand_boolean expression =
+        match Hashtbl.find_opt expansions expression with
+        | Some result -> result
+        | None ->
+            let result =
+              List.init (Array.length minterms) Fun.id
+              |> List.filter (fun assignment ->
+                     boolean_value assignment expression = Some true)
+              |> List.map (Array.get minterms) |> sum
+            in
+            Hashtbl.add expansions expression result;
+            smt_edges := (expression, result) :: !smt_edges;
+            result
+      in
+      let rec expand expression =
+        if is_boolean expression then Some (expand_boolean expression)
+        else
+          match expression with
+          | E.Cst _ -> Some expression
+          | E.Unary { f = E.Minus; x; _ } -> Option.map (E.unary E.Minus) (expand x)
+          | E.Binary { f = (E.Plus | E.Minus | E.Mul as op); x; y; _ } ->
+              Option.bind (expand x) (fun x ->
+                  Option.map (fun y -> E.binary op x y) (expand y))
+          | E.Binary { f = E.Lsl; x; y; _ } ->
+              (match constant_value y with
+              | Some amount when Z.lt (Bitvector.value_of amount) (Z.of_int width) ->
+                  Option.map
+                    (fun x ->
+                      let replacement =
+                        E.binary E.Mul x
+                          (constant width
+                             (Z.shift_left Z.one (Z.to_int (Bitvector.value_of amount))))
+                      in
+                      smt_edges := (expression, replacement) :: !smt_edges;
+                      replacement)
+                    (expand x)
+              | _ -> None)
+          | _ -> None
+      in
+      Option.bind (expand original) (fun left ->
+          Option.map (fun right -> (List.rev !smt_edges, [ left, right ]))
+            (expand candidate))
+
 (* Break constant-scaled complements into small replayable algebraic steps.
    This avoids one monolithic bit-blasted proof for otherwise linear MBAs. *)
 let complement_product_steps original candidate =
@@ -882,14 +998,31 @@ let run expression =
         let current = ref original in
         (try
            check_timeout ();
-           current := (match original with
-             | E.Unary { f; x; _ } -> E.unary f (visit x)
-             | E.Binary { f; x; y; _ } ->
-                 let x = visit x in let y = visit y in E.binary f x y
-             | E.Ite { c; t; e; _ } ->
-                 let c = visit c in let t = visit t in let e = visit e in E.ite c t e
-             | _ -> original);
-           if not !g_has_timedout then (
+           let early_minterm =
+             if cost original < 11 then None
+             else
+               Sample_evaluator.variables_of_expr original
+               |> List.map (fun (name, width) -> E.var name width name)
+               |> List.filter (fun candidate -> cost candidate < cost original)
+               |> List.find_opt (fun candidate ->
+                      match minterm_ring_proof original candidate with
+                      | Some (equalities, ring_equalities) ->
+                          Rewrite.accepts_compositional ~pass:"minterm-ring-mba"
+                            ~equalities ~ring_equalities original candidate
+                      | None -> false)
+           in
+           (match early_minterm with
+           | Some candidate -> current := visit candidate
+           | None ->
+               current := (match original with
+                 | E.Unary { f; x; _ } -> E.unary f (visit x)
+                 | E.Binary { f; x; y; _ } ->
+                     let x = visit x in let y = visit y in E.binary f x y
+                 | E.Ite { c; t; e; _ } ->
+                     let c = visit c in let t = visit t in let e = visit e
+                     in E.ite c t e
+                 | _ -> original));
+           if Option.is_none early_minterm && not !g_has_timedout then (
              let oracle = if allow_oracle then try_oracle !current else None in
              match oracle with
              | Some candidate -> current := candidate; current := visit ~allow_oracle:false candidate

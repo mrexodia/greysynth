@@ -230,6 +230,26 @@ let test_associative_canonicalization () =
         plus (E.binary E.Lsl x (c 16 2)) (E.binary E.Lsl x (c 16 2)), 3;
       "idempotent conjunction", band (band x y) x, 3 ]
 
+let test_ring_certified_linear_mba () =
+  reset ();
+  C.c_equiv_timeout := 1;
+  let source =
+    String_to_sexpr.parse
+      "-1*(a&b)+10*(a&~b)+2*a+11*~(a|b)-11*~b"
+  in
+  let expected = var 64 "a" in
+  R.start_recording source;
+  let result = N.run source in
+  require (E.is_equal result expected)
+    "ring-certified linear MBA did not recover the variable";
+  let certificate = P.finish (Option.get !(R.journal)) result in
+  let report = P.verify ~timeouts:[ 1. ] ~original:source ~candidate:result certificate in
+  require
+    (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+    ("ring-certified linear MBA did not replay: " ^ Yojson.Basic.to_string report);
+  require (Yojson.Basic.Util.member "ring_proofs" report = `Int 1)
+    "linear MBA certificate did not use the ring kernel"
+
 let test_compositional_polynomial_identity () =
   let x = var 64 "px" and y = var 64 "py" in
   let m1 = band x y in
@@ -349,11 +369,12 @@ let () =
     test_five_atom_boolean_recovery ();
     test_semilinear_masks ();
     test_associative_canonicalization ();
+    test_ring_certified_linear_mba ();
     test_compositional_polynomial_identity ();
     test_normalization_portfolio ();
     test_preprocessing_portfolio ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 46 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 47 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"

@@ -123,7 +123,9 @@ let accepts_compositional ?(ring_equalities = []) ~pass ~equalities original can
       let key = proof_key original candidate in
       let budget = float_of_int !c_equiv_timeout in
       let cached = Hashtbl.find_opt proofs key in
-      let attempted = Option.value (Hashtbl.find_opt proof_budgets key) ~default:0. in
+      let attempted =
+        Option.value (Hashtbl.find_opt proof_budgets key) ~default:Float.infinity
+      in
       if cached = Some Yes then (
         last_rejection := "none";
         incr proved;
