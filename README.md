@@ -104,7 +104,8 @@ working example. An optional second positional argument names the certificate.
 |---|---|
 | `normalization` | Run deterministic, proof-gated bitvector and local linear-MBA normalization before OES. Defaults to true; false permits comparison with the earlier pipeline. |
 | `ac_normalization` | Enable experimental associative coefficient collection and Boolean cancellation. |
-| `normalization_portfolio` | Run baseline and AC normalization from the same input and retain the cheaper proved branch. Disabled by default because it spends additional proof budget. |
+| `normalization_portfolio` | Run baseline and AC normalization from the same input and retain the cheaper proved branch. |
+| `preprocessing_portfolio` | Race complete baseline and experimental normalization+OES preprocessing, then retain the cheaper proved branch before CHS. Disabled by default due extra budget. |
 | `normalization_max_atoms` | Maximum independent atoms in local linear-MBA truth tables (1–10, default 6). |
 | `mba_oracle`, `mba_oracle_command` | Optional untrusted `rumba` or `cobra` CLI candidate generator for maximal uniform-width pure-MBA subtrees. |
 | `mba_oracle_timeout`, `mba_oracle_calls` | Per-call wall timeout and maximum calls per run (defaults 2 seconds and 4). |

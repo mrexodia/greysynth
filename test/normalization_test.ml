@@ -25,6 +25,7 @@ let reset ?(strict = true) () =
   U.cost_model := U.Legacy;
   C.c_ac_normalization := false;
   C.c_normalization_portfolio := false;
+  C.c_preprocessing_portfolio := false;
   C.c_normalization_max_atoms := 6;
   C.c_mba_oracle := "none";
   C.c_mba_oracle_command := "";
@@ -264,6 +265,25 @@ let test_normalization_portfolio () =
   require (portfolio_edges = ac_edges)
     "normalization portfolio retained discarded-branch obligations"
 
+let test_preprocessing_portfolio () =
+  let x = var 32 "portfolio_x" and y = var 32 "portfolio_y" in
+  let original = plus (plus (bxor x y) (mul (c 32 2) (band x y))) (c 32 0) in
+  let run ac portfolio =
+    reset ();
+    C.c_normalization := true;
+    C.c_oes := true;
+    C.c_fast_simplify := false;
+    C.c_ac_normalization := ac;
+    C.c_preprocessing_portfolio := portfolio;
+    G.run_preprocessing_portfolio (Some original) original
+  in
+  let baseline = run false false in
+  let experimental = run true false in
+  let selected = run true true in
+  let expected = min (U.size_of_expr baseline) (U.size_of_expr experimental) in
+  require (U.size_of_expr selected = expected)
+    "preprocessing portfolio did not retain the cheaper complete branch"
+
 let test_nonlinear_is_opaque () =
   reset ();
   let x = var 8 "x" and y = var 8 "y" in
@@ -298,6 +318,7 @@ let () =
     test_associative_canonicalization ();
     test_compositional_polynomial_identity ();
     test_normalization_portfolio ();
+    test_preprocessing_portfolio ();
     test_nonlinear_is_opaque ();
     print_endline "normalization_test: 45 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then

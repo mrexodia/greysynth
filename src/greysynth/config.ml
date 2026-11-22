@@ -36,6 +36,7 @@ let string_of_sampling = function
 let c_normalization = ref true
 let c_ac_normalization = ref false
 let c_normalization_portfolio = ref false
+let c_preprocessing_portfolio = ref false
 let c_normalization_max_atoms = ref 6
 let c_mba_oracle = ref "none"
 let c_mba_oracle_command = ref ""
@@ -106,6 +107,10 @@ let load_config_from_json json_file : unit =
        | v -> to_bool v);
     (c_normalization_portfolio :=
        match json |> member "normalization_portfolio" with
+       | `Null -> false
+       | v -> to_bool v);
+    (c_preprocessing_portfolio :=
+       match json |> member "preprocessing_portfolio" with
        | `Null -> false
        | v -> to_bool v);
     (c_normalization_max_atoms :=

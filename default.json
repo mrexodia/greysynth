@@ -2,6 +2,7 @@
   "normalization": true,
   "ac_normalization": false,
   "normalization_portfolio": false,
+  "preprocessing_portfolio": false,
   "normalization_max_atoms": 6,
   "mba_oracle": "none",
   "mba_oracle_command": "",

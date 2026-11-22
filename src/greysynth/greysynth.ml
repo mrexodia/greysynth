@@ -116,24 +116,118 @@ let chs gt best =
   check_equiv gt ~tag:"CHS" log_chs_is_equiv !best;
   _log_ok "CHS" "done  size=%d  (%.2fs)" !log_chs_size_after time
 
-(* Run the enabled passes in order, each on the previous one's output, and
-   return the result. Traversals retain validated partial results when the
-   budget expires; [best] records them before subsequent passes are skipped. *)
+type preprocessing_log = {
+  linear_size : int;
+  linear_simplifications : int;
+  linear_vocab : int;
+  local_vocab : int;
+  linear_time : float;
+  normalization_equiv : equiv_t;
+  linear_equiv : equiv_t;
+  fast_equiv : equiv_t;
+  unique_before : (Sample_evaluator.outhash, int) Hashtbl.t;
+  unique_after : (Sample_evaluator.outhash, int) Hashtbl.t;
+  unique_semantics : int;
+}
+
+let snapshot_preprocessing_log () =
+  {
+    linear_size = !log_linear_size_after;
+    linear_simplifications = !log_linear_number_simplifications;
+    linear_vocab = !log_linear_vocab_injected;
+    local_vocab = !log_local_extend_injected;
+    linear_time = !log_linear_time;
+    normalization_equiv = !log_normalization_is_equiv;
+    linear_equiv = !log_linear_is_equiv;
+    fast_equiv = !log_fast_simplify_is_equiv;
+    unique_before = Hashtbl.copy log_linear_number_unique_hash_before;
+    unique_after = Hashtbl.copy log_linear_number_unique_hash_after;
+    unique_semantics = !tmp_uniq_semantic;
+  }
+
+let restore_table target source =
+  Hashtbl.clear target;
+  Hashtbl.iter (Hashtbl.replace target) source
+
+let restore_preprocessing_log snapshot =
+  log_linear_size_after := snapshot.linear_size;
+  log_linear_number_simplifications := snapshot.linear_simplifications;
+  log_linear_vocab_injected := snapshot.linear_vocab;
+  log_local_extend_injected := snapshot.local_vocab;
+  log_linear_time := snapshot.linear_time;
+  log_normalization_is_equiv := snapshot.normalization_equiv;
+  log_linear_is_equiv := snapshot.linear_equiv;
+  log_fast_simplify_is_equiv := snapshot.fast_equiv;
+  restore_table log_linear_number_unique_hash_before snapshot.unique_before;
+  restore_table log_linear_number_unique_hash_after snapshot.unique_after;
+  tmp_uniq_semantic := snapshot.unique_semantics
+
+let run_preprocessing gt input =
+  let best = ref input in
+  if !c_normalization && not !g_has_timedout then (
+    best := run_normalization !best;
+    check_equiv gt ~tag:"normalization" log_normalization_is_equiv !best);
+  if !c_oes && not !g_has_timedout then (
+    best := oes_with_logs !best;
+    check_equiv gt ~tag:"OES" log_linear_is_equiv !best);
+  (* This relational extension is not part of the CCS'26 paper. *)
+  if !c_fast_simplify && not !g_has_timedout then (
+    best := fast_simplify_with_logs !best;
+    check_equiv gt ~tag:"fast_simplify" log_fast_simplify_is_equiv !best);
+  !best
+
+let run_preprocessing_portfolio gt input =
+  if not !c_preprocessing_portfolio then run_preprocessing gt input
+  else
+    let configured_ac = !c_ac_normalization in
+    let configured_normalization_portfolio = !c_normalization_portfolio in
+    let configured_oracle = !c_mba_oracle in
+    let proof = !(Rewrite.journal) in
+    let proof_initial = Option.map Rewrite_proof.checkpoint proof in
+    let log_initial = snapshot_preprocessing_log () in
+    let restore_proof = function
+      | Some checkpoint -> Option.iter (fun builder -> Rewrite_proof.restore builder checkpoint) proof
+      | None -> ()
+    in
+    Fun.protect
+      ~finally:(fun () ->
+        c_ac_normalization := configured_ac;
+        c_normalization_portfolio := configured_normalization_portfolio;
+        c_mba_oracle := configured_oracle)
+      (fun () ->
+        c_ac_normalization := false;
+        c_normalization_portfolio := false;
+        c_mba_oracle := "none";
+        let baseline = run_preprocessing gt input in
+        let baseline_log = snapshot_preprocessing_log () in
+        let baseline_proof = Option.map Rewrite_proof.checkpoint proof in
+        if !g_has_timedout then baseline
+        else (
+          restore_preprocessing_log log_initial;
+          restore_proof proof_initial;
+          c_ac_normalization := configured_ac;
+          c_normalization_portfolio := configured_normalization_portfolio;
+          c_mba_oracle := configured_oracle;
+          let experimental = run_preprocessing gt input in
+          let experimental_log = snapshot_preprocessing_log () in
+          let experimental_proof = Option.map Rewrite_proof.checkpoint proof in
+          let choose_experimental =
+            size_of_expr experimental < size_of_expr baseline
+            || (size_of_expr experimental = size_of_expr baseline
+                && Sexpr.Expr.compare experimental baseline < 0)
+          in
+          restore_preprocessing_log
+            (if choose_experimental then experimental_log else baseline_log);
+          restore_proof
+            (if choose_experimental then experimental_proof else baseline_proof);
+          if choose_experimental then experimental else baseline))
+
+(* Run preprocessing, then the enabled synthesis passes. Traversals retain
+   validated partial results when the budget expires. *)
 let run_passes gt obf =
   let best = ref obf in
   (try
-     if !c_normalization && not !g_has_timedout then (
-       best := run_normalization !best;
-       check_equiv gt ~tag:"normalization" log_normalization_is_equiv !best);
-     if !c_oes && not !g_has_timedout then (
-       best := oes_with_logs !best;
-       check_equiv gt ~tag:"OES" log_linear_is_equiv !best);
-
-     (* fast_simplify is the extension that was designed to extend OES by including more semantics in the OES's cache, it is NOT present in the CCS'26 paper *)
-     if !c_fast_simplify && not !g_has_timedout then (
-       best := fast_simplify_with_logs !best;
-       check_equiv gt ~tag:"fast_simplify" log_fast_simplify_is_equiv !best);
-
+     best := run_preprocessing_portfolio gt !best;
      if !c_global_synthesis && not !g_has_timedout then (
        c_current_mode_is_global := true;
        best := simplify_global !c_synthesis_timeout !c_synthesis_repeat !best;
@@ -236,6 +330,7 @@ let report_json ~initial_size ~total_time ?proof gt result =
     @ [
         (* configuration *)
         ("is_normalization_enabled", `Bool !c_normalization);
+        ("preprocessing_portfolio", `Bool !c_preprocessing_portfolio);
         ("cost_model", `String (string_of_cost_model !cost_model));
         ("is_linear_enabled", `Bool !c_oes);
         ("is_fast_simplify_enabled", `Bool !c_fast_simplify);
