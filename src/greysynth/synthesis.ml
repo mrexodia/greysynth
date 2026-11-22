@@ -99,8 +99,12 @@ let associative = function
    proved against it. This lets [balanced_tree] influence CHS horizons without
    introducing equal-cost rewrites or rewrite cycles in the result tree. *)
 let balance_associative expr =
+  let memo = Sexpr.BvTbl.create 128 in
   let rec normalize node =
-    match node with
+    match Sexpr.BvTbl.find_opt memo node with
+    | Some result -> result
+    | None ->
+      let result = match node with
     | Unary r -> unary r.f (normalize r.x)
     | Binary r when associative r.f ->
         let rec flatten acc node =
@@ -129,6 +133,9 @@ let balance_associative expr =
     | Binary r -> binary r.f (normalize r.x) (normalize r.y)
     | Ite r -> ite (normalize r.c) (normalize r.t) (normalize r.e)
     | _ -> node
+      in
+      Sexpr.BvTbl.add memo node result;
+      result
   in
   normalize expr
 
