@@ -59,6 +59,7 @@ let c_current_mode_is_global = ref false
 let c_reject_non_equiv_simplifications = ref true
 let c_local_cache = ref false
 let c_add_constants_to_synthesis = ref false
+let c_synthesis_constant_limit = ref 12
 
 (* "synthesizer" config key and the backend it selects (see Synth_backends) *)
 let c_synthesizer_name = ref "xyntia"
@@ -161,6 +162,12 @@ let load_config_from_json json_file : unit =
     c_local_cache := json |> member "local_cache" |> to_bool;
     c_add_constants_to_synthesis :=
       json |> member "add_constants_to_synthesis" |> to_bool;
+    (c_synthesis_constant_limit :=
+       match json |> member "synthesis_constant_limit" with
+       | `Null -> 12
+       | v -> to_int v);
+    if !c_synthesis_constant_limit < 0 then
+      failwith "config: synthesis_constant_limit must be nonnegative";
     (Greysynth_utils.Utils.cost_model :=
        match json |> member "cost_model" with
        | `Null -> Greysynth_utils.Utils.Legacy

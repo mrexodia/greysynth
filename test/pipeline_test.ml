@@ -34,6 +34,7 @@ let reset ?(strict = false) () =
   C.c_oes_candidate_limit := 4;
   C.c_local_cache := false;
   C.c_add_constants_to_synthesis := false;
+  C.c_synthesis_constant_limit := 12;
   C.c_balanced_tree := false;
   C.c_sampling_strategy := C.RealValues;
   C.c_current_mode_is_global := false;
@@ -535,7 +536,7 @@ let test_derived_constant_seeding () =
   List.iter
     (fun value -> require (has value) (Printf.sprintf "derived constant %d is missing" value))
     [ 0; 1; 2; 66; 67 ];
-  require (List.length problem.constants <= 32) "derived constant grammar is unbounded"
+  require (List.length problem.constants <= 12) "derived constant grammar is unbounded"
 
 let test_logging_reset () =
   L.log_linear_size_after := 99;

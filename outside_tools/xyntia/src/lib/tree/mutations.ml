@@ -464,8 +464,12 @@ module Mk_Mutator (O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
   let random_terminal (bitsz : int) : mutd t =
     let nvars = O.nvars () in
     let nconsts = O.nconsts () in
-    let choice = Random.int (nvars + nconsts) in
-    if choice < nvars then mk_terminal bitsz (mk_var (random_var ()))
+    let choose_variable =
+      if nvars = 0 then false
+      else if nconsts = 0 then true
+      else Random.int 10 < 7
+    in
+    if choose_variable then mk_terminal bitsz (mk_var (random_var ()))
     else mk_terminal bitsz (mk_const (random_const ()))
 
   let terminal_from_const c (bitsz : int) = mk_terminal bitsz (mk_const c)

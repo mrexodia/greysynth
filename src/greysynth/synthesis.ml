@@ -332,7 +332,7 @@ let make_problem e new_leafs synthesis_timeout synthesis_repeat :
       let ranked = original @ seeds @ unary @ pairs in
       let seen = Hashtbl.create 32 in
       let rec unique count = function
-        | _ when count >= 32 -> []
+        | _ when count >= !c_synthesis_constant_limit -> []
         | [] -> []
         | value :: rest ->
             let key = (Bitvector.size_of value, Bitvector.value_of value) in

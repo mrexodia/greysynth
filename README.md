@@ -119,7 +119,8 @@ working example. An optional second positional argument names the certificate.
 | `synthesis_timeout`, `synthesis_repeat` | Per-call synthesizer timeout (s) and attempts. |
 | `cegis_retries` | Retry synthesis after an SMT refutation contributes a new explicit counterexample. Defaults to 1. |
 | `learn_synthesis_rules` | Prove successful Greek-variable templates universally and reuse them across concrete contexts. Defaults to true. |
-| `add_constants_to_synthesis` | Pass the sub-tree's constants to the synthesizer. |
+| `add_constants_to_synthesis` | Pass original and bounded derived constants to the synthesizer. |
+| `synthesis_constant_limit` | Maximum constants injected into one synthesis problem (default 12). |
 | `nb_samples` | Number of input samples used by OES and synthesis. |
 | `check_equiv`, `equiv_timeout` | Check each pass against the ground truth, or the original input when no ground truth is supplied. The timeout also bounds individual rewrite proofs. |
 | `reject_non_equiv_simplifications` | Require a proof for every OES, relational, synthesis, and cache rewrite. Enabled in `default.json`; unknown, timeout, errors, and missing solvers reject the candidate. |

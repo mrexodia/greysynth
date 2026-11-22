@@ -24,6 +24,7 @@
   "balanced_tree": true,
   "sampling_strategy": "real",
   "add_constants_to_synthesis": true,
+  "synthesis_constant_limit": 12,
   "reject_non_equiv_simplifications": true,
   "nb_samples": 100,
   "total_timeout": 600,
