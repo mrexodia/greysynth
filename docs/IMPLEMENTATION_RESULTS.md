@@ -135,3 +135,24 @@ congruence and transitivity. Follow-up commutativity/scaling fixes also produce:
 
 Both replay compositionally; the measured simplification times are about 8 ms
 and 29 ms respectively in the Dev Container.
+
+## Follow-up pipeline validation
+
+The second implementation review drove additional focused regressions:
+
+- External backend process groups are killed within the configured wall limit,
+  and no-result/timeout/process-error/ill-formed/post-validation statuses remain
+  distinct in JSON reports.
+- Real contextual banks now include stable per-variable basis and bit-pattern
+  strata. A mock synthesis candidate refuted by SMT contributes its concrete
+  model and succeeds on exactly one bounded CEGIS retry.
+- A universally proved `(A|B)+(A&B) -> A+B` template is synthesized once and
+  reused for different concrete variables without another backend call.
+- Sparse ITE regression samples include feasible models for both branches of
+  `x == 42 ? 7 : 9`, obtained after restoring cut labels to original terms.
+- The audit's new quality metrics were validated on the 100-case PLDI Poly run
+  under legacy, paper-AST, instruction, and readability costs.
+
+The current eight-worker C-Full deterministic run remains **1,000/1,000 proved,
+984 strict reductions, 16 unchanged** after structured real samples and the
+expanded local proof machinery.
