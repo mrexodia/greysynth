@@ -65,6 +65,7 @@ let chs gt best =
       check_timeout ();
       let before = size_of_expr !best in
       best := simplify_with_horizon !horizon !c_synthesis_timeout !c_synthesis_repeat !best;
+      if !c_normalization && not !g_has_timedout then best := Normalization.run !best;
       if !c_oes && not !g_has_timedout then best := oes_quiet !best;
       if size_of_expr !best < before then horizon := 2 else incr horizon
     with Timeout_exception -> g_has_timedout := true
@@ -272,6 +273,13 @@ let run ?proof_output obf config gt =
      semantic reference when no ground truth was supplied. *)
   let reference = Some (Option.value gt ~default:obf) in
   let result = run_passes reference obf in
+  let result =
+    if !c_normalization && not !g_has_timedout then
+      try Normalization.run result with Timeout_exception ->
+        g_has_timedout := true;
+        result
+    else result
+  in
   (* final OES clean-up, skipped once out of time *)
   let result =
     if !c_oes && not !g_has_timedout then
