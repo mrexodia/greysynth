@@ -171,7 +171,8 @@ proved once, then reused for distinct operands with no additional synthesis.
 - [x] Keep independently seeded structured training and validation banks.
 - [x] On SMT refutation, retain the concrete model, turn it into contextual
   cut-label values, and retry within the configured `cegis_retries` bound.
-- [ ] Add branch-covering SMT samples for sparse conditionals and point functions.
+- [x] Add feasible branch-covering SMT models for up to four restored ITE
+  conditions per synthesis target; point-function-specific predicates remain.
 
 Acceptance: known sparse-mask and large-shift candidates are rejected by the
 training bank or corrected by CEGIS before final acceptance; runs are reproducible
@@ -211,9 +212,9 @@ claim paper-AST improvements merely because casts are free in the legacy metric.
 
 - [x] Simplify ITE conditions and branches independently and expose typed ITEs
   to contextual synthesis instead of making the entire node opaque.
-- [ ] Restrict conditional synthesis to branch-covering samples. Mixed
-  conditional+shift/division targets now retain all operators through Xyntia's
-  `full_ite` grammar.
+- [x] Cover both feasible sides of restored conditions before conditional
+  synthesis. Mixed conditional+shift/division targets retain all operators
+  through Xyntia's `full_ite` grammar.
 - [ ] Add predicate extraction and proved select/min/max idioms.
 - [ ] Keep memory loads and C/binary lifting outside the pure-expression proof
   claim until their semantics are modeled independently.
