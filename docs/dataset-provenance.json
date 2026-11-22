@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "checked_date": "2026-11-21",
+  "paper": {
+    "title": "Redefining Grey-Box Deobfuscation through Context-Aware Program Synthesis, and Application to MBA",
+    "methodology_pdf_pages": [
+      8,
+      9
+    ],
+    "artifact_pdf_page": 15
+  },
+  "revisions": {
+    "greysynth": "ec490c757d43b3b6de159be144e1b61277227ee8",
+    "promba": "9b52b343dbeffa01773869c71999f1d3bd86184a"
+  },
+  "artifact": {
+    "concept_doi": "https://doi.org/10.5281/zenodo.22649858",
+    "record": "https://zenodo.org/records/22649859",
+    "archive": "https://zenodo.org/records/22649859/files/greysynth.tar?download=1",
+    "readme": "https://zenodo.org/records/22649859/files/README?download=1",
+    "archive_bytes": 8517727232,
+    "archive_md5_from_metadata": "09d25f531f6b714b4b432bc9f7dcc0f7",
+    "archive_md5_locally_verified": false,
+    "dataset_layer_sha256": "2f5574f45aabfa019f9db35c94582235073cf0173b85fe39c06d994c42818fc0",
+    "datasets_tar_zst_sha256": "91d18ba0a489e98051667aac659b160118f81fa4c4e2ec02f2c771852b3de919",
+    "count_scope": "embedded datasets.tar.zst; not a complete reconstruction of the merged image filesystem",
+    "dataset_layer_data_offset": 4543929856,
+    "dataset_layer_bytes": 87518047,
+    "scripts_layer_sha256": "d889986fd31c5f93f8f96dae546717725b15aaa824ce693a570b6b2e49e4d86a"
+  },
+  "evaluated": [
+    {
+      "name": "Synthetic MBA",
+      "paper_count": 2511,
+      "artifact_count": 2511,
+      "components": [
+        {
+          "name": "Poly",
+          "paper_count": 1003,
+          "artifact_count": 1008,
+          "upstream_count": 1008,
+          "url": "https://github.com/astean1001/ProMBA/blob/main/mbasolve_benchmark/backup/dataset_poly.txt"
+        },
+        {
+          "name": "Non-Poly",
+          "paper_count": 1008,
+          "artifact_count": 1003,
+          "upstream_count": 1003,
+          "url": "https://github.com/astean1001/ProMBA/blob/main/mbasolve_benchmark/backup/dataset_nonpoly.txt"
+        },
+        {
+          "name": "QSynth",
+          "paper_count": 500,
+          "artifact_count": 500,
+          "upstream_count": 500,
+          "url": "https://github.com/astean1001/ProMBA/blob/main/qsynth_benchmark/backup/qsynth.txt"
+        }
+      ]
+    },
+    {
+      "name": "MBA Loki",
+      "paper_count": 1500,
+      "artifact_count": 1496,
+      "components": [
+        {
+          "name": "Loki",
+          "paper_count": 1000,
+          "artifact_count": 999,
+          "upstream_count": 1000,
+          "url": "https://github.com/astean1001/ProMBA/blob/main/loki_benchmark/backup/loki.txt"
+        },
+        {
+          "name": "Full-Loki",
+          "paper_count": 500,
+          "artifact_count": 497,
+          "upstream_count": 500,
+          "url": "https://github.com/astean1001/ProMBA/blob/main/loki_benchmark/backup/floki.txt"
+        }
+      ]
+    },
+    {
+      "name": "C-MBA",
+      "ground_truth_count": 500,
+      "url": "https://zenodo.org/records/22649859",
+      "variants": {
+        "omvll": 488,
+        "mba_obfuscator": 500,
+        "tigress_lvl_1": 500,
+        "tigress_lvl_2": 500,
+        "tigress_lvl_3": 500,
+        "tigress_lvl_4": 500,
+        "tigress_lvl_5": 500,
+        "tigress_lvl_6": 500,
+        "tigress_lvl_7": 500,
+        "tigress_lvl_8": 500
+      }
+    },
+    {
+      "name": "C-BeyondMBA",
+      "ground_truth_count": 500,
+      "url": "https://zenodo.org/records/22649859",
+      "variants": {
+        "omvll": 500,
+        "tigress_lvl_1": 500,
+        "tigress_lvl_2": 500,
+        "tigress_lvl_3": 500,
+        "tigress_lvl_4": 500,
+        "tigress_lvl_5": 500,
+        "tigress_lvl_6": 500,
+        "tigress_lvl_7": 500,
+        "tigress_lvl_8": 500
+      },
+      "main_paper_variants": [
+        "omvll",
+        "tigress_lvl_5"
+      ]
+    },
+    {
+      "name": "C-Full",
+      "ground_truth_count": 1000,
+      "url": "https://zenodo.org/records/22649859",
+      "union_of": [
+        "C-MBA",
+        "C-BeyondMBA"
+      ],
+      "independent_additional_cases": 0,
+      "ablation_variant": "tigress_lvl_5"
+    }
+  ],
+  "upstream_origins": [
+    {
+      "name": "MBA-Solver full dataset",
+      "url": "https://github.com/softsec-unh/MBA-Solver/tree/main/full-dataset",
+      "note": "Includes linear MBA beyond the GreySynth Synthetic MBA selection."
+    },
+    {
+      "name": "MBA-Solver demonstration subset",
+      "url": "https://github.com/softsec-unh/MBA-Solver/tree/main/dataset",
+      "note": "Small demonstration, not the full dataset."
+    },
+    {
+      "name": "QSynth original datasets",
+      "url": "https://github.com/werew/qsynth-artifacts/tree/master/datasets",
+      "subsets": [
+        "syntia",
+        "custom_EA",
+        "custom_VR_EA",
+        "custom_EA_ED"
+      ],
+      "note": "Four 500-function sets; custom_EA_ED execution trace truncated to 293. GreySynth reused the 500-expression ProMBA export, not all original sets."
+    },
+    {
+      "name": "Loki MBA experiment",
+      "url": "https://github.com/RUB-SysSec/loki/tree/main/experiments/experiment_10_mba_formula"
+    },
+    {
+      "name": "Loki original artifact",
+      "url": "https://zenodo.org/records/6686932"
+    },
+    {
+      "name": "Syntia original project",
+      "url": "https://github.com/RUB-SysSec/syntia",
+      "note": "Vendored Xyntia README credits Syntia B1 and Tim Blazytko; use bundled B1 for actual 500 rows."
+    }
+  ],
+  "bundled_ancillary": [
+    {
+      "name": "B1 / Syntia",
+      "count": 500,
+      "url": "https://github.com/binsec/greysynth/blob/master/outside_tools/xyntia/datasets/syntia/b1"
+    },
+    {
+      "name": "B2",
+      "count": 1110,
+      "url": "https://github.com/binsec/greysynth/blob/master/outside_tools/xyntia/datasets/b2"
+    },
+    {
+      "name": "B2_combined",
+      "count": 1110,
+      "url": "https://github.com/binsec/greysynth/blob/master/outside_tools/xyntia/datasets/b2_combined"
+    },
+    {
+      "name": "BP1, BP2, BP3",
+      "count_per_file": 15,
+      "file_count": 3,
+      "url": "https://github.com/binsec/greysynth/tree/master/outside_tools/xyntia/datasets/complex_handlers"
+    },
+    {
+      "name": "merged1 through merged5",
+      "count_per_file": 20,
+      "file_count": 5,
+      "url": "https://github.com/binsec/greysynth/tree/master/outside_tools/xyntia/datasets/if_the_else"
+    }
+  ],
+  "notes": [
+    "Ancillary sets belong to vendored Xyntia experiments and are not GreySynth paper evaluation sets.",
+    "The paper appears to transpose Poly and Non-Poly counts; both artifact and ProMBA files confirm 1,008/1,003.",
+    "Artifact Loki manifests contain 1,496 cases and OMVLL has 988 C cases; do not use advertised counts as denominators.",
+    "Recovered artifact table_3.layout selects C-MBA levels1–8, resolving conflict with the C-FULL caption.",
+    "Recovered artifact table layouts default to 60 seconds and 50 sampled cases; full replay requires limit 0 and 3,600 seconds.",
+    "Paper footnote and artifact run_greysynth.py count SMT unknown as successful; that is not proved equivalence."
+  ]
+}

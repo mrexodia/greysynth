@@ -120,6 +120,12 @@ arbitrary assignments or control flow. For arbitrary C or binary programs,
 validate the lifting/extraction stage independently. Solver timeouts can still
 prevent useful rewrites; their frequency is reported separately.
 
+For dataset provenance, benchmark denominators, and reproduction commands, see
+[`docs/VALIDATION.md`](docs/VALIDATION.md). The audit harness in
+`scripts/audit_dataset.py` keeps proofs, refutations, sampling agreement,
+timeouts, and errors separate and checks each result against its original
+input.
+
 # Cite us
 
 ```bibtex
