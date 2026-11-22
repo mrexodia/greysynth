@@ -60,8 +60,12 @@ and process deadlines.
 
 During development, enabling the new greedy AC canonicalizer changed many local
 choices: relative to the prior deterministic output, 249 cases improved but 254
-regressed. It is therefore retained behind `ac_normalization: false` until
-whole-expression alternative extraction is implemented. A four-representative
+regressed. After signed-term compaction and branch-proof pruning, a fresh
+normalization-portfolio run still has the same strict-reduction count (984/16)
+but is smaller than the baseline on 243 cases and larger on 250. A locally
+cheaper normalization branch can obstruct later OES choices, so AC and the
+normalization-only portfolio remain opt-in until whole-pipeline extraction is
+implemented. A four-representative
 OES frontier also consumed the budget on the two large cases; the default stays
 at one while the proof-aware frontier remains available for experiments.
 
