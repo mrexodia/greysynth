@@ -57,5 +57,9 @@ type t = {
           Unbound variables in the truncated expression are rejected. *)
 }
 
+val eval_with_bindings :
+  (Sexpr.Expr.t, Bitvector.t) Hashtbl.t -> Sexpr.Expr.t -> Bitvector.t
+(** Evaluate with an explicit environment. Every variable must be bound. *)
+
 val make : int -> t
 (** [make n] creates a fresh evaluator. [n] must be positive. *)

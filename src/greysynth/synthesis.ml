@@ -197,20 +197,36 @@ let make_problem e new_leafs synthesis_timeout synthesis_repeat :
      label is sampled on exactly the same input ids, including division by
      zero. *)
   let samples =
+    let structured_inputs id =
+      let count = List.length leaves in
+      List.mapi
+        (fun index leaf ->
+          let width = Sexpr.Expr.sizeof leaf in
+          if id = 0 then Bitvector.zeros width
+          else if id = 1 then Bitvector.ones width
+          else if id >= 2 && id < 2 + count then
+            if index = id - 2 then Bitvector.ones width else Bitvector.zeros width
+          else !evaluator.eval leaf id)
+        leaves
+    in
     Array.init !c_nb_samples (fun id ->
         let contextual leaf = !evaluator.eval_label leaf id new_leafs in
-        let independent leaf = !evaluator.eval leaf id in
+        let independent = structured_inputs id in
+        let independent_result () =
+          let bindings = Hashtbl.create (List.length leaves) in
+          List.iter2 (fun leaf value -> Hashtbl.add bindings leaf value) leaves independent;
+          Sample_evaluator.eval_with_bindings bindings e
+        in
         let args, res =
           match !c_sampling_strategy with
           | RealValues ->
               (List.map contextual leaves, !evaluator.eval_label e id new_leafs)
-          | LabelValues ->
-              (List.map independent leaves, !evaluator.eval e id)
+          | LabelValues -> (independent, independent_result ())
           | WrongNaive ->
               (* Historical ablation: independent label inputs paired with the
                  contextual output. Proof gating prevents this deliberately
                  inconsistent specification from corrupting the result. *)
-              (List.map independent leaves, !evaluator.eval_label e id new_leafs)
+              (independent, !evaluator.eval_label e id new_leafs)
         in
         { Synth_backends.args = Array.of_list args; res })
   in

@@ -99,6 +99,23 @@ let eval_binary f x y =
   | Expr.Umod | Expr.Smod when Bitvector.is_zeros y -> x
   | _ -> Term.Bv.binary f x y
 
+let rec eval_with_bindings (bindings : (Expr.t, Bitvector.t) Hashtbl.t)
+    (node : Expr.t) : Bitvector.t =
+  match Hashtbl.find_opt bindings node with
+  | Some value -> value
+  | None ->
+      match node with
+      | Expr.Cst value -> value
+      | Expr.Var _ -> invalid_arg "sample evaluator: unbound explicit variable"
+      | Expr.Unary { f; x; _ } -> Term.Bv.unary f (eval_with_bindings bindings x)
+      | Expr.Binary { f; x; y; _ } ->
+          eval_binary f (eval_with_bindings bindings x) (eval_with_bindings bindings y)
+      | Expr.Ite { c; t; e; _ } ->
+          if Bitvector.is_zeros (eval_with_bindings bindings c) then
+            eval_with_bindings bindings e
+          else eval_with_bindings bindings t
+      | Expr.Load _ -> invalid_arg "sample evaluator: memory load"
+
 let make nb_samples : t =
   if nb_samples <= 0 then
     invalid_arg "sample evaluator: nb_samples must be positive";

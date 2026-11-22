@@ -353,6 +353,23 @@ let test_sampling_strategies () =
     (Array.for_all (fun (sample : Greysynth__Synth_backends.sample) ->
          Bitvector.equal sample.args.(0) sample.res) labels.samples)
     "label sampling did not evaluate the independent target";
+  let alpha = E.var "alpha2" 8 "alpha2" and beta = E.var "beta2" 8 "beta2" in
+  let pair_relations = Hashtbl.create 2 in
+  Hashtbl.add pair_relations alpha (c 8 42);
+  Hashtbl.add pair_relations beta (c 8 17);
+  C.c_sampling_strategy := C.LabelValues;
+  let basis = S.make_problem (E.binary E.Xor alpha beta) pair_relations 1 1 in
+  let is_basis (sample : Greysynth__Synth_backends.sample) =
+    Array.fold_left (fun count value -> if Bitvector.is_ones value then count + 1 else count)
+      0 sample.args = 1
+  in
+  require (Array.length basis.samples >= 4) "sample bank is too small for a basis";
+  require (Array.for_all Bitvector.is_zeros basis.samples.(0).args)
+    "label samples do not start with the zero tuple";
+  require (Array.for_all Bitvector.is_ones basis.samples.(1).args)
+    "label samples do not include the all-one tuple";
+  require (is_basis basis.samples.(2) && is_basis basis.samples.(3))
+    "label samples do not include every one-hot tuple";
   let wrong = problem C.WrongNaive in
   require
     (Array.exists (fun (sample : Greysynth__Synth_backends.sample) ->
