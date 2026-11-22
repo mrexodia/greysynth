@@ -330,13 +330,26 @@ let report_json ~initial_size ~total_time ?proof gt result =
     @ [
         (* configuration *)
         ("is_normalization_enabled", `Bool !c_normalization);
+        ("ac_normalization", `Bool !c_ac_normalization);
+        ("normalization_portfolio", `Bool !c_normalization_portfolio);
         ("preprocessing_portfolio", `Bool !c_preprocessing_portfolio);
+        ("normalization_max_atoms", `Int !c_normalization_max_atoms);
+        ("mba_oracle", `String !c_mba_oracle);
+        ("mba_oracle_timeout", `Int !c_mba_oracle_timeout);
+        ("mba_oracle_calls", `Int !c_mba_oracle_calls);
         ("cost_model", `String (string_of_cost_model !cost_model));
         ("is_linear_enabled", `Bool !c_oes);
         ("is_fast_simplify_enabled", `Bool !c_fast_simplify);
         ("is_global_enabled", `Bool !c_global_synthesis);
         ("is_chs_enabled", `Bool !c_chs);
         ("local_cache", `Bool !c_local_cache);
+        ("oes_candidate_limit", `Int !c_oes_candidate_limit);
+        ("cegis_retries", `Int !c_cegis_retries);
+        ("learn_synthesis_rules", `Bool !c_learn_synthesis_rules);
+        ("branch_covering_samples", `Bool !c_branch_covering_samples);
+        ("chs_max_inputs", `Int !c_chs_max_inputs);
+        ("chs_max_horizon", `Int !c_chs_max_horizon);
+        ("synthesis_constant_limit", `Int !c_synthesis_constant_limit);
         ("balanced_tree", `Bool !c_balanced_tree);
         ("check_equiv", `Bool !c_check_equiv);
         ( "rewrite_validation",
@@ -354,6 +367,7 @@ let report_json ~initial_size ~total_time ?proof gt result =
         ("sampling_strategy", `String (string_of_sampling !c_sampling_strategy));
         ("nb_samples", `Int !c_nb_samples);
         ("synthesizer", `String !c_synthesizer_name);
+        ("xyntia_grammar", `String !c_xyntia_grammar);
         ("normalization_is_equiv", equiv log_normalization_is_equiv);
         ("fast_simplify_is_equiv", equiv log_fast_simplify_is_equiv);
         (* OES ("linear") pass *)

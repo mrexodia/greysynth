@@ -71,6 +71,7 @@ let c_synthesis_constant_limit = ref 12
 
 (* "synthesizer" config key and the backend it selects (see Synth_backends) *)
 let c_synthesizer_name = ref "xyntia"
+let c_xyntia_grammar = ref "auto"
 let c_synthesizer : Synth_backends.synthesizer ref = ref (fun _ -> None)
 
 (* ── Runtime state ─────────────────────────────────────────────── *)
@@ -213,11 +214,13 @@ let load_config_from_json json_file : unit =
        match json |> member "synthesizer" with
        | `Null -> "xyntia"
        | v -> to_string v);
+    (c_xyntia_grammar :=
+       match json |> member "xyntia_grammar" with
+       | `Null -> "auto"
+       | v -> to_string v);
     c_synthesizer := Synth_backends.select !c_synthesizer_name json;
 
     g_total_timeout := json |> member "total_timeout" |> to_int |> float_of_int;
-
-    evaluator := Sample_evaluator.make !c_nb_samples;
 
     let sampling_str = json |> member "sampling_strategy" |> to_string in
     (c_sampling_strategy :=
