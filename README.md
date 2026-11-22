@@ -106,6 +106,7 @@ working example. An optional second positional argument names the certificate.
 | `oes` | Run OES after normalization, after each CHS horizon, and once at the end. |
 | `oes_extended`, `local_extend`, `local_extend_depth` | Extra vocabulary added to the OES cache. |
 | `oes_fixedpoint` | Repeat OES until the size stops decreasing. |
+| `oes_candidate_limit` | Number of sampled-equivalent representatives retained per OES class. Proof-aware fallback defaults to 4. |
 | `fast_simplify` | OES extension with relational vocabulary (not in the CCS'26 paper). |
 | `global_synthesis` | Run global (bottom-up, untruncated) synthesis. |
 | `chs` | Run CHS. |

@@ -147,22 +147,32 @@ let iter_relational_pairs (reps : Sexpr.Expr.t array) emit : unit =
 
 let linear_simplify ?(seed = true) (expr : Sexpr.Expr.t) =
   let cache = Hashtbl.create 100 in
-
+  let size = Greysynth_utils.Utils.size_of_expr in
+  let compare_candidate left right =
+    let order = Int.compare (size left) (size right) in
+    if order = 0 then Sexpr.Expr.compare left right else order
+  in
+  let rec take count = function
+    | _ when count <= 0 -> []
+    | [] -> []
+    | head :: tail -> head :: take (count - 1) tail
+  in
   let add_to_cache node outhash =
-    match Hashtbl.find_opt cache outhash with
-    | Some previous ->
-        if
-          Greysynth_utils.Utils.size_of_expr node
-          < Greysynth_utils.Utils.size_of_expr previous
-        then Hashtbl.replace cache outhash node
-    | None -> Hashtbl.replace cache outhash node
+    let previous = Option.value (Hashtbl.find_opt cache outhash) ~default:[] in
+    let candidates =
+      node :: previous
+      |> List.sort_uniq Sexpr.Expr.compare
+      |> List.sort compare_candidate
+      |> take !c_oes_candidate_limit
+    in
+    Hashtbl.replace cache outhash candidates
   in
 
   (* local_extend: relational (X op Y) vocabulary seeding. Seed [X op Y] into
      the cache for every pair of repeated descendant value-classes of [n] (see
      {!repeated_descendant_reps} / {!iter_relational_pairs}). Re-seeding a rule
-     already present is a harmless no-op (add_to_cache keeps the smaller node
-     per outhash). *)
+     already present is a harmless no-op (add_to_cache keeps a bounded frontier
+     of the smallest nodes per outhash). *)
   let seed_relational n =
     iter_relational_pairs (repeated_descendant_reps n) (fun op a b ->
         (* a bitvector binop requires equal-size operands; the window can hold
@@ -230,15 +240,14 @@ let linear_simplify ?(seed = true) (expr : Sexpr.Expr.t) =
     match n with
     | Sexpr.Expr.Cst _ -> n
     | _ -> (
-        let cached_node =
-          Option.value (Hashtbl.find_opt cache outhash) ~default:n
+        let cached_nodes =
+          Option.value (Hashtbl.find_opt cache outhash) ~default:[]
         in
-        if
-          Rewrite.accepts ~pass:"OES" n cached_node
-        then (
-          nb_simplifications := !nb_simplifications + 1;
-          cached_node)
-        else
+        match List.find_opt (Rewrite.accepts ~pass:"OES" n) cached_nodes with
+        | Some cached_node ->
+            nb_simplifications := !nb_simplifications + 1;
+            cached_node
+        | None ->
           match n with
           | Sexpr.Expr.Unary r -> Sexpr.Expr.unary r.f (second_pass r.x)
           | Sexpr.Expr.Binary r ->

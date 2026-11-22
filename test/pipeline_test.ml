@@ -24,6 +24,7 @@ let reset ?(strict = false) () =
   C.c_local_extend := false;
   C.c_local_extend_depth := 8;
   C.c_oes_fixedpoint := false;
+  C.c_oes_candidate_limit := 4;
   C.c_local_cache := false;
   C.c_add_constants_to_synthesis := false;
   C.c_balanced_tree := false;
@@ -319,6 +320,19 @@ let test_sampling_strategies () =
     "wrong_naive no longer represents the mismatched ablation";
   C.c_sampling_strategy := C.RealValues
 
+let test_oes_proof_fallback () =
+  reset ~strict:true ();
+  let one_sample = Sample_evaluator.make 1 in
+  C.evaluator := { one_sample with is_node_constant = (fun _ -> None) };
+  let useful = plus x y in
+  let original = plus useful zero in
+  let result, rewrites = O.linear_simplify ~seed:false original in
+  require (E.compare result useful = 0)
+    "OES did not fall back from smaller false representatives";
+  require (!rewrites = 1) "OES proof-aware fallback count is wrong";
+  require (!(R.sample_rejections) >= 1)
+    "OES fallback did not exercise the false sampled representatives"
+
 let test_logging_reset () =
   L.log_linear_size_after := 99;
   L.log_chs_synthesis_attempts := [ (3, true, 1., true) ];
@@ -345,8 +359,9 @@ let () =
   test_oes_partial_timeout ();
   test_balanced_targets ();
   test_sampling_strategies ();
+  test_oes_proof_fallback ();
   test_logging_reset ();
-  print_endline "pipeline_test: 18 solver-independent regressions passed";
+  print_endline "pipeline_test: 19 solver-independent regressions passed";
   if solver_available then (
     test_context_proof ();
     print_endline "pipeline_test: contextual SMT proof regression passed")
