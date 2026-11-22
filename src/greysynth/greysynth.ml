@@ -151,6 +151,13 @@ let rule_json src dst count extra =
 
 let report_json ~initial_size ~total_time ?proof gt result =
   let equiv r = `String (equiv_to_str !r) in
+  let costs expression =
+    `Assoc
+      [ ("legacy", `Int (cost_of_expr Legacy expression));
+        ("paper_ast", `Int (cost_of_expr PaperAst expression));
+        ("instruction", `Int (cost_of_expr Instruction expression));
+        ("readability", `Int (cost_of_expr Readability expression)) ]
+  in
   let ground_truth =
     match gt with
     | Some gt -> [ ("gt_sz", `Int (size_of_expr gt)); ("gt_expr", `String (pp gt)) ]
@@ -173,8 +180,10 @@ let report_json ~initial_size ~total_time ?proof gt result =
   `Assoc
     ([
        ("obf_sz", `Int initial_size);
+       ("obf_costs", costs !log_obfuscated_expression);
        ("syn_expr", `String (pp result));
        ("syn_sz", `Int (size_of_expr result));
+       ("syn_costs", costs result);
        ("equiv", equiv log_final_is_equiv);
        ("time", `Float total_time);
        ("uniq_semantic", `Int !tmp_uniq_semantic);
@@ -185,6 +194,7 @@ let report_json ~initial_size ~total_time ?proof gt result =
     @ [
         (* configuration *)
         ("is_normalization_enabled", `Bool !c_normalization);
+        ("cost_model", `String (string_of_cost_model !cost_model));
         ("is_linear_enabled", `Bool !c_oes);
         ("is_fast_simplify_enabled", `Bool !c_fast_simplify);
         ("is_global_enabled", `Bool !c_global_synthesis);

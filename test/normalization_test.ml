@@ -20,6 +20,7 @@ let reset ?(strict = true) () =
   Random.init 42;
   C.evaluator := Sample_evaluator.make 100;
   C.c_nb_samples := 100;
+  U.cost_model := U.Legacy;
   C.c_reject_non_equiv_simplifications := strict;
   C.c_equiv_timeout := 5;
   C.g_total_timeout := 0.;
@@ -37,9 +38,17 @@ let test_fail_closed () =
 
 let test_metric_minimum () =
   reset ();
+  U.cost_model := U.Legacy;
   let original = E.unary (E.Sext 24) (E.restrict ~lo:8 ~hi:15 (var 32 "x")) in
   let result = N.run original in
-  require (U.size_of_expr original = 1) "cast/extract metric changed";
+  require (U.size_of_expr original = 1) "legacy cast/extract metric changed";
+  require (U.cost_of_expr U.PaperAst original = 3) "paper AST does not count conversions";
+  require (U.cost_of_expr U.Readability original = 5) "readability conversion cost changed";
+  let quotient = E.binary E.Udiv (var 32 "x") (var 32 "y") in
+  let sum = E.binary E.Plus (var 32 "x") (var 32 "y") in
+  require
+    (U.cost_of_expr U.Instruction quotient > U.cost_of_expr U.Instruction sum)
+    "instruction cost does not penalize division";
   require (E.is_equal original result) "normalizer rewrote a metric-minimum input";
   require (!(R.checked) = 0) "minimum input triggered a speculative rewrite"
 

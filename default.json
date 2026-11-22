@@ -1,5 +1,6 @@
 {
   "normalization": true,
+  "cost_model": "legacy",
   "oes": true,
   "oes_extended": false,
   "oes_fixedpoint": false,

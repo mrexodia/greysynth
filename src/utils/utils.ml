@@ -184,27 +184,52 @@ let rec pp_no_ext ?(show_size = true) node =
         (pp_no_ext ~show_size r.t) (pp_no_ext ~show_size r.e)
   | _ -> "Unknown"
 
-let rec size_of_expr e =
+type cost_model = Legacy | PaperAst | Instruction | Readability
+
+let cost_model = ref Legacy
+
+let string_of_cost_model = function
+  | Legacy -> "legacy"
+  | PaperAst -> "paper_ast"
+  | Instruction -> "instruction"
+  | Readability -> "readability"
+
+let cost_model_of_string = function
+  | "legacy" -> Legacy
+  | "paper_ast" -> PaperAst
+  | "instruction" -> Instruction
+  | "readability" -> Readability
+  | value ->
+      invalid_arg
+        (Printf.sprintf
+           "unknown cost model %S (expected legacy, paper_ast, instruction, or readability)"
+           value)
+
+let rec cost_of_expr model e =
+  let unary_cost f =
+    match model, f with
+    | Legacy, (Sexpr.Expr.Restrict _ | Sexpr.Expr.Sext _ | Sexpr.Expr.Uext _) -> 0
+    | Readability, (Sexpr.Expr.Restrict _ | Sexpr.Expr.Sext _ | Sexpr.Expr.Uext _) -> 2
+    | _ -> 1
+  in
+  let binary_cost f =
+    match model, f with
+    | Instruction, (Sexpr.Expr.Udiv | Sexpr.Expr.Sdiv | Sexpr.Expr.Umod | Sexpr.Expr.Smod) -> 8
+    | Instruction, Sexpr.Expr.Mul -> 2
+    | Readability, (Sexpr.Expr.Udiv | Sexpr.Expr.Sdiv | Sexpr.Expr.Umod | Sexpr.Expr.Smod
+                   | Sexpr.Expr.Concat) -> 3
+    | _ -> 1
+  in
   match e with
-  | Sexpr.Expr.Unary r -> (
-      match r.f with
-      | Sexpr.Expr.Restrict _ | Sexpr.Expr.Sext _ | Sexpr.Expr.Uext _ ->
-          size_of_expr r.x
-      | _ ->
-          let subexpr = r.x in
-          1 + size_of_expr subexpr)
+  | Sexpr.Expr.Unary r -> unary_cost r.f + cost_of_expr model r.x
   | Sexpr.Expr.Binary r ->
-      let subexpr1 = r.x in
-      let subexpr2 = r.y in
-      1 + size_of_expr subexpr2 + size_of_expr subexpr1
+      binary_cost r.f + cost_of_expr model r.x + cost_of_expr model r.y
   | Sexpr.Expr.Ite r ->
-      let subexpr1 = r.c in
-      let subexpr2 = r.t in
-      let subexpr3 = r.e in
-      1 + size_of_expr subexpr3 + size_of_expr subexpr2 + size_of_expr subexpr1
-  | Sexpr.Expr.Var _ -> 1
-  | Sexpr.Expr.Load _ -> 1
-  | Sexpr.Expr.Cst _ -> 1
+      (match model with Instruction -> 3 | Readability -> 4 | _ -> 1)
+      + cost_of_expr model r.c + cost_of_expr model r.t + cost_of_expr model r.e
+  | Sexpr.Expr.Var _ | Sexpr.Expr.Load _ | Sexpr.Expr.Cst _ -> 1
+
+let size_of_expr e = cost_of_expr !cost_model e
 
 let depth_of_expr expr =
   let rec aux node =

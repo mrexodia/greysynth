@@ -19,6 +19,7 @@ let reset ?(strict = false) () =
   Random.init 42;
   C.evaluator := Sample_evaluator.make 100;
   C.c_nb_samples := 100;
+  U.cost_model := U.Legacy;
   C.c_reject_non_equiv_simplifications := strict;
   C.c_equiv_timeout := 5;
   C.c_oes_extended := false;

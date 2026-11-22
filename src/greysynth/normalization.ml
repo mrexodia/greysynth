@@ -429,16 +429,11 @@ let run expression =
   let results = Nodes.create 128 in
   let sizes = Nodes.create 128 in
   let constants = Sample_evaluator.make 1 in
-  let rec cost expression =
+  let cost expression =
     match Nodes.find_opt sizes expression with
     | Some value -> value
     | None ->
-        let value = match expression with
-          | E.Unary { f = (E.Uext _ | E.Sext _ | E.Restrict _); x; _ } -> cost x
-          | E.Unary { x; _ } -> 1 + cost x
-          | E.Binary { x; y; _ } -> 1 + cost x + cost y
-          | E.Ite { c; t; e; _ } -> 1 + cost c + cost t + cost e
-          | _ -> 1 in
+        let value = Greysynth_utils.Utils.size_of_expr expression in
         Nodes.add sizes expression value;
         value
   in

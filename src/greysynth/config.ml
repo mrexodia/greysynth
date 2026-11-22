@@ -133,6 +133,13 @@ let load_config_from_json json_file : unit =
     c_local_cache := json |> member "local_cache" |> to_bool;
     c_add_constants_to_synthesis :=
       json |> member "add_constants_to_synthesis" |> to_bool;
+    (Greysynth_utils.Utils.cost_model :=
+       match json |> member "cost_model" with
+       | `Null -> Greysynth_utils.Utils.Legacy
+       | `String value ->
+           (try Greysynth_utils.Utils.cost_model_of_string value
+            with Invalid_argument message -> failwith ("config: " ^ message))
+       | _ -> failwith "config: cost_model must be a string");
 
     (* Backend-specific keys are read by the backend itself *)
     (c_synthesizer_name :=
@@ -181,6 +188,8 @@ let load_config_from_json json_file : unit =
     Format.eprintf "  synth      %s  (timeout=%ds, repeat=%d, samples=%d)\n"
       !c_synthesizer_name !c_synthesis_timeout !c_synthesis_repeat !c_nb_samples;
     Format.eprintf "  sampling   %s\n" (string_of_sampling !c_sampling_strategy);
+    Format.eprintf "  cost       %s\n"
+      (Greysynth_utils.Utils.string_of_cost_model !Greysynth_utils.Utils.cost_model);
     if !c_check_equiv then
       Format.eprintf "  equiv      on  (timeout=%ds)\n" !c_equiv_timeout;
     Format.eprintf "%!";

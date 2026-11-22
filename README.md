@@ -103,6 +103,7 @@ working example. An optional second positional argument names the certificate.
 | Key | Meaning |
 |---|---|
 | `normalization` | Run deterministic, proof-gated bitvector and local linear-MBA normalization before OES. Defaults to true; false permits comparison with the earlier pipeline. |
+| `cost_model` | Candidate-selection objective: historical `legacy`, conversion-counting `paper_ast`, approximate `instruction`, or `readability`. Reports include every cost. |
 | `oes` | Run OES after normalization, after each CHS horizon, and once at the end. |
 | `oes_extended`, `local_extend`, `local_extend_depth` | Extra vocabulary added to the OES cache. |
 | `oes_fixedpoint` | Repeat OES until the size stops decreasing. |
