@@ -3,3 +3,10 @@
  (modules sample_evaluator_test)
  (libraries greysynth.sample_evaluator binsec.smt binsec.sse.term)
  (flags (:standard -open Binsec -open Libsse -open Libterm)))
+
+(test
+ (name parser_test)
+ (modules parser_test)
+ (libraries greysynth.string_to_sexpr greysynth.utils
+            greysynth.sample_evaluator binsec.smt binsec.sse.term)
+ (flags (:standard -open Binsec -open Libsse -open Libterm)))

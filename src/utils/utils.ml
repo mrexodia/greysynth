@@ -106,30 +106,27 @@ let pp ?(show_size = true) node =
 
   let rec aux node =
     let format_var name size =
-      let clean_name = List.hd (String.split_on_char '!' name) in
-      if show_size then Format.sprintf "%s<%d>" clean_name size else clean_name
+      let initial c =
+        (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || c = '_' || Char.code c > 127
+      in
+      let ordinary c = initial c || (c >= '0' && c <= '9') in
+      let reserved = ["rol"; "ror"; "uext"; "sext"; "restrict"] in
+      let printable =
+        String.length name > 0 && initial name.[0]
+        && String.for_all ordinary name && not (List.mem name reserved)
+      in
+      let encoded = if printable then name else Printf.sprintf "%S" name in
+      if show_size then Format.sprintf "%s<%d>" encoded size else encoded
     in
     let format_const bv =
       let value = Bitvector.value_of bv in
       let size = Bitvector.size_of bv in
       let hex_str = Z.format "%x" value in
-      if size <= 32 then
-        let hex_digits = (size + 3) / 4 in
-        (* Round up to nearest hex digit *)
-        let padded =
-          String.make (max 0 (hex_digits - String.length hex_str)) '0' ^ hex_str
-        in
-        "0x" ^ padded
-      else if size <= 64 then
-        let padded =
-          String.make (max 0 (16 - String.length hex_str)) '0' ^ hex_str
-        in
-        "0x" ^ padded
-      else
-        let padded =
-          String.make (max 0 (32 - String.length hex_str)) '0' ^ hex_str
-        in
-        "0x" ^ padded
+      let hex_digits = (size + 3) / 4 in
+      let padded = String.make (max 0 (hex_digits - String.length hex_str)) '0' ^ hex_str in
+      if show_size then Printf.sprintf "0x%s<%d>" padded size
+      else "0x" ^ padded
     in
     match node with
     | Sexpr.Expr.Unary r ->
