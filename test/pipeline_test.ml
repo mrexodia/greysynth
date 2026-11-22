@@ -6,6 +6,7 @@ module R = Greysynth__Rewrite
 module O = Greysynth__Oes
 module S = Greysynth__Synthesis
 module G = Greysynth
+module P = Rewrite_proof
 module L = Greysynth__Logging
 
 let require condition message = if not condition then failwith message
@@ -19,6 +20,7 @@ let reset ?(strict = false) () =
   Random.init 42;
   C.evaluator := Sample_evaluator.make 100;
   C.c_nb_samples := 100;
+  C.c_cegis_retries := 1;
   U.cost_model := U.Legacy;
   C.c_reject_non_equiv_simplifications := strict;
   C.c_equiv_timeout := 5;
@@ -265,6 +267,46 @@ let test_oes_partial_timeout () =
   require (!count = 1) "OES partial rewrite count is wrong";
   expect_same_at original result 17 29
 
+let test_cegis_retry () =
+  reset ~strict:true ();
+  C.c_nb_samples := 1;
+  C.c_cegis_retries := 1;
+  let variables = [ ("x", 64); ("y", 64) ] in
+  C.evaluator := Sample_evaluator.make ~variables 1;
+  R.holdout := Sample_evaluator.make ~variables 1;
+  let original = plus (plus x y) zero in
+  let alpha = E.var "cegis_alpha" 64 "cegis_alpha" in
+  let beta = E.var "cegis_beta" 64 "cegis_beta" in
+  let template = plus alpha beta in
+  let labels = Hashtbl.create 2 in
+  Hashtbl.add labels alpha x;
+  Hashtbl.add labels beta y;
+  let verdict, _, model = P.prove_equality_with_model ~timeout:5. original x in
+  require (verdict = U.No && Option.is_some model)
+    "proof boundary did not retain a concrete counterexample";
+  let calls = ref 0 and second_samples = ref 0 in
+  C.c_synthesizer := (fun (problem : Greysynth__Synth_backends.problem) ->
+      incr calls;
+      let input index =
+        let item = problem.inputs.(index) in
+        E.var item.name item.size item.name
+      in
+      if !calls = 1 then Some (input 0)
+      else (
+        second_samples := Array.length problem.samples;
+        Some (plus (input 0) (input 1))));
+  (match S.synthesize ~original template labels 1 1 with
+  | Some (_, candidate, _) ->
+      require (E.is_equal candidate original || E.is_equal candidate (plus y x))
+        "CEGIS retry returned the wrong candidate"
+  | None ->
+      failwith
+        (Printf.sprintf "CEGIS did not retry (calls=%d, counterexamples=%d)"
+           !calls (List.length !(R.counterexamples))));
+  require (!calls = 2) "CEGIS did not perform exactly one retry";
+  require (!second_samples > 1) "SMT counterexample was not added to synthesis samples";
+  require (!(R.counterexamples) <> []) "SMT counterexample was not retained"
+
 let test_larger_proof_budget_retries () =
   reset ~strict:true ();
   let original = plus x zero in
@@ -504,6 +546,7 @@ let () =
   print_endline "pipeline_test: 23 solver-independent regressions passed";
   if solver_available then (
     test_context_proof ();
+    test_cegis_retry ();
     test_larger_proof_budget_retries ();
     test_chs_horizon_restart ();
     print_endline "pipeline_test: contextual proof and horizon restart passed")

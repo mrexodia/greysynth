@@ -256,19 +256,25 @@ let abstract_pair original candidate =
   let right = visit right in
   if Hashtbl.length replacements = 0 then None else Some (left, right)
 
-let prove_equality ~timeout original candidate =
-  if E.is_equal original candidate then U.Yes, "reflexive"
-  else if not (Float.is_finite timeout) || timeout <= 0. then U.Timeout, "budget"
+let prove_equality_with_model ~timeout original candidate =
+  if E.is_equal original candidate then U.Yes, "reflexive", None
+  else if not (Float.is_finite timeout) || timeout <= 0. then
+    U.Timeout, "budget", None
   else
     let deadline = Unix.gettimeofday () +. timeout in
-    let solve ?(limit = infinity) left right =
+    let solve ?(limit = infinity) ?(model = false) left right =
       let remaining = min limit (deadline -. Unix.gettimeofday ()) in
-      if remaining <= 0. then U.Timeout
-      else let verdict, _, _ =
-        U.are_equivalent_seconds left right (Some remaining) in verdict
+      if remaining <= 0. then U.Timeout, None
+      else
+        let verdict, _, counterexample =
+          U.are_equivalent_seconds ~show_counter_example:model left right
+            (Some remaining)
+        in
+        verdict, counterexample
     in
     let generalized =
-      try match abstract_pair original candidate with
+      try
+        match abstract_pair original candidate with
         | None -> None
         | Some (left, right) ->
             (* Reserve most of the budget for concrete fallback. Larger retry
@@ -277,8 +283,14 @@ let prove_equality ~timeout original candidate =
       with _ -> None
     in
     match generalized with
-    | Some U.Yes -> U.Yes, "abstract"
-    | _ -> solve original candidate, "concrete"
+    | Some (U.Yes, _) -> U.Yes, "abstract", None
+    | _ ->
+        let verdict, model = solve ~model:true original candidate in
+        verdict, "concrete", model
+
+let prove_equality ~timeout original candidate =
+  let verdict, method_, _ = prove_equality_with_model ~timeout original candidate in
+  verdict, method_
 
 let load certificate =
   if J.to_string (J.member "format" certificate) <> format then fail "unknown format";

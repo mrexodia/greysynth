@@ -231,6 +231,43 @@ let make_problem e new_leafs synthesis_timeout synthesis_repeat :
         in
         { Synth_backends.args = Array.of_list args; res })
   in
+  let counterexample_samples =
+    List.filter_map
+      (fun environment ->
+        try
+          let original_bindings = Hashtbl.create (List.length environment) in
+          List.iter
+            (fun (name, width, value) ->
+              Hashtbl.add original_bindings (Sexpr.Expr.var name width name)
+                (Bitvector.create value width))
+            environment;
+          let args =
+            List.map
+              (fun leaf ->
+                let original = Hashtbl.find new_leafs leaf in
+                Sample_evaluator.eval_with_bindings original_bindings original)
+              leaves
+            |> Array.of_list
+          in
+          let label_bindings = Hashtbl.create (List.length leaves) in
+          List.iteri (fun index leaf -> Hashtbl.add label_bindings leaf args.(index)) leaves;
+          let res = Sample_evaluator.eval_with_bindings label_bindings e in
+          Some { Synth_backends.args; res }
+        with _ -> None)
+      !(Rewrite.counterexamples)
+  in
+  let same_sample left right =
+    Bitvector.equal left.Synth_backends.res right.Synth_backends.res
+    && Array.length left.args = Array.length right.args
+    && Array.for_all2 Bitvector.equal left.args right.args
+  in
+  let samples =
+    List.fold_left
+      (fun samples sample ->
+        if Array.exists (same_sample sample) samples then samples
+        else Array.append samples [| sample |])
+      samples counterexample_samples
+  in
 
   let operators =
     let rec inspect (profile : Synth_backends.operator_profile) = function
@@ -391,8 +428,10 @@ let prepare_candidates synth_expr new_leafs =
         (Printexc.to_string exn);
       []
 
-let synthesize ~original e new_leafs synthesis_timeout synthesis_repeat =
+let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
+    synthesis_timeout synthesis_repeat =
   check_timeout ();
+  let learned_before = List.length !(Rewrite.counterexamples) in
   let synthesis_timeout =
     if !g_total_timeout <= 0. then synthesis_timeout
     else
@@ -447,7 +486,11 @@ let synthesize ~original e new_leafs synthesis_timeout synthesis_repeat =
           synth_size time
           (Greysynth_utils.Utils.pp candidate);
         Some (synth_expr, candidate, time)
-      | None -> None
+      | None ->
+          if retries > 0 && List.length !(Rewrite.counterexamples) > learned_before then
+            synthesize ~retries:(retries - 1) ~original e new_leafs
+              synthesis_timeout synthesis_repeat
+          else None
 
 let simplify_with_horizon (horizon : int) synthesis_timeout synthesis_repeat
     (expr : Sexpr.Expr.t) =

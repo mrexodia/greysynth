@@ -10,6 +10,24 @@ let sample_rejections = ref 0
 let disproved = ref 0
 let inconclusive = ref 0
 
+(* Explicit original-variable assignments learned from concrete SMT
+   refutations. Synthesis turns them into contextual cut-label samples. *)
+let counterexamples : (string * int * Z.t) list list ref = ref []
+
+let remember_counterexample original model =
+  let widths = Hashtbl.create 16 in
+  List.iter (fun (name, width) -> Hashtbl.replace widths name width)
+    (Sample_evaluator.variables_of_expr original);
+  let environment =
+    List.filter_map
+      (fun (name, value) ->
+        Option.map (fun width -> (name, width, value)) (Hashtbl.find_opt widths name))
+      model
+    |> List.sort compare
+  in
+  if environment <> [] && not (List.mem environment !counterexamples) then
+    counterexamples := environment :: !counterexamples
+
 (* The journal contains obligations, never trusted verdicts. Independent replay
    binds its endpoints and proves enough recorded equalities to connect them. *)
 let journal : Rewrite_proof.builder option ref = ref None
@@ -54,6 +72,7 @@ let reset ?original () =
           ~seed:1 32);
   Hashtbl.clear proofs;
   Hashtbl.clear proof_budgets;
+  counterexamples := [];
   journal := None
 
 let samples_agree original candidate =
@@ -130,14 +149,16 @@ let accepts ~pass original candidate =
             if attempted >= budget then Some verdict else None
         | None -> None
       in
-      let verdict =
+      let verdict, model =
         match cached with
-        | Some verdict -> verdict
+        | Some verdict -> (verdict, None)
         | None ->
-            let verdict, _ = Rewrite_proof.prove_equality ~timeout:budget original candidate in
+            let verdict, _, model =
+              Rewrite_proof.prove_equality_with_model ~timeout:budget original candidate
+            in
             Hashtbl.replace proofs key verdict;
             Hashtbl.replace proof_budgets key budget;
-            verdict
+            (verdict, model)
       in
       check_timeout ();
       match verdict with
@@ -147,6 +168,7 @@ let accepts ~pass original candidate =
           true
       | No ->
           incr disproved;
+          Option.iter (remember_counterexample original) model;
           Logging._log_warn pass "discarding a non-equivalent rewrite";
           false
       | Unknown | Timeout | Disabled ->

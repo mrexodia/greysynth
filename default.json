@@ -16,6 +16,7 @@
   "local_cache": true,
   "synthesis_timeout": 2,
   "synthesis_repeat": 1,
+  "cegis_retries": 1,
   "check_equiv": false,
   "equiv_timeout": 1,
   "balanced_tree": true,

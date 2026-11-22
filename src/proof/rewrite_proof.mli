@@ -9,6 +9,10 @@ val record : builder -> pass:string -> Sexpr.Expr.t -> Sexpr.Expr.t -> unit
 
 val finish : builder -> Sexpr.Expr.t -> Yojson.Basic.t
 
+val prove_equality_with_model : timeout:float -> Sexpr.Expr.t -> Sexpr.Expr.t ->
+  Greysynth_utils.Utils.equiv_t * string * (string * Z.t) list option
+(** As {!prove_equality}, retaining a concrete counterexample when refuted. *)
+
 val prove_equality : timeout:float -> Sexpr.Expr.t -> Sexpr.Expr.t ->
   Greysynth_utils.Utils.equiv_t * string
 (** Try a universally quantified abstraction of identical shared subterms,

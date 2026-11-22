@@ -47,6 +47,7 @@ let c_global_synthesis = ref false
 let c_chs = ref false
 let c_synthesis_timeout = ref 1
 let c_synthesis_repeat = ref 1
+let c_cegis_retries = ref 1
 let c_balanced_tree = ref false
 let c_sampling_strategy = ref RealValues
 let c_equiv_timeout = ref 1
@@ -130,6 +131,11 @@ let load_config_from_json json_file : unit =
     c_chs := json |> member "chs" |> to_bool;
     c_synthesis_timeout := json |> member "synthesis_timeout" |> to_int;
     c_synthesis_repeat := json |> member "synthesis_repeat" |> to_int;
+    (c_cegis_retries :=
+       match json |> member "cegis_retries" with
+       | `Null -> 1
+       | v -> to_int v);
+    if !c_cegis_retries < 0 then failwith "config: cegis_retries must be nonnegative";
     c_balanced_tree := json |> member "balanced_tree" |> to_bool;
     c_reject_non_equiv_simplifications :=
       json |> member "reject_non_equiv_simplifications" |> to_bool;
