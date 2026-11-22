@@ -33,6 +33,8 @@ let reset ?(strict = false) () =
   C.c_oes_fixedpoint := false;
   C.c_oes_candidate_limit := 4;
   C.c_local_cache := false;
+  C.c_chs_max_inputs := 0;
+  C.c_chs_max_horizon := 0;
   C.c_add_constants_to_synthesis := false;
   C.c_synthesis_constant_limit := 12;
   C.c_balanced_tree := false;
@@ -357,6 +359,8 @@ let test_chs_horizon_restart () =
   C.c_check_equiv := false;
   C.c_synthesis_timeout := 1;
   C.c_synthesis_repeat := 1;
+  C.c_chs_max_inputs := 0;
+  C.c_chs_max_horizon := 0;
   let padded value = plus (plus value zero) zero in
   let left = padded x and right = padded y in
   let original = plus (E.binary E.Or left right) (E.binary E.And left right) in
@@ -494,6 +498,18 @@ let test_legacy_simplifier_edges () =
   let reassociated = U.binsec_simplify (plus a (plus b d)) in
   require (E.sizeof reassociated = 8) "legacy reassociation changed the result width"
 
+let test_chs_input_limit () =
+  reset ();
+  C.c_chs_max_inputs := 1;
+  let calls = ref 0 in
+  C.c_synthesizer := (fun _ -> incr calls; None);
+  ignore (S.simplify_with_horizon 2 1 1 (plus (plus x y) zero));
+  require (!calls = 0) "CHS input cap still called the backend";
+  let statuses = List.map (fun (attempt : L.synthesis_attempt) -> attempt.status)
+      !(L.log_chs_synthesis_attempts) in
+  require (List.mem "skipped_input_limit" statuses)
+    "CHS input cap was not reported"
+
 let test_backend_statuses () =
   reset ();
   let problem = S.make_problem (c 8 1) (Hashtbl.create 0) 1 1 in
@@ -573,11 +589,12 @@ let () =
   test_sampling_strategies ();
   test_oes_proof_fallback ();
   test_legacy_simplifier_edges ();
+  test_chs_input_limit ();
   test_backend_statuses ();
   test_backend_budget_is_bounded ();
   test_derived_constant_seeding ();
   test_logging_reset ();
-  print_endline "pipeline_test: 23 solver-independent regressions passed";
+  print_endline "pipeline_test: 24 solver-independent regressions passed";
   if solver_available then (
     test_context_proof ();
     test_universal_rule_reuse ();

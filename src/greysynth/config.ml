@@ -46,6 +46,8 @@ let c_local_extend_depth = ref 6
 let c_fast_simplify = ref false
 let c_global_synthesis = ref false
 let c_chs = ref false
+let c_chs_max_inputs = ref 0
+let c_chs_max_horizon = ref 0
 let c_synthesis_timeout = ref 1
 let c_synthesis_repeat = ref 1
 let c_cegis_retries = ref 1
@@ -138,6 +140,12 @@ let load_config_from_json json_file : unit =
     if member "local_synthesis" json <> `Null then
       failwith "config: \"local_synthesis\" was renamed to \"chs\"";
     c_chs := json |> member "chs" |> to_bool;
+    (c_chs_max_inputs :=
+       match json |> member "chs_max_inputs" with `Null -> 0 | v -> to_int v);
+    (c_chs_max_horizon :=
+       match json |> member "chs_max_horizon" with `Null -> 0 | v -> to_int v);
+    if !c_chs_max_inputs < 0 || !c_chs_max_horizon < 0 then
+      failwith "config: CHS limits must be nonnegative";
     c_synthesis_timeout := json |> member "synthesis_timeout" |> to_int;
     c_synthesis_repeat := json |> member "synthesis_repeat" |> to_int;
     (c_cegis_retries :=

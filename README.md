@@ -114,6 +114,7 @@ working example. An optional second positional argument names the certificate.
 | `fast_simplify` | OES extension with relational vocabulary (not in the CCS'26 paper). |
 | `global_synthesis` | Run global (bottom-up, untruncated) synthesis. |
 | `chs` | Run CHS. |
+| `chs_max_inputs`, `chs_max_horizon` | Optional CHS search caps; zero means unlimited. |
 | `local_cache` | Reuse synthesis results for nodes with the same outhash. |
 | `synthesizer` | `xyntia`, `syntia` or `cvc5`. Backend-specific keys: `xyntia_grammar` (`auto` chooses `mba`, `mba_shift`, or `full` per target), `xsmir_ops`, `synthesizer_cmd`, `synthesizer_script`. |
 | `synthesis_timeout`, `synthesis_repeat` | Per-call synthesizer timeout (s) and attempts. |

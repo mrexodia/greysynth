@@ -14,6 +14,8 @@
   "xyntia_grammar": "auto",
   "global_synthesis": false,
   "chs": true,
+  "chs_max_inputs": 0,
+  "chs_max_horizon": 0,
   "local_cache": true,
   "synthesis_timeout": 2,
   "synthesis_repeat": 1,

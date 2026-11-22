@@ -96,7 +96,11 @@ let chs gt best =
   c_current_mode_is_global := false;
   let start = Unix.gettimeofday () in
   let horizon = ref 2 in
-  while not !g_has_timedout && !horizon <= depth_of_expr !best do
+  while
+    not !g_has_timedout
+    && !horizon <= depth_of_expr !best
+    && (!c_chs_max_horizon = 0 || !horizon <= !c_chs_max_horizon)
+  do
     try
       check_timeout ();
       let before = size_of_expr !best in

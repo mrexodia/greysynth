@@ -541,7 +541,18 @@ let simplify_with_horizon (horizon : int) synthesis_timeout synthesis_repeat
     let n', new_leafs = truncate node horizon in
 
     let synthesized_expression =
-      synthesize ~original:node n' new_leafs synthesis_timeout synthesis_repeat
+      if !c_chs_max_inputs > 0 && Hashtbl.length new_leafs > !c_chs_max_inputs then (
+        let attempt : Logging.synthesis_attempt =
+          {
+            input_size = Greysynth_utils.Utils.size_of_expr node;
+            status = "skipped_input_limit";
+            time = 0.;
+            is_simplification = false;
+          }
+        in
+        log_chs_synthesis_attempts := attempt :: !log_chs_synthesis_attempts;
+        None)
+      else synthesize ~original:node n' new_leafs synthesis_timeout synthesis_repeat
     in
 
     let ret =
