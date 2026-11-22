@@ -80,8 +80,9 @@ runs in one process have isolated metrics; reports account for every attempt.
 
 - [x] Add proof-gated associative/commutative flattening, ordering, balancing,
   constant folding, duplicate elimination, and coefficient collection behind
-  `ac_normalization`; keep it opt-in until whole-expression extraction prevents
-  the measured local-greedy regressions.
+  `ac_normalization`; keep direct greedy mode opt-in. `normalization_portfolio`
+  now races baseline and AC branches from the same input and retains the cheaper
+  locally proved result, subject to the shared total budget.
 - [ ] Add complement, mask, extraction/extension, concat, shift, and comparison
   identities without crossing mixed-width boundaries unsafely.
 - [ ] Raise the linear-MBA atom ceiling using sparse truth tables and component
