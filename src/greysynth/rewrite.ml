@@ -88,16 +88,36 @@ let samples_agree original candidate =
   | _ -> false
 
 let accepts_compositional ~pass ~equalities original candidate =
-  if
-    Sexpr.Expr.sizeof original <> Sexpr.Expr.sizeof candidate
-    || size_of_expr candidate >= size_of_expr original
-  then false
+  let record_equalities () =
+    Option.iter
+      (fun journal ->
+        List.iter
+          (fun (left, right) -> Rewrite_proof.record journal ~pass left right)
+          equalities)
+      !journal
+  in
+  if Sexpr.Expr.sizeof original <> Sexpr.Expr.sizeof candidate then (
+    last_rejection := "width_mismatch";
+    false)
+  else if size_of_expr candidate >= size_of_expr original then (
+    last_rejection := "not_smaller";
+    false)
   else (
     check_timeout ();
     incr checked;
     if not (samples_agree original candidate) then (
       incr sample_rejections;
+      last_rejection := "sample_refuted";
       false)
+    else if not !c_reject_non_equiv_simplifications then (
+      last_rejection := "none";
+      record_equalities ();
+      true)
+    else if Hashtbl.find_opt proofs (original, candidate) = Some Yes then (
+      last_rejection := "none";
+      incr proved;
+      record_equalities ();
+      true)
     else
       let proof = Rewrite_proof.create original in
       List.iter (fun (left, right) -> Rewrite_proof.record proof ~pass left right) equalities;
@@ -107,20 +127,24 @@ let accepts_compositional ~pass ~equalities original candidate =
           ~original ~candidate certificate
       in
       let open Yojson.Basic.Util in
+      check_timeout ();
       match member "verification" report |> to_string_option with
       | Some "proved_compositional" ->
           incr proved;
-          Option.iter
-            (fun journal ->
-              List.iter
-                (fun (left, right) -> Rewrite_proof.record journal ~pass left right)
-                equalities)
-            !journal;
+          last_rejection := "none";
+          Hashtbl.replace proofs (original, candidate) Yes;
+          Hashtbl.replace proof_budgets (original, candidate)
+            (float_of_int !c_equiv_timeout);
+          record_equalities ();
           true
       | _ ->
           (match member "equiv" report |> to_string_option with
-          | Some "no" -> incr disproved
-          | _ -> incr inconclusive);
+          | Some "no" ->
+              incr disproved;
+              last_rejection := "smt_refuted"
+          | _ ->
+              incr inconclusive;
+              last_rejection := "smt_inconclusive");
           false)
 
 let accepts ~pass original candidate =
