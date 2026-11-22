@@ -15,6 +15,31 @@ GreySynth combines two techniques:
 
 ## Building
 
+### Dev Container (Docker)
+
+With Docker running in Linux-container mode and the
+[Dev Container CLI](https://github.com/devcontainers/cli) installed, run these
+commands from the repository root:
+
+```sh
+devcontainer up --workspace-folder .
+devcontainer exec --workspace-folder . make test
+devcontainer exec --workspace-folder . bash
+```
+
+The image includes OCaml 5.3, the vendored BINSEC and Xyntia packages, and the
+native Bitwuzla solver for the proof tests. The first start can take
+several minutes to compile dependencies. The checkout is mounted into the
+container and built with `make` on creation. Build artifacts stay inside the
+container. From the container shell, use `dune exec -- greysynth` to run the CLI
+without installing it, or `make install` to put it on the container's `PATH`.
+
+If you change the Dockerfile or the vendored dependencies, recreate the container
+with `devcontainer up --workspace-folder . --remove-existing-container`.
+Ordinary source edits only require rerunning `make` or `make test`.
+
+### Native build
+
 Requirements: OCaml 5.3 with [opam](https://opam.ocaml.org/). To build GreySynth proceed as follows:
 
 ```sh

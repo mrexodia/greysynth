@@ -1,0 +1,10 @@
+# Only the vendored opam packages are needed to build the image.
+**
+!outside_tools/
+!outside_tools/binsec_no_simplification/
+!outside_tools/binsec_no_simplification/**
+!outside_tools/xyntia/
+!outside_tools/xyntia/**
+**/.git
+**/_build
+**/_opam

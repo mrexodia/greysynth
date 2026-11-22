@@ -1,0 +1,14 @@
+{
+  "name": "GreySynth",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "remoteUser": "opam",
+  "init": true,
+  "containerEnv": {
+    "DUNE_BUILD_DIR": "/home/opam/greysynth-build"
+  },
+  "postCreateCommand": "make",
+  "waitFor": "postCreateCommand"
+}
