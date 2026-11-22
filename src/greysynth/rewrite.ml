@@ -36,11 +36,19 @@ let holdout = ref (Sample_evaluator.make 32)
 let proofs : (Sexpr.Expr.t * Sexpr.Expr.t, equiv_t) Hashtbl.t =
   Hashtbl.create 128
 
+(* Unknown and timeout results are reusable only for an equal or smaller
+   budget. A larger budget is a meaningful retry; repeating the same query is
+   just lost simplification time. Entries inserted directly by tests or API
+   users without a budget remain authoritative. *)
+let proof_budgets : (Sexpr.Expr.t * Sexpr.Expr.t, float) Hashtbl.t =
+  Hashtbl.create 128
+
 let reset () =
   List.iter (fun counter -> counter := 0)
     [ checked; proved; sample_rejections; disproved; inconclusive ];
   holdout := Sample_evaluator.make 32;
   Hashtbl.clear proofs;
+  Hashtbl.clear proof_budgets;
   journal := None
 
 let accepts ~pass original candidate =
@@ -69,17 +77,25 @@ let accepts ~pass original candidate =
       record ~pass original candidate;
       true)
     else
+      let key = (original, candidate) in
+      let budget = float_of_int !c_equiv_timeout in
+      let cached =
+        match Hashtbl.find_opt proofs key with
+        | Some (Yes | No as verdict) -> Some verdict
+        | Some (Unknown | Timeout | Disabled as verdict) ->
+            let attempted =
+              Option.value (Hashtbl.find_opt proof_budgets key) ~default:Float.infinity
+            in
+            if attempted >= budget then Some verdict else None
+        | None -> None
+      in
       let verdict =
-        match Hashtbl.find_opt proofs (original, candidate) with
+        match cached with
         | Some verdict -> verdict
         | None ->
-            let verdict, _ =
-              Rewrite_proof.prove_equality ~timeout:(float_of_int !c_equiv_timeout)
-                original candidate
-            in
-            (match verdict with
-            | Yes | No -> Hashtbl.replace proofs (original, candidate) verdict
-            | Unknown | Timeout | Disabled -> ());
+            let verdict, _ = Rewrite_proof.prove_equality ~timeout:budget original candidate in
+            Hashtbl.replace proofs key verdict;
+            Hashtbl.replace proof_budgets key budget;
             verdict
       in
       check_timeout ();

@@ -255,6 +255,16 @@ let test_oes_partial_timeout () =
   require (!count = 1) "OES partial rewrite count is wrong";
   expect_same_at original result 17 29
 
+let test_larger_proof_budget_retries () =
+  reset ~strict:true ();
+  let original = plus x zero in
+  Hashtbl.replace R.proofs (original, x) U.Timeout;
+  Hashtbl.replace R.proof_budgets (original, x) 1.;
+  C.c_equiv_timeout := 5;
+  require (R.accepts ~pass:"retry-test" original x)
+    "larger proof budget did not retry an inconclusive obligation";
+  require (!(R.proved) = 1) "retried proof was not recorded"
+
 let test_chs_horizon_restart () =
   reset ~strict:true ();
   C.c_oes := false;
@@ -413,6 +423,7 @@ let () =
   print_endline "pipeline_test: 20 solver-independent regressions passed";
   if solver_available then (
     test_context_proof ();
+    test_larger_proof_budget_retries ();
     test_chs_horizon_restart ();
     print_endline "pipeline_test: contextual proof and horizon restart passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
