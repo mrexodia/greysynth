@@ -122,6 +122,7 @@ C-Full.
   the single smallest representative, retaining speculative constants alongside
   real AST representatives.
 - [ ] Rank representatives by extraction cost and expected proof complexity.
+  Frontier growth remains opt-in after measured timeout regressions.
 - [ ] Canonicalize proof-cache keys.
 - [x] Retry inconclusive obligations only when a larger budget is available.
 - [x] Reuse successful producer-side compositional endpoint proofs and honor
@@ -144,8 +145,8 @@ on the 1,000-case corpus.
   inconclusive.
 - [ ] Persist/version generalized learned-rule proofs independently; every
   concrete rule application is already re-proved and recorded for replay.
-- [ ] Canonicalize truncated ASTs so alpha-renaming and commutative ordering do
-  not prevent reuse.
+- [ ] Canonicalize truncated ASTs across alpha-renaming and AC association;
+  ordinary commuted polynomial partitions and exact Greek templates are handled.
 
 Acceptance: a synthesized rule such as `(A|B)+(A&B) -> A+B` is synthesized and
 proved once, then reused for distinct operands with no additional synthesis.
@@ -178,7 +179,8 @@ from a recorded seed and explicit sample manifest.
 - [ ] Rank work by possible cost reduction, cut-label count, repeated semantic
   classes, constants, operator family, and adjacent-horizon history.
 - [ ] Skip targets whose lower bound cannot beat the incumbent.
-- [ ] Cap labels/horizons and permit a backend portfolio for hard targets.
+- [x] Add optional label and horizon caps with explicit skip reporting.
+- [ ] Permit an adaptive backend portfolio for hard targets.
 - [x] Preserve completed proved rewrites across every timeout boundary.
 - [x] Restart small CHS horizons after child reductions expose a shallower rule.
 - [x] Avoid caching partial-timeout CHS results and bound relational inversion

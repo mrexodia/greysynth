@@ -122,4 +122,12 @@ obligations:
 ```
 
 `mba_proof` reports all ten equalities proved and derives the endpoints by
-congruence and transitivity.
+congruence and transitivity. Follow-up commutativity/scaling fixes also produce:
+
+```text
+(x&y)*(x|y) + ((~y)&x)*(y&~x)       17 -> 3: x*y
+3*((x&y)*(x|y)) + 3*((x&~y)*(~x&y)) 21 -> 5: 3*(x*y)
+```
+
+Both replay compositionally; the measured simplification times are about 8 ms
+and 29 ms respectively in the Dev Container.
