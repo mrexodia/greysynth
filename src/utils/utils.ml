@@ -226,133 +226,156 @@ let depth_of_expr expr =
     If show_counter_example is true and the result is No, counter_example will
     contain a Some mapping of variable names to their values that demonstrate
     non-equivalence. *)
+exception Equivalence_timeout
+
 let are_equivalent ?(show_counter_example = false) (expr1 : Sexpr.Expr.t)
     (expr2 : Sexpr.Expr.t) (timeout : int option) :
     equiv_t * float * (string * Z.t) list option =
-  let equiv_start = Unix.gettimeofday () in
-
-  let factory, solver_name =
-    (*match Libsolver.z3 with
-    | Some f -> (f, "Z3")
-    | None -> *)
+  let started = Unix.gettimeofday () in
+  let finish result model = (result, Unix.gettimeofday () -. started, model) in
+  (* A missing optional solver must not crash simplification, nor count as a
+     proof. Prefer Bitwuzla, retaining Z3 as a usable fallback. *)
+  let factory =
     match Libsolver.bitwuzla_cxx with
-    | Some f -> (f, "Bitwuzla C++")
+    | Some _ as factory -> factory
     | None -> (
         match Libsolver.bitwuzla_c with
-        | Some f -> (f, "Bitwuzla C")
-        | None -> failwith "No SMT solver available (tried Z3, Bitwuzla)")
+        | Some _ as factory -> factory
+        | None -> Libsolver.z3)
   in
-
-  ignore solver_name;
-
-  let module Factory = (val factory : Libsolver.F) in
-  let module Solver = Factory () in
-  let solver_timeout =
-    match timeout with Some t -> Some (float_of_int t) | None -> None
-  in
-
-  let do_check () =
-    Solver.push ();
-    let var_cache : (string * int, Solver.Bv.t) Hashtbl.t = Hashtbl.create 16 in
-    let var_list : (string * int) list ref = ref [] in
-
-    let rec to_solver_bv (e : Sexpr.Expr.t) : Solver.Bv.t =
-      match e with
-      | Sexpr.Expr.Cst bv ->
-          Solver.Bv.value (Bitvector.size_of bv) (Bitvector.value_of bv)
-      | Sexpr.Expr.Var v -> (
-          let key = (v.name, v.size) in
-          match Hashtbl.find_opt var_cache key with
-          | Some cached -> cached
-          | None ->
-              let fresh = Solver.Bv.const v.size v.name in
-              Hashtbl.add var_cache key fresh;
-              var_list := key :: !var_list;
-              fresh)
-      | Sexpr.Expr.Unary { f; x; _ } -> (
-          let x' = to_solver_bv x in
-          match f with
-          | Sexpr.Expr.Not -> Solver.Bv.lognot x'
-          | Sexpr.Expr.Minus -> Solver.Bv.neg x'
-          | Sexpr.Expr.Uext n -> Solver.Bv.uext n x'
-          | Sexpr.Expr.Sext n -> Solver.Bv.sext n x'
-          | Sexpr.Expr.Restrict { lo; hi } -> Solver.Bv.extract ~hi ~lo x')
-      | Sexpr.Expr.Binary { f; x; y; _ } -> (
-          let x' = to_solver_bv x in
-          let y' = to_solver_bv y in
-          match f with
-          | Sexpr.Expr.Plus -> Solver.Bv.add x' y'
-          | Sexpr.Expr.Minus -> Solver.Bv.sub x' y'
-          | Sexpr.Expr.Mul -> Solver.Bv.mul x' y'
-          | Sexpr.Expr.And -> Solver.Bv.logand x' y'
-          | Sexpr.Expr.Or -> Solver.Bv.logor x' y'
-          | Sexpr.Expr.Xor -> Solver.Bv.logxor x' y'
-          | Sexpr.Expr.Lsl -> Solver.Bv.shift_left x' y'
-          | Sexpr.Expr.Lsr -> Solver.Bv.shift_right x' y'
-          | Sexpr.Expr.Asr -> Solver.Bv.shift_right_signed x' y'
-          | Sexpr.Expr.Ror -> Solver.Bv.rotate_right x' y'
-          | Sexpr.Expr.Rol -> Solver.Bv.rotate_left x' y'
-          | _ -> failwith "Unsupported binary operation")
-      | _ -> failwith "Unsupported expression type"
-    in
-
-    let bv1 = to_solver_bv expr1 in
-    let bv2 = to_solver_bv expr2 in
-
-    let is_equal = Solver.Bv.equal bv1 bv2 in
-    let is_different = Solver.Bl.lognot is_equal in
-
-    Solver.assert_formula is_different;
-
-    (* Use solver's native timeout support *)
-    match Solver.check_sat ?timeout:solver_timeout () with
-    | Libsolver.Sat ->
-        let counter_example =
-          if show_counter_example then
-            Some
-              (List.map
-                 (fun (var_name, var_size) ->
-                   let var_bv = Hashtbl.find var_cache (var_name, var_size) in
-                   let value = Solver.get_bv_value var_bv in
-                   (var_name, value))
-                 !var_list)
-          else None
-        in
-        (No, counter_example)
-    | Libsolver.Unsat -> (Yes, None)
-    | Libsolver.Unknown -> (Unknown, None)
-  in
-
-  (* Wall-clock timeout via Unix alarm — catches solvers that ignore their
-     own timeout on hard queries (e.g. non-linear multiplication).
-     We save the remaining time from any pre-existing alarm and restore it afterward so we don't
-     accidentally cancel an outer timeout. *)
-  let wall_timeout = match timeout with Some t -> t + 5 | None -> 120 in
-  let old_handler = Sys.signal Sys.sigalrm
-    (Sys.Signal_handle (fun _ -> raise Exit)) in
-  let prev_alarm_remaining = Unix.alarm wall_timeout in
-  let restore_alarm elapsed =
-    if prev_alarm_remaining > 0 then
-      let adjusted = max 1 (prev_alarm_remaining - int_of_float elapsed) in
-      ignore (Unix.alarm adjusted)
-    else
-      ignore (Unix.alarm 0)
-  in
-  (try
-    let result, counter_example = do_check () in
-    let equiv_end = Unix.gettimeofday () in
-    let time_taken = equiv_end -. equiv_start in
-    restore_alarm time_taken;
-    Sys.set_signal Sys.sigalrm old_handler;
-    Solver.close ();
-    (result, time_taken, counter_example)
-  with _ ->
-    let equiv_end = Unix.gettimeofday () in
-    let time_taken = equiv_end -. equiv_start in
-    restore_alarm time_taken;
-    Sys.set_signal Sys.sigalrm old_handler;
-    (try Solver.close () with _ -> ());
-    (Unknown, time_taken, None))
+  if Sexpr.Expr.sizeof expr1 <> Sexpr.Expr.sizeof expr2 then finish No None
+  else
+    match factory with
+    | None -> finish Unknown None
+    | Some factory -> (
+        try
+          let module Factory = (val factory : Libsolver.F) in
+          let module Solver = Factory () in
+          Fun.protect
+            ~finally:(fun () -> try Solver.close () with _ -> ())
+            (fun () ->
+              let solver_timeout = Option.map float_of_int timeout in
+              let var_cache : (string * int, Solver.Bv.t) Hashtbl.t =
+                Hashtbl.create 16
+              in
+              let var_list = ref [] in
+              let rec to_solver_bv (e : Sexpr.Expr.t) : Solver.Bv.t =
+                match e with
+                | Sexpr.Expr.Cst bv ->
+                    Solver.Bv.value (Bitvector.size_of bv) (Bitvector.value_of bv)
+                | Sexpr.Expr.Var v -> (
+                    let key = (v.name, v.size) in
+                    match Hashtbl.find_opt var_cache key with
+                    | Some cached -> cached
+                    | None ->
+                        (* Solver C APIs may truncate embedded NULs in names.
+                           Use fresh safe symbols; retain original names only
+                           in the OCaml cache and counterexample mapping. *)
+                        let symbol = Printf.sprintf "v%d" (Hashtbl.length var_cache) in
+                        let fresh = Solver.Bv.const v.size symbol in
+                        Hashtbl.add var_cache key fresh;
+                        var_list := key :: !var_list;
+                        fresh)
+                | Sexpr.Expr.Unary { f; x; _ } -> (
+                    let x' = to_solver_bv x in
+                    match f with
+                    | Sexpr.Expr.Not -> Solver.Bv.lognot x'
+                    | Sexpr.Expr.Minus -> Solver.Bv.neg x'
+                    | Sexpr.Expr.Uext n -> Solver.Bv.uext n x'
+                    | Sexpr.Expr.Sext n -> Solver.Bv.sext n x'
+                    | Sexpr.Expr.Restrict { lo; hi } ->
+                        Solver.Bv.extract ~hi ~lo x')
+                | Sexpr.Expr.Binary { f; x; y; _ } -> (
+                    let x' = to_solver_bv x in
+                    let y' = to_solver_bv y in
+                    match f with
+                    | Sexpr.Expr.Plus -> Solver.Bv.add x' y'
+                    | Sexpr.Expr.Minus -> Solver.Bv.sub x' y'
+                    | Sexpr.Expr.Mul -> Solver.Bv.mul x' y'
+                    | Sexpr.Expr.Udiv -> Solver.Bv.udiv x' y'
+                    | Sexpr.Expr.Sdiv -> Solver.Bv.sdiv x' y'
+                    | Sexpr.Expr.Umod -> Solver.Bv.urem x' y'
+                    (* Sexpr.Smod is the processor/C signed remainder, whose
+                       sign follows the dividend, not SMT-LIB bvsmod. *)
+                    | Sexpr.Expr.Smod -> Solver.Bv.srem x' y'
+                    | Sexpr.Expr.And -> Solver.Bv.logand x' y'
+                    | Sexpr.Expr.Or -> Solver.Bv.logor x' y'
+                    | Sexpr.Expr.Xor -> Solver.Bv.logxor x' y'
+                    | Sexpr.Expr.Lsl -> Solver.Bv.shift_left x' y'
+                    | Sexpr.Expr.Lsr -> Solver.Bv.shift_right x' y'
+                    | Sexpr.Expr.Asr -> Solver.Bv.shift_right_signed x' y'
+                    | Sexpr.Expr.Ror -> Solver.Bv.rotate_right x' y'
+                    | Sexpr.Expr.Rol -> Solver.Bv.rotate_left x' y'
+                    | Sexpr.Expr.Concat -> Solver.Bv.append x' y'
+                    | Sexpr.Expr.Eq -> Solver.Bl.to_bv (Solver.Bv.equal x' y')
+                    | Sexpr.Expr.Diff -> Solver.Bl.to_bv (Solver.Bv.diff x' y')
+                    | Sexpr.Expr.Ule -> Solver.Bl.to_bv (Solver.Bv.ule x' y')
+                    | Sexpr.Expr.Ult -> Solver.Bl.to_bv (Solver.Bv.ult x' y')
+                    | Sexpr.Expr.Uge -> Solver.Bl.to_bv (Solver.Bv.uge x' y')
+                    | Sexpr.Expr.Ugt -> Solver.Bl.to_bv (Solver.Bv.ugt x' y')
+                    | Sexpr.Expr.Sle -> Solver.Bl.to_bv (Solver.Bv.sle x' y')
+                    | Sexpr.Expr.Slt -> Solver.Bl.to_bv (Solver.Bv.slt x' y')
+                    | Sexpr.Expr.Sge -> Solver.Bl.to_bv (Solver.Bv.sge x' y')
+                    | Sexpr.Expr.Sgt -> Solver.Bl.to_bv (Solver.Bv.sgt x' y'))
+                | Sexpr.Expr.Ite { c; t; e; _ } ->
+                    Solver.Bv.ite
+                      (Solver.Bv.to_bl (to_solver_bv c))
+                      (to_solver_bv t) (to_solver_bv e)
+                | Sexpr.Expr.Load _ ->
+                    failwith "Equivalence checking does not model memory loads"
+              in
+              let do_check () =
+                let bv1 = to_solver_bv expr1 in
+                let bv2 = to_solver_bv expr2 in
+                Solver.assert_formula (Solver.Bv.diff bv1 bv2);
+                match Solver.check_sat ?timeout:solver_timeout () with
+                | Libsolver.Unsat -> finish Yes None
+                | Libsolver.Unknown -> finish Unknown None
+                | Libsolver.Sat ->
+                    let model =
+                      if show_counter_example then
+                        Some
+                          (List.map
+                             (fun ((name, size) as key) ->
+                               let label =
+                                 if List.exists
+                                      (fun (n, s) -> n = name && s <> size)
+                                      !var_list
+                                 then Printf.sprintf "%s<%d>" name size
+                                 else name
+                               in
+                               (label,
+                                Solver.get_bv_value
+                                  (Hashtbl.find var_cache key)))
+                             !var_list)
+                      else None
+                    in
+                    finish No model
+              in
+              (* Keep native solver deadlines and a wall-clock backstop. Do
+                 not replace an earlier caller alarm by a longer deadline. *)
+              let wall_timeout =
+                match timeout with Some t when t > 0 -> t + 5 | _ -> 120
+              in
+              let old_handler =
+                Sys.signal Sys.sigalrm
+                  (Sys.Signal_handle (fun _ -> raise Equivalence_timeout))
+              in
+              let previous_alarm = Unix.alarm wall_timeout in
+              if previous_alarm > 0 && previous_alarm < wall_timeout then
+                ignore (Unix.alarm previous_alarm);
+              Fun.protect
+                ~finally:(fun () ->
+                  ignore (Unix.alarm 0);
+                  Sys.set_signal Sys.sigalrm old_handler;
+                  if previous_alarm > 0 then
+                    let elapsed = int_of_float (Unix.gettimeofday () -. started) in
+                    ignore (Unix.alarm (max 1 (previous_alarm - elapsed))))
+                (fun () ->
+                  try do_check () with
+                  | Equivalence_timeout -> finish Timeout None
+                  | _ -> finish Unknown None))
+        with _ -> finish Unknown None)
 
 let equiv_gt_then_obf expr gt obf timeout =
   let equiv_result, time_gt, _ = are_equivalent expr gt timeout in

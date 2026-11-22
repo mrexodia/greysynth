@@ -221,65 +221,51 @@ let () =
     Arg.usage spec usage_msg;
     exit 1);
 
+  (match !mode with
+  | Sample n when n <= 0 ->
+      Format.eprintf "Error: -sample must be positive\n";
+      exit 1
+  | _ -> ());
+  if !timeout <= 0 then (
+    Format.eprintf "Error: -timeout must be positive\n";
+    exit 1);
+
   try
     let sexpr_obf_raw = load_expr !default_size (Option.get !obf_source) in
     let sexpr_gt_raw = load_expr !default_size (Option.get !gt_source) in
 
-    (* ── Align variable sizes ──────────────────────────────────────────
-       When the same variable name appears in both expressions with different
-       sizes (e.g. x0<8> in obf vs x0<32> in gt), rewrite the expression
-       with the LARGER variable to use uext(diff, Var(name, small_size)).
-       This ensures the SMT solver uses a single variable per name. *)
-    let collect_vars expr =
-      let tbl = Hashtbl.create 8 in
-      let rec walk = function
-        | Sexpr.Expr.Var v -> Hashtbl.replace tbl v.name v.size
-        | Sexpr.Expr.Unary r -> walk r.x
-        | Sexpr.Expr.Binary r -> walk r.x; walk r.y
-        | Sexpr.Expr.Ite r -> walk r.c; walk r.t; walk r.e
-        | _ -> ()
-      in
-      walk expr; tbl
-    in
-    let rec rewrite_var expr name old_sz new_sz =
-      match expr with
-      | Sexpr.Expr.Var v when v.name = name && v.size = old_sz ->
-          Sexpr.Expr.unary (Sexpr.Expr.Uext (old_sz - new_sz))
-            (Sexpr.Expr.var name new_sz name)
-      | Sexpr.Expr.Unary r ->
-          Sexpr.Expr.unary r.f (rewrite_var r.x name old_sz new_sz)
+    (* Do not silently narrow the input domain to reconcile two different
+       variable widths. Callers can express the intended extension explicitly. *)
+    let variable_sizes = Hashtbl.create 8 in
+    let rec validate_variables = function
+      | Sexpr.Expr.Var v -> (
+          match Hashtbl.find_opt variable_sizes v.name with
+          | Some size when size <> v.size ->
+              failwith
+                (Printf.sprintf
+                   "Variable %s has widths %d and %d; use explicit extension or restriction"
+                   v.name size v.size)
+          | _ -> Hashtbl.replace variable_sizes v.name v.size)
+      | Sexpr.Expr.Unary r -> validate_variables r.x
       | Sexpr.Expr.Binary r ->
-          Sexpr.Expr.binary r.f
-            (rewrite_var r.x name old_sz new_sz)
-            (rewrite_var r.y name old_sz new_sz)
+          validate_variables r.x;
+          validate_variables r.y
       | Sexpr.Expr.Ite r ->
-          Sexpr.Expr.ite
-            (rewrite_var r.c name old_sz new_sz)
-            (rewrite_var r.t name old_sz new_sz)
-            (rewrite_var r.e name old_sz new_sz)
-      | other -> other
+          validate_variables r.c;
+          validate_variables r.t;
+          validate_variables r.e
+      | _ -> ()
     in
-    let vars_obf = collect_vars sexpr_obf_raw in
-    let vars_gt = collect_vars sexpr_gt_raw in
-    let sexpr_obf, sexpr_gt =
-      Hashtbl.fold (fun name sz_obf (e_obf, e_gt) ->
-        match Hashtbl.find_opt vars_gt name with
-        | Some sz_gt when sz_obf <> sz_gt ->
-            let small = min sz_obf sz_gt in
-            if sz_obf > small then
-              (rewrite_var e_obf name sz_obf small, e_gt)
-            else
-              (e_obf, rewrite_var e_gt name sz_gt small)
-        | _ -> (e_obf, e_gt)
-      ) vars_obf (sexpr_obf_raw, sexpr_gt_raw)
-    in
+    validate_variables sexpr_obf_raw;
+    validate_variables sexpr_gt_raw;
+    let sexpr_obf, sexpr_gt = (sexpr_obf_raw, sexpr_gt_raw) in
 
     let size_obf = Greysynth_utils.Utils.size_of_expr sexpr_obf in
     let size_gt = Greysynth_utils.Utils.size_of_expr sexpr_gt in
     let expr_obf_str = Greysynth_utils.Utils.pp sexpr_obf in
     let expr_gt_str = Greysynth_utils.Utils.pp sexpr_gt in
 
-    let equiv_str, time, counter_example_json =
+    let equiv_str, verification, time, counter_example_json, sample_fields =
       match !mode with
       | Smt ->
           let result, t, counter_example =
@@ -301,31 +287,61 @@ let () =
                      ce)
             | None -> `Null
           in
-          (s, t, ce_json)
+          let verification =
+            match result with
+            | Greysynth_utils.Utils.Yes -> "proved"
+            | Greysynth_utils.Utils.No -> "refuted"
+            | Greysynth_utils.Utils.Timeout -> "timeout"
+            | _ -> "unknown"
+          in
+          (s, verification, t, ce_json, [])
       | Sample n ->
           let ev = Sample_evaluator.make n in
           let t0 = Unix.gettimeofday () in
-          let equiv = ref true in
+          let matched = ref true in
+          let checked = ref 0 in
+          let error = ref None in
+          let exception Mismatch in
           (try
              for sid = 0 to n - 1 do
                let v_obf = ev.eval sexpr_obf sid in
                let v_gt = ev.eval sexpr_gt sid in
+               incr checked;
                if not (Bitvector.equal v_obf v_gt) then (
-                 equiv := false;
-                 raise Exit)
+                 matched := false;
+                 raise Mismatch)
              done
            with
-          | Exit -> ()
-          | Division_by_zero -> ());
+          | Mismatch -> ()
+          | exn -> error := Some (Printexc.to_string exn));
           let t = Unix.gettimeofday () -. t0 in
-          let s = if !equiv then "yes" else "no" in
-          (s, t, `Null)
+          let verdict, verification, sample_match =
+            match !error with
+            | Some _ -> ("ukn", "evaluation_error", `Null)
+            | None when !matched -> ("ukn", "sampled", `Bool true)
+            | None -> ("no", "refuted", `Bool false)
+          in
+          (* Finite agreement is evidence, never a proof of equivalence. *)
+          let fields =
+            [
+              ("sample_match", sample_match);
+              ("checked_samples", `Int !checked);
+              ("requested_samples", `Int n);
+            ]
+          in
+          let fields =
+            match !error with
+            | None -> fields
+            | Some message -> ("evaluation_error", `String message) :: fields
+          in
+          (verdict, verification, t, `Null, fields)
     in
 
     let json =
       `Assoc
-        [
+        ([
           ("equiv", `String equiv_str);
+          ("verification", `String verification);
           ("equiv_time", `Float time);
           ( "obf",
             `Assoc
@@ -335,7 +351,7 @@ let () =
             `Assoc
               [ ("expression", `String expr_gt_str); ("size", `Int size_gt) ] );
           ("counter_example", counter_example_json);
-        ]
+        ] @ sample_fields)
     in
     Format.printf "%s\n" (Yojson.Basic.pretty_to_string json)
   with
