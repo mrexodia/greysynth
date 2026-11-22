@@ -90,7 +90,8 @@ runs in one process have isolated metrics; reports account for every attempt.
   locally proved result, subject to the shared total budget.
 - [ ] Complete the mixed-width-safe identity set. Complement, additive inverse,
   disjoint masks, extraction/extension, concat, and constant-shift rules are in;
-  comparison/select and additional mask compositions remain.
+  signed/unsigned comparison bounds and simple ITE masks are now included;
+  select/min/max idioms and additional mask compositions remain.
 - [x] Raise the configurable linear-MBA truth-table ceiling from four to six
   atoms by default (up to ten); connected-component decomposition remains.
 - [ ] Normalize sparse modular polynomials and factor only when extraction cost
