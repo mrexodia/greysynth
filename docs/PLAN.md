@@ -93,7 +93,8 @@ runs in one process have isolated metrics; reports account for every attempt.
   signed/unsigned comparison bounds and simple ITE masks are now included;
   select/min/max idioms and additional mask compositions remain.
 - [x] Raise the configurable linear-MBA truth-table ceiling from four to six
-  atoms by default (up to ten); connected-component decomposition remains.
+  atoms by default (up to ten), extend two-value recovery through six atoms,
+  and raise the guarded traversal budget; connected-component decomposition remains.
 - [ ] Normalize sparse modular polynomials and factor only when extraction cost
   improves.
 - [ ] Add semilinear mask reconstruction and bit-partitioned simplification.
@@ -114,8 +115,10 @@ runs in one process have isolated metrics; reports account for every attempt.
   possible performance refinement.
 - [x] Normalize after every CHS horizon and before the final OES cleanup.
 - [x] Add optional `rumba` and `cobra` CLI adapters for bounded uniform-width
-  pure-MBA subtree candidates. Variable identities are remapped safely, process
-  groups are deadline-bounded, and all answers remain untrusted/proof-gated.
+  pure-MBA subtree candidates. Maximal roots are attempted top-down before local
+  residuals, constant shifts are supported, time is clamped to the remaining
+  global budget, trailing diagnostics are ignored safely, and all answers remain
+  untrusted/proof-gated.
   Broader mixed-width adapters and automatic executable discovery remain out of
   scope; no external implementation code is copied.
 
@@ -132,8 +135,12 @@ C-Full.
   Frontier growth remains opt-in after measured timeout regressions.
 - [x] Canonicalize proof-cache keys symmetrically across equality direction.
 - [x] Retry inconclusive obligations only when a larger budget is available.
-- [x] Reuse successful producer-side compositional endpoint proofs and honor
-  timeout/non-strict policy; independent replay deliberately remains cache-free.
+- [x] Reuse successful and budget-tagged inconclusive producer-side
+  compositional endpoint proofs and honor timeout/non-strict policy; independent
+  replay deliberately remains cache-free.
+- [x] Strengthen proof abstraction to replace maximal cost-2/3 subterms and
+  nontrivial constants shared across both sides, while retaining concrete
+  fallback when the stronger abstraction is satisfiable.
 - [ ] Reuse incremental solver contexts where the solver API permits.
 - [x] Add baseline-vs-AC whole-normalizer portfolio extraction and retain only
   the winning branch's proof obligations.
@@ -154,9 +161,9 @@ on the 1,000-case corpus.
   inconclusive.
 - [ ] Persist/version generalized learned-rule proofs independently; every
   concrete rule application is already re-proved and recorded for replay.
-- [ ] Canonicalize truncated ASTs across alpha-renaming and AC association;
-  ordinary commuted/scaled polynomial partitions and exact Greek templates are
-  handled. Associative target balancing is now DAG-memoized.
+- [x] Canonicalize learned templates across alpha-renaming, commutative order,
+  and associative balancing; mixed operator profiles use bounded generic proofs.
+  Persisted cross-run rule libraries remain future work.
 
 Acceptance: a synthesized rule such as `(A|B)+(A&B) -> A+B` is synthesized and
 proved once, then reused for distinct operands with no additional synthesis.
@@ -168,8 +175,9 @@ proved once, then reused for distinct operands with no additional synthesis.
 - [x] Add explicit-environment evaluation and zero/all-one/every-one-hot tuples
   for independent label sampling, as required by XSmir affine rules.
 - [x] Extend default `RealValues` contextual banks with deterministic variable
-  tuples, extrema, one-hot/one-cold bit values, powers of two, low masks,
-  alternating bits, and a reproducibly seeded random/small-value tail.
+  tuples, extrema, rank/seed-diversified one-hot/one-cold bits, low masks,
+  rotating patterns, and a reproducibly seeded random/small-value tail. Training
+  and holdout tails no longer collapse onto diagonal `x = y = ...` rows.
   alternating masks, byte/word boundaries, carry boundaries, large shifts,
   divisors, and correlated variable assignments.
 - [x] Keep independently seeded structured training and validation banks.
