@@ -170,6 +170,16 @@ The current eight-worker C-Full deterministic run remains **1,000/1,000 proved,
 984 strict reductions, 16 unchanged** after structured real samples and the
 expanded local proof machinery.
 
+A new complete-preprocessing portfolio races baseline normalization+OES against
+AC normalization+OES and prunes the discarded branch's obligations. On C-Full
+it also reaches 984/16 and is smaller than a separate baseline run on 217 cases,
+but larger on 218. Inspection shows that doubling proof work under the shared
+15-second wall budget changes which baseline proofs finish under eight-way
+contention; branch-local selection cannot guarantee cross-run dominance. The
+feature therefore remains opt-in and confirms that a production portfolio needs
+per-branch resource isolation or offline selection, not merely later local
+selection.
+
 ### Optional Rumba oracle smoke
 
 A Linux release build of sibling Rumba commit `a653aab` was supplied through the
