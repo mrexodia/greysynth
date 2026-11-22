@@ -130,11 +130,11 @@ on the 1,000-case corpus.
 
 ## Milestone 5: reusable CHS rules
 
-- [ ] After contextual synthesis, try proving the Greek-variable template with
-  independent typed variables.
-- [ ] Store proved universal templates in a structural rule cache and apply them
-  across concrete contexts.
-- [ ] Keep dependency-specific templates local when generalization is refuted or
+- [x] After contextual synthesis, prove the Greek-variable template with
+  independent typed variables under a bounded budget.
+- [x] Store proved universal templates in a per-run structural rule cache and
+  apply them across concrete contexts without another backend call.
+- [x] Keep dependency-specific templates local when generalization is refuted or
   inconclusive.
 - [ ] Version and replay learned-rule proofs independently.
 - [ ] Canonicalize truncated ASTs so alpha-renaming and commutative ordering do
