@@ -95,12 +95,15 @@ runs in one process have isolated metrics; reports account for every attempt.
 - [ ] Normalize sparse modular polynomials and factor only when extraction cost
   improves.
 - [ ] Add semilinear mask reconstruction and bit-partitioned simplification.
-- [x] Seed bounded zero/one/two/fill, negated, complemented, and pairwise-derived
-  constants in synthesis grammars.
+- [x] Seed at most 12 zero/one/two/fill, negated, complemented, and pairwise-derived
+  constants; Xyntia now chooses variable-vs-constant classes 70/30 so added
+  terminals do not starve variable mutations.
 - [x] Add compositional disjoint-partition polynomial identities, including
   commuted operands/sums and common constant scaling; independently replayed
   Boolean/ring micro-steps raise the audited
   100-case PLDI Poly sample from 31 to 100 strict reductions.
+- [x] Decompose constant-scaled complement terms into replayable local algebra
+  steps, making the 16-bit constant-offset case reliable at a one-second budget.
 - [ ] Generalize decomposed certificates to arbitrary minterm polynomials, AC
   cancellation, and permutation-polynomial inversion so producer and replay do
   not depend on monolithic bit-blasted queries.
@@ -128,7 +131,9 @@ C-Full.
 - [x] Reuse successful producer-side compositional endpoint proofs and honor
   timeout/non-strict policy; independent replay deliberately remains cache-free.
 - [ ] Reuse incremental solver contexts where the solver API permits.
-- [ ] Prototype a bounded equality beam/e-graph so equal-cost canonical forms
+- [x] Add baseline-vs-AC whole-normalizer portfolio extraction and retain only
+  the winning branch's proof obligations.
+- [ ] Generalize this into a bounded equality beam/e-graph so equal-cost forms
   can expose a lower-cost parent without creating rewrite cycles.
 
 Acceptance: a targeted test demonstrates fallback from an unprovable smallest
@@ -146,7 +151,8 @@ on the 1,000-case corpus.
 - [ ] Persist/version generalized learned-rule proofs independently; every
   concrete rule application is already re-proved and recorded for replay.
 - [ ] Canonicalize truncated ASTs across alpha-renaming and AC association;
-  ordinary commuted polynomial partitions and exact Greek templates are handled.
+  ordinary commuted/scaled polynomial partitions and exact Greek templates are
+  handled. Associative target balancing is now DAG-memoized.
 
 Acceptance: a synthesized rule such as `(A|B)+(A&B) -> A+B` is synthesized and
 proved once, then reused for distinct operands with no additional synthesis.
@@ -157,9 +163,9 @@ proved once, then reused for distinct operands with no additional synthesis.
   explicit per-variable environments.
 - [x] Add explicit-environment evaluation and zero/all-one/every-one-hot tuples
   for independent label sampling, as required by XSmir affine rules.
-- [x] Extend contextual banks with deterministic variable tuples, extrema,
-  one-hot/one-cold bit values, powers of two, low masks, alternating bits, and a
-  reproducibly seeded random/small-value tail.
+- [x] Extend default `RealValues` contextual banks with deterministic variable
+  tuples, extrema, one-hot/one-cold bit values, powers of two, low masks,
+  alternating bits, and a reproducibly seeded random/small-value tail.
   alternating masks, byte/word boundaries, carry boundaries, large shifts,
   divisors, and correlated variable assignments.
 - [x] Keep independently seeded structured training and validation banks.
