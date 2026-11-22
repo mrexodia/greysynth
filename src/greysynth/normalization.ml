@@ -179,9 +179,27 @@ let peepholes evaluate expression =
       folded @ identities
   | E.Ite { c; t; e; _ } ->
       if same t e then [ t ]
-      else (match constant_value c with
+      else
+        let branch_width = E.sizeof t in
+        let condition_mask =
+          if E.sizeof c = 1 then Some (E.unary (E.Sext (branch_width - 1)) c)
+          else None
+        in
+        (match constant_value c with
         | Some condition -> [ if Bitvector.is_zeros condition then e else t ]
-        | None -> [])
+        | None when branch_width = 1 && is_number Z.one t && is_number Z.zero e -> [ c ]
+        | None ->
+            match condition_mask with
+            | Some mask when is_number Z.zero e
+                             && is_number (Z.pred (Z.shift_left Z.one branch_width)) t ->
+                [ mask ]
+            | Some mask when is_number Z.zero t
+                             && is_number (Z.pred (Z.shift_left Z.one branch_width)) e ->
+                [ E.unary E.Not mask ]
+            | Some mask when is_number Z.zero e -> [ E.binary E.And t mask ]
+            | Some mask when is_number Z.zero t ->
+                [ E.binary E.And e (E.unary E.Not mask) ]
+            | _ -> [])
   | _ -> []
 
 let build_balanced op = function
