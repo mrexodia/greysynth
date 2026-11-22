@@ -38,7 +38,9 @@ let log_linear_number_unique_hash_after : (Sample_evaluator.outhash, int) Hashtb
   Hashtbl.create 100
 
 let log_linear_time = ref 0.0
+let log_normalization_is_equiv = ref Disabled
 let log_linear_is_equiv = ref Disabled
+let log_fast_simplify_is_equiv = ref Disabled
 let log_global_size_after = ref 0
 let log_global_time = ref 0.0
 let log_global_number_simplifications = ref 0
@@ -78,7 +80,9 @@ let reset () =
   Hashtbl.clear log_linear_number_unique_hash_before;
   Hashtbl.clear log_linear_number_unique_hash_after;
   log_linear_time := 0.;
+  log_normalization_is_equiv := Disabled;
   log_linear_is_equiv := Disabled;
+  log_fast_simplify_is_equiv := Disabled;
   log_global_size_after := 0;
   log_global_time := 0.;
   log_global_number_simplifications := 0;

@@ -84,7 +84,7 @@ let run_passes gt obf =
   (try
      if !c_normalization && not !g_has_timedout then (
        best := Normalization.run !best;
-       check_equiv gt ~tag:"normalization" log_linear_is_equiv !best);
+       check_equiv gt ~tag:"normalization" log_normalization_is_equiv !best);
      if !c_oes && not !g_has_timedout then (
        best := oes_with_logs !best;
        check_equiv gt ~tag:"OES" log_linear_is_equiv !best);
@@ -92,7 +92,7 @@ let run_passes gt obf =
      (* fast_simplify is the extension that was designed to extend OES by including more semantics in the OES's cache, it is NOT present in the CCS'26 paper *)
      if !c_fast_simplify && not !g_has_timedout then (
        best := fast_simplify_with_logs !best;
-       check_equiv gt ~tag:"fast_simplify" log_linear_is_equiv !best);
+       check_equiv gt ~tag:"fast_simplify" log_fast_simplify_is_equiv !best);
 
      if !c_global_synthesis && not !g_has_timedout then (
        c_current_mode_is_global := true;
@@ -218,6 +218,8 @@ let report_json ~initial_size ~total_time ?proof gt result =
         ("sampling_strategy", `String (string_of_sampling !c_sampling_strategy));
         ("nb_samples", `Int !c_nb_samples);
         ("synthesizer", `String !c_synthesizer_name);
+        ("normalization_is_equiv", equiv log_normalization_is_equiv);
+        ("fast_simplify_is_equiv", equiv log_fast_simplify_is_equiv);
         (* OES ("linear") pass *)
         ("linear_size_after", `Int !log_linear_size_after);
         ("linear_time", `Float !log_linear_time);

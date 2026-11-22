@@ -443,11 +443,17 @@ let test_logging_reset () =
   L.log_linear_size_after := 99;
   L.log_chs_synthesis_attempts := [ (3, true, 1., true) ];
   Hashtbl.replace L.log_chs_time_per_horizon 2 1.;
+  L.log_normalization_is_equiv := U.Yes;
+  L.log_fast_simplify_is_equiv := U.No;
   L.log_final_is_equiv := U.Yes;
   L.reset ();
   require (!(L.log_linear_size_after) = 0) "linear metrics survived reset";
   require (!(L.log_chs_synthesis_attempts) = []) "attempt metrics survived reset";
   require (Hashtbl.length L.log_chs_time_per_horizon = 0) "horizon metrics survived reset";
+  require (!(L.log_normalization_is_equiv) = U.Disabled)
+    "normalization equivalence metric survived reset";
+  require (!(L.log_fast_simplify_is_equiv) = U.Disabled)
+    "fast simplification equivalence metric survived reset";
   require (!(L.log_final_is_equiv) = U.Disabled) "equivalence metrics survived reset"
 
 let () =
