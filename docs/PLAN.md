@@ -10,7 +10,7 @@ Independent certificate replay remains the final corpus gate.
 The thematic milestone descriptions below are retained for traceability, but
 implementation order has pivoted to avoid a local optimum of ad-hoc Bitwuzla
 micro-steps, destructive greedy peepholes, and saturated C-Full/CHS tuning
-(see [neon-review-5.md](neon-review-5.md) and [neon-review-4.md](neon-review-4.md)):
+(see [neon-review-5.md](neon-review-5.md)):
 
 1. **Completed foundation:** backend correctness (Milestone 1), observability
    and quality metrics (Milestone 2), explicit cost models (Milestone 8),
