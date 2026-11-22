@@ -122,7 +122,17 @@ let test_linear_mba () =
          (mul (c 16 65469) (E.unary E.Not abc)))
       (mul (c 16 65470) abc)
   in
-  prove_shrinks "two-value Boolean recovery" two_value 7
+  reset ();
+  C.c_equiv_timeout := 1;
+  R.start_recording two_value;
+  let result = N.run two_value in
+  require (U.size_of_expr result <= 7)
+    "two-value Boolean recovery exceeded the one-second local proof budget";
+  let certificate = P.finish (Option.get !(R.journal)) result in
+  let report = P.verify ~timeouts:[ 1. ] ~original:two_value ~candidate:result certificate in
+  require
+    (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+    "two-value Boolean micro-steps did not replay within one second"
 
 let test_semilinear_masks () =
   let x16 = var 16 "mask16" in

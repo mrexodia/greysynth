@@ -321,6 +321,52 @@ let canonical_candidates expression =
         [ build_balanced E.Mul (sorted terms) ]
   | _ -> []
 
+(* Break constant-scaled complements into small replayable algebraic steps.
+   This avoids one monolithic bit-blasted proof for otherwise linear MBAs. *)
+let complement_product_steps original candidate =
+  let negate value = Bitvector.neg value in
+  let rec rewrite expression =
+    let rewritten, child_edges =
+      match expression with
+      | E.Unary { f; x; _ } ->
+          let x, edges = rewrite x in
+          (E.unary f x, edges)
+      | E.Binary { f; x; y; _ } ->
+          let x, left = rewrite x in
+          let y, right = rewrite y in
+          (E.binary f x y, left @ right)
+      | E.Ite { c; t; e; _ } ->
+          let c, first = rewrite c in
+          let t, second = rewrite t in
+          let e, third = rewrite e in
+          (E.ite c t e, first @ second @ third)
+      | _ -> (expression, [])
+    in
+    match rewritten with
+    | E.Binary { f = E.Mul; x = E.Cst coefficient;
+                 y = E.Unary { f = E.Not; x = term; _ }; _ }
+    | E.Binary { f = E.Mul; x = E.Unary { f = E.Not; x = term; _ };
+                 y = E.Cst coefficient; _ } ->
+        let inverse = negate coefficient in
+        let replacement =
+          E.binary E.Plus (E.binary E.Mul (E.constant inverse) term)
+            (E.constant inverse)
+        in
+        (replacement, (rewritten, replacement) :: child_edges)
+    | _ -> (rewritten, child_edges)
+  in
+  let rewritten, edges = rewrite original in
+  if edges = [] then None
+  else
+    let compact =
+      canonical_candidates rewritten
+      |> List.sort (fun left right ->
+             Int.compare (Greysynth_utils.Utils.size_of_expr left)
+               (Greysynth_utils.Utils.size_of_expr right))
+      |> function head :: _ -> head | [] -> rewritten
+    in
+    Some (edges @ [ rewritten, compact; compact, candidate ])
+
 (* Linear arithmetic combinations of bitwise functions admit a conjunction
    basis over their atoms. Nonlinear/mixed-width subtrees are opaque atoms,
    never evaluated as independent bits inside an unsupported operation. *)
@@ -716,7 +762,14 @@ let run expression =
                  let candidates = List.sort_uniq (fun a b ->
                      let order = Int.compare (cost a) (cost b) in
                      if order = 0 then E.compare a b else order) candidates in
-                 match List.find_opt (Rewrite.accepts ~pass:"normalize" !current) candidates with
+                 let accepts candidate =
+                   match complement_product_steps !current candidate with
+                   | Some equalities ->
+                       Rewrite.accepts_compositional ~pass:"linear-mba"
+                         ~equalities !current candidate
+                   | None -> Rewrite.accepts ~pass:"normalize" !current candidate
+                 in
+                 match List.find_opt accepts candidates with
                  | Some candidate -> current := candidate; current := visit candidate
                  | None -> ())
          with Timeout_exception -> g_has_timedout := true);
