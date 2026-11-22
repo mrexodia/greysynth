@@ -89,7 +89,7 @@ module MkSearch (BSF: functor (M : Mutations.MUTATOR) -> BaseSearch) (M : Mutati
 
     let search maxdepth (timeout: float) =
         mutnb := 0;
-        let time_base = Sys.time() in
+        let time_base = Unix.gettimeofday () in
         g_synthesis_time := time_base;
 
         try
@@ -113,13 +113,10 @@ module MkSearch (BSF: functor (M : Mutations.MUTATOR) -> BaseSearch) (M : Mutati
                     failwith (Printf.sprintf "pattern does not zeroify %s\n" (M.to_string !best_sol.tree))
             );
 
-            let time_synth = Sys.time() in
+            let time_synth = Unix.gettimeofday () in
             let simpl = Simp.simplify !best_sol.tree in (* Postprocess to clean the synthesized expression *)
-            let time_simpl = Sys.time() in
+            let time_simpl = Unix.gettimeofday () in
             let simpl_sol = gen_sol simpl in
-
-            (* Disable the timeout *)
-            Sys.set_signal Sys.sigalrm (Signal_handle (fun _ -> ()));
 
             (* Check that the postprocess did not changed the observable behaviors *)
             if finished && (terminated !best_sol) && not (terminated simpl_sol) then 
@@ -155,7 +152,7 @@ module Iterated_local_search (M : Mutations.MUTATOR) : BaseSearch = struct
 
     let search ~terminated ~gen_sol ~best_sol ~maxdepth ~timeout =
         let is_timeout () =
-            let elapsed = Sys.time() -. !g_synthesis_time in
+            let elapsed = Unix.gettimeofday () -. !g_synthesis_time in
             if elapsed >= timeout then raise Halt
         in
 
@@ -192,7 +189,7 @@ end
 module Random_walk (M : Mutations.MUTATOR) : BaseSearch = struct
     let search ~terminated ~gen_sol ~best_sol ~maxdepth ~timeout =
         let is_timeout () =
-            let elapsed = Sys.time() -. !g_synthesis_time in
+            let elapsed = Unix.gettimeofday () -. !g_synthesis_time in
             if elapsed >= timeout then raise Halt
         in
         let rec loop sol =
@@ -213,7 +210,7 @@ module Hill_climbing (M : Mutations.MUTATOR) : BaseSearch = struct
 
     let search ~terminated ~gen_sol ~best_sol ~maxdepth ~timeout =
         let is_timeout () =
-            let elapsed = Sys.time() -. !g_synthesis_time in
+            let elapsed = Unix.gettimeofday () -. !g_synthesis_time in
             if elapsed >= timeout then raise Halt
         in
         let rec loop sol n =
@@ -248,7 +245,7 @@ module Simulated_annealing (M : Mutations.MUTATOR) : BaseSearch = struct
 
     let search ~terminated ~gen_sol ~best_sol ~maxdepth ~timeout =
         let is_timeout () =
-            let elapsed = Sys.time() -. !g_synthesis_time in
+            let elapsed = Unix.gettimeofday () -. !g_synthesis_time in
             if elapsed >= timeout then raise Halt
         in
         let t0 =
@@ -319,7 +316,7 @@ module Metropolis_hastings (M : Mutations.MUTATOR) : BaseSearch = struct
 
     let search ~terminated ~gen_sol ~best_sol ~maxdepth ~timeout =
         let is_timeout () =
-            let elapsed = Sys.time() -. !g_synthesis_time in
+            let elapsed = Unix.gettimeofday () -. !g_synthesis_time in
             if elapsed >= timeout then raise Halt;
             ()
         in

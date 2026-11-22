@@ -430,7 +430,7 @@ module Binop = struct
           let numerator_ext = Bitvector.extend_signed x (2*size) in
           let divisor = Bitvector.extend_signed y (2*size) in
           if Bitvector.is_zeros divisor then
-              y
+              x
           else
               Bitvector.reduce (Bitvector.smod numerator_ext divisor) size
 

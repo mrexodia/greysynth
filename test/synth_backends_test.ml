@@ -45,7 +45,20 @@ let () =
       check ("ternary " ^ O.Triop.to_string op)
         (TC.mk_triop op (leaf 8 1) (leaf 8 0x23) (leaf 8 7))
         (O.Triop.apply op a b c))
-    [ O.Div; O.SDiv; O.Mod; O.SMod; O.ITE; O.Im ];
+    [ O.Div; O.SDiv; O.Mod; O.SMod ];
+  let ite_tree = TC.mk_triop O.ITE (leaf 8 1) (leaf 8 0x23) (leaf 8 7) in
+  check "ternary ite" ite_tree (O.Triop.apply O.ITE (bv 8 1) (bv 8 0x23) (bv 8 7));
+  (match B.xyntia_tree_to_expr ite_tree with
+  | E.Ite { c; _ } -> require (E.sizeof c = 1) "Xyntia ITE condition is not one bit"
+  | _ -> failwith "Xyntia ITE did not translate to an ITE");
+  List.iter
+    (fun condition ->
+      check (Printf.sprintf "ternary im condition %d" condition)
+        (TC.mk_triop O.Im (leaf 8 condition) (leaf 8 0x23) (leaf 8 7))
+        (O.Triop.apply O.Im (bv 8 condition) (bv 8 0x23) (bv 8 7)))
+    [ 0; 1; 255 ];
+  check "signed remainder by zero" (TC.mk_binop O.SMod_x86 x (leaf 8 0))
+    (bv 8 0x91);
 
   List.iter
     (fun (label, op, input) ->

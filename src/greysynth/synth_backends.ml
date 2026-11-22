@@ -225,7 +225,9 @@ let rec xyntia_tree_to_expr (tree : unit XT.t) : Sexpr.Expr.t =
   | XT.Triop (op, first, second, third) ->
       let first = convert first and second = convert second and third = convert third in
       (match op with
-      | XO.ITE -> ite first second third
+      | XO.ITE ->
+          let zero = constant (Bitvector.zeros (sizeof first)) in
+          ite (same_width_binary Diff first zero) second third
       | XO.Im ->
           let one = constant (Bitvector.ones (sizeof first)) in
           ite (same_width_binary Eq first one) second third
