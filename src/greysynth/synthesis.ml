@@ -215,6 +215,24 @@ let make_problem e new_leafs synthesis_timeout synthesis_repeat :
         { Synth_backends.args = Array.of_list args; res })
   in
 
+  let operators =
+    let rec inspect (profile : Synth_backends.operator_profile) = function
+      | Unary { x; _ } -> inspect profile x
+      | Binary { f; x; y; _ } ->
+          let profile =
+            match f with
+            | Lsl | Lsr | Asr | Rol | Ror -> { profile with shifts = true }
+            | Udiv | Sdiv | Umod | Smod -> { profile with division = true }
+            | _ -> profile
+          in
+          inspect (inspect profile x) y
+      | Ite { c; t; e; _ } ->
+          let profile = { profile with conditional = true } in
+          inspect (inspect (inspect profile c) t) e
+      | _ -> profile
+    in
+    inspect { Synth_backends.shifts = false; division = false; conditional = false } e
+  in
   let constants =
     let rec find_csts (node : Sexpr.Expr.t) : Bitvector.t list =
       match node with
@@ -232,6 +250,7 @@ let make_problem e new_leafs synthesis_timeout synthesis_repeat :
     output_size = Sexpr.Expr.sizeof e;
     samples;
     constants;
+    operators;
     timeout = synthesis_timeout;
     repeat = synthesis_repeat;
   }

@@ -40,6 +40,8 @@ type sample = {
   res : Bitvector.t;  (** output value, [output_size] bits *)
 }
 
+type operator_profile = { shifts : bool; division : bool; conditional : bool }
+
 type problem = {
   inputs : input array;
   output_size : int;
@@ -48,6 +50,7 @@ type problem = {
       (** constants of the original subtree when
           ["add_constants_to_synthesis"] is set, else empty; a hint backends
           are free to ignore *)
+  operators : operator_profile;
   timeout : int;  (** seconds *)
   repeat : int;  (** attempts, for randomised backends *)
 }
@@ -67,6 +70,9 @@ end
 val xyntia_tree_to_expr : unit Xyntia_utils.Tree.t -> Sexpr.Expr.t
 (** Translate a Xyntia result without dropping width or ternary-operator
     semantics. Exposed so the backend contract can be tested exhaustively. *)
+
+val xyntia_grammar_for_profile : string -> operator_profile -> string
+(** Resolve [auto] to the narrowest Xyntia grammar covering a target. *)
 
 val cvc5_sygus_problem : problem -> string
 (** Render the cvc5 problem. Exposed for grammar-contract tests. *)

@@ -74,6 +74,21 @@ let () =
   | E.Unary { f = E.Uext 8; x = E.Var v; _ } ->
       require (v.name = "x" && v.size = 8) "variable identity changed"
   | _ -> failwith "mixed-width variable conversion has the wrong shape");
+  let profile shifts division conditional : B.operator_profile =
+    { shifts; division; conditional }
+  in
+  List.iter
+    (fun (expected, operators) ->
+      require (B.xyntia_grammar_for_profile "auto" operators = expected)
+        ("wrong automatic Xyntia grammar: " ^ expected))
+    [ "mba", profile false false false;
+      "mba_shift", profile true false false;
+      "mba_ite", profile false false true;
+      "full", profile false true false ];
+  require
+    (B.xyntia_grammar_for_profile "mba" (profile true true true) = "mba")
+    "explicit Xyntia grammar was not preserved";
+
   let sample : B.sample = { args = [| bv 8 7 |]; res = bv 8 3 } in
   let problem : B.problem =
     {
@@ -81,6 +96,7 @@ let () =
       output_size = 8;
       samples = [| sample |];
       constants = [ bv 8 0x2a ];
+      operators = { shifts = false; division = true; conditional = false };
       timeout = 1;
       repeat = 1;
     }

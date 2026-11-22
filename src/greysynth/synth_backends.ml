@@ -40,6 +40,8 @@ type sample = {
   res : Bitvector.t; (* output value, [problem.output_size] bits *)
 }
 
+type operator_profile = { shifts : bool; division : bool; conditional : bool }
+
 type problem = {
   inputs : input array;
   output_size : int;
@@ -47,6 +49,7 @@ type problem = {
   constants : Bitvector.t list;
       (* constants of the original subtree when "add_constants_to_synthesis"
          is set, else empty; a hint backends are free to ignore *)
+  operators : operator_profile;
   timeout : int; (* seconds *)
   repeat : int; (* attempts, for randomised backends *)
 }
@@ -247,19 +250,26 @@ let rec xyntia_tree_to_expr (tree : unit XT.t) : Sexpr.Expr.t =
           unary (Restrict { lo = 0; hi = width - 1 })
             (binary operation numerator divisor))
 
+let xyntia_grammar_for_profile configured (profile : operator_profile) =
+  if configured <> "auto" then configured
+  else if profile.division then "full"
+  else if profile.conditional then "mba_ite"
+  else if profile.shifts then "mba_shift"
+  else "mba"
+
 module Xyntia_backend : BACKEND = struct
   let name = "xyntia"
 
   let make json =
-    let grammar = config_string json "xyntia_grammar" ~default:"full" in
+    let configured_grammar = config_string json "xyntia_grammar" ~default:"auto" in
     let valid_grammars =
-      [ "5"; "mba"; "expr"; "expr_ite"; "mba_shift"; "mba_ite"; "full";
-        "sygus"; "expr_x86"; "full_x86" ]
+      [ "auto"; "5"; "mba"; "expr"; "expr_ite"; "mba_shift"; "mba_ite";
+        "full"; "sygus"; "expr_x86"; "full_x86" ]
     in
-    if not (List.mem grammar valid_grammars) then
+    if not (List.mem configured_grammar valid_grammars) then
       failwith
         (Printf.sprintf "config: invalid xyntia_grammar %S (expected one of: %s)"
-           grammar (String.concat ", " valid_grammars));
+           configured_grammar (String.concat ", " valid_grammars));
     (* "xsmir_ops": comma-separated inference rules *)
     let infrules =
       config_string json "xsmir_ops" ~default:""
@@ -268,6 +278,7 @@ module Xyntia_backend : BACKEND = struct
       |> List.map Xyntia_utils.Distance.str_to_infrule
     in
     fun p ->
+      let grammar = xyntia_grammar_for_profile configured_grammar p.operators in
       let vars = Array.map (fun i -> XT.var_of i.name i.size) p.inputs in
       let res_var = XT.var_of "res" p.output_size in
       let samples =
