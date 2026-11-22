@@ -121,6 +121,14 @@ let peepholes evaluate expression =
         | E.Umod | E.Smod when same x y || is_number Z.one y -> [ zero ]
         | E.Eq | E.Ule | E.Uge | E.Sle | E.Sge when same x y -> [ one ]
         | E.Diff | E.Ult | E.Ugt | E.Slt | E.Sgt when same x y -> [ zero ]
+        | E.Ult when is_number Z.zero y -> [ zero ]
+        | E.Uge when is_number Z.zero y -> [ one ]
+        | E.Ule when is_number (Z.pred (Z.shift_left Z.one (E.sizeof x))) y -> [ one ]
+        | E.Ugt when is_number (Z.pred (Z.shift_left Z.one (E.sizeof x))) y -> [ zero ]
+        | E.Slt when is_number (Z.shift_left Z.one (E.sizeof x - 1)) y -> [ zero ]
+        | E.Sge when is_number (Z.shift_left Z.one (E.sizeof x - 1)) y -> [ one ]
+        | E.Sle when is_number (Z.pred (Z.shift_left Z.one (E.sizeof x - 1))) y -> [ one ]
+        | E.Sgt when is_number (Z.pred (Z.shift_left Z.one (E.sizeof x - 1))) y -> [ zero ]
         | E.And -> (
             let masked base mask =
               match constant_value mask with

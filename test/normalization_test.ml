@@ -111,6 +111,14 @@ let test_peepholes () =
     [ "boolean conditional", E.ite condition (c 1 1) (c 1 0), 3;
       "conditional mask", E.ite condition (c 8 (-1)) (c 8 0), 3;
       "conditional value mask", E.ite condition x (c 8 0), 5;
+      "unsigned lower bound", E.binary E.Ult x (c 8 0), 1;
+      "unsigned lower inclusive", E.binary E.Uge x (c 8 0), 1;
+      "unsigned upper inclusive", E.binary E.Ule x (c 8 255), 1;
+      "unsigned upper bound", E.binary E.Ugt x (c 8 255), 1;
+      "signed lower bound", E.binary E.Slt x (c 8 128), 1;
+      "signed lower inclusive", E.binary E.Sge x (c 8 128), 1;
+      "signed upper inclusive", E.binary E.Sle x (c 8 127), 1;
+      "signed upper bound", E.binary E.Sgt x (c 8 127), 1;
       "and complement", band x (E.unary E.Not x), 1;
       "or complement", bor x (E.unary E.Not x), 1;
       "xor complement", bxor x (E.unary E.Not x), 1;
@@ -291,7 +299,7 @@ let () =
     test_compositional_polynomial_identity ();
     test_normalization_portfolio ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 37 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 45 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"
