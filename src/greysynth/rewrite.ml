@@ -52,6 +52,9 @@ let write_certificate filename result =
 
 (* Keep validation inputs independent of the synthesis/OES sample bank. *)
 let holdout = ref (Sample_evaluator.make 32)
+let proof_key left right =
+  if Sexpr.Expr.compare left right <= 0 then (left, right) else (right, left)
+
 let proofs : (Sexpr.Expr.t * Sexpr.Expr.t, equiv_t) Hashtbl.t =
   Hashtbl.create 128
 
@@ -113,7 +116,7 @@ let accepts_compositional ~pass ~equalities original candidate =
       last_rejection := "none";
       record_equalities ();
       true)
-    else if Hashtbl.find_opt proofs (original, candidate) = Some Yes then (
+    else if Hashtbl.find_opt proofs (proof_key original candidate) = Some Yes then (
       last_rejection := "none";
       incr proved;
       record_equalities ();
@@ -132,8 +135,9 @@ let accepts_compositional ~pass ~equalities original candidate =
       | Some "proved_compositional" ->
           incr proved;
           last_rejection := "none";
-          Hashtbl.replace proofs (original, candidate) Yes;
-          Hashtbl.replace proof_budgets (original, candidate)
+          let key = proof_key original candidate in
+          Hashtbl.replace proofs key Yes;
+          Hashtbl.replace proof_budgets key
             (float_of_int !c_equiv_timeout);
           record_equalities ();
           true
@@ -167,7 +171,7 @@ let accepts ~pass original candidate =
       record ~pass original candidate;
       true)
     else
-      let key = (original, candidate) in
+      let key = proof_key original candidate in
       let budget = float_of_int !c_equiv_timeout in
       let cached =
         match Hashtbl.find_opt proofs key with

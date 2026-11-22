@@ -75,7 +75,7 @@ let test_oes_legacy_collision () =
 let test_strict_oes_unknown () =
   reset ~strict:true ();
   let original = plus x zero in
-  Hashtbl.add R.proofs (original, x) U.Unknown;
+  Hashtbl.add R.proofs (R.proof_key original x) U.Unknown;
   let result, count = O.linear_simplify ~seed:false original in
   require (E.compare original result = 0) "OES accepted an unproven rewrite";
   require (!count = 0) "rejected OES rewrite was counted";
@@ -84,8 +84,8 @@ let test_strict_oes_unknown () =
 let test_strict_relational_unknown () =
   reset ~strict:true ();
   let original = plus (E.binary E.Or x y) (E.binary E.And x y) in
-  Hashtbl.add R.proofs (original, plus x y) U.Unknown;
-  Hashtbl.add R.proofs (original, plus y x) U.Unknown;
+  Hashtbl.add R.proofs (R.proof_key original (plus x y)) U.Unknown;
+  Hashtbl.add R.proofs (R.proof_key original (plus y x)) U.Unknown;
   let result, count = O.relational_pass original in
   require (E.compare original result = 0)
     "relational pass accepted an unproven rewrite";
@@ -99,7 +99,10 @@ let test_strict_cache_unknown () =
     let chains = Array.make 5 x in
     for i = 1 to 4 do chains.(i) <- plus chains.(i - 1) zero done;
     Array.iter
-      (fun a -> Array.iter (fun b -> Hashtbl.replace R.proofs (a, b) U.Unknown) chains)
+      (fun a ->
+        Array.iter
+          (fun b -> Hashtbl.replace R.proofs (R.proof_key a b) U.Unknown)
+          chains)
       chains;
     (* Both traversal orders encounter a large chain after a small cached
        chain. No backend rewrite is offered, isolating the cache-hit path. *)
@@ -367,8 +370,9 @@ let test_cegis_retry () =
 let test_larger_proof_budget_retries () =
   reset ~strict:true ();
   let original = plus x zero in
-  Hashtbl.replace R.proofs (original, x) U.Timeout;
-  Hashtbl.replace R.proof_budgets (original, x) 1.;
+  let key = R.proof_key original x in
+  Hashtbl.replace R.proofs key U.Timeout;
+  Hashtbl.replace R.proof_budgets key 1.;
   C.c_equiv_timeout := 5;
   require (R.accepts ~pass:"retry-test" original x)
     "larger proof budget did not retry an inconclusive obligation";
