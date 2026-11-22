@@ -5,6 +5,20 @@ The existing rule remains non-negotiable: generated candidates are untrusted and
 must pass the shared width, cost, independent-sample, and SMT acceptance policy.
 Independent certificate replay remains the final corpus gate.
 
+## Revised execution order
+
+The thematic milestone descriptions below are retained for traceability, but
+implementation order is now: backend correctness, observability, explicit cost
+models, structured/one-hot samples, deterministic normalization plus decomposed
+proofs, proof-aware OES, reusable CHS rules, and adaptive scheduling. Cost
+models move ahead of new simplifiers so cast-heavy legacy-cost artifacts do not
+steer development. Structured samples move ahead of XSmir escalation because
+its affine rules require zero, all-one, and every one-hot input tuple.
+
+The review in [neon-review.md](neon-review.md) also adds a proof requirement:
+wide linear, quadratic, and polynomial candidates must be emitted as replayable
+micro-steps whenever a monolithic 64-bit proof is predictably intractable.
+
 ## Baselines and success criteria
 
 The 1,000 C-Full/Tigress-level-5 corpus is a correctness/regression gate, not the
@@ -27,14 +41,19 @@ provenance and exact commands.
 
 ## Milestone 1: backend contract and operator coverage
 
-- [ ] Make the Xyntia grammar configurable and use its `full` grammar by default.
-- [ ] Decode every result node the selected Xyntia grammar can emit, including
+- [x] Make the Xyntia grammar configurable and support its `full` grammar.
+- [x] Decode every result node the selected Xyntia grammar can emit, including
   width modifiers, shifts, ternary division/remainder, and conditionals.
-- [ ] Preserve Xyntia's concatenated high/low numerator semantics exactly.
-- [ ] Remove or repair the duplicate legacy Xyntia converter.
-- [ ] Add conversion and end-to-end tests for every operator and mixed width.
-- [ ] Make cvc5's grammar include division, remainder, conditionals, comparisons,
-  and discovered constants where supported.
+- [x] Preserve Xyntia's concatenated high/low numerator semantics exactly.
+- [x] Remove the duplicate unsound legacy Xyntia converter.
+- [x] Add conversion tests for every operator and mixed width.
+- [ ] Select `mba`, `mba_shift`, or `full` dynamically from each target's
+  operators instead of paying the full-grammar branching factor universally.
+- [x] Make Xyntia use wall-clock deadlines without clobbering `SIGALRM`.
+- [x] Align vendored arithmetic shifts and signed remainder-by-zero with the
+  total bitvector semantics used by GreySynth.
+- [ ] Make cvc5's grammar include conditionals and comparisons where supported.
+- [x] Add cvc5 division, remainder, and discovered constants.
 - [ ] Give every external backend a process deadline bounded by the remaining
   global budget and classify failures instead of flattening them to `None`.
 
@@ -45,20 +64,19 @@ conversion errors.
 ## Milestone 2: honest configuration and observability
 
 - [ ] Centralize configuration parsing, defaults, validation, and reporting.
-- [ ] Implement `balanced_tree` and `sampling_strategy`, or reject deprecated
-  values rather than reporting inert settings.
+- [x] Implement `balanced_tree` and `sampling_strategy`.
 - [ ] Include normalization and the selected cost model in the pipeline summary.
-- [ ] Reset all metric state for each library/API invocation.
-- [ ] Populate before/after semantic-class metrics correctly.
+- [x] Reset all metric state for each library/API invocation.
+- [x] Populate before/after semantic-class metrics correctly.
 - [ ] Record no-result, timeout, unsupported-result, ill-formed-result,
   not-smaller, sample-refuted, SMT-refuted, and SMT-inconclusive separately.
 
 Acceptance: changing a reported option changes behavior in a targeted test; two
 runs in one process have isolated metrics; reports account for every attempt.
 
-## Milestone 3: deterministic canonicalization
+## Milestone 3: deterministic canonicalization and tractable proofs
 
-- [ ] Add proof-gated associative/commutative flattening, ordering, balancing,
+- [x] Add proof-gated associative/commutative flattening, ordering, balancing,
   constant folding, duplicate elimination, and coefficient collection.
 - [ ] Add complement, mask, extraction/extension, concat, shift, and comparison
   identities without crossing mixed-width boundaries unsafely.
@@ -67,10 +85,17 @@ runs in one process have isolated metrics; reports account for every attempt.
 - [ ] Normalize sparse modular polynomials and factor only when extraction cost
   improves.
 - [ ] Add semilinear mask reconstruction and bit-partitioned simplification.
-- [ ] Allow CoBRA, binsnake-cobra, Rumba, or GAMBA as optional candidate
-  generators through a documented subprocess protocol. Their answers remain
-  untrusted and proof-gated. Do not copy incompatibly licensed implementation
-  code into GreySynth.
+- [ ] Emit wide algebraic candidates as compositional certificates: first map
+  bitwise factors to disjoint minterms with small linear proofs, then normalize
+  the abstract minterm polynomial through small ring micro-steps. Do the same
+  for AC cancellation and permutation-polynomial inversion so producer and
+  replay do not depend on one monolithic bit-blasted query.
+- [ ] Add two-value affine-Boolean extraction and compact NPN/ANF/ESOP recovery
+  before falling back to a dense AND-monomial basis.
+- [ ] Normalize after every CHS horizon and after the final OES cleanup.
+- [ ] Allow CoBRA, binsnake-cobra, Rumba, or GAMBA as optional local-subtree
+  candidate generators through a documented subprocess protocol. Their answers
+  remain untrusted and proof-gated. Do not copy incompatibly licensed code.
 
 Acceptance: property tests prove all committed rewrites; Poly, Non-Poly,
 MBA-Obfuscator, masked, and mixed-width suites improve without a regression on
@@ -78,11 +103,12 @@ C-Full.
 
 ## Milestone 4: proof-aware OES and equality search
 
-- [ ] Keep a bounded Pareto frontier per sampled semantic class instead of only
-  the single smallest representative.
+- [x] Keep a bounded Pareto frontier per sampled semantic class instead of only
+  the single smallest representative, retaining speculative constants alongside
+  real AST representatives.
 - [ ] Rank representatives by extraction cost and expected proof complexity.
-- [ ] Canonicalize proof-cache keys and retry inconclusive obligations only when
-  a larger budget is available.
+- [ ] Canonicalize proof-cache keys.
+- [x] Retry inconclusive obligations only when a larger budget is available.
 - [ ] Reuse generalized proofs and solver contexts where the solver API permits.
 - [ ] Prototype a bounded equality beam/e-graph so equal-cost canonical forms
   can expose a lower-cost parent without creating rewrite cycles.
@@ -109,7 +135,8 @@ proved once, then reused for distinct operands with no additional synthesis.
 ## Milestone 6: samples and counterexample-guided refinement
 
 - [ ] Represent samples as explicit per-variable environments.
-- [ ] Add deterministic strata: extrema, one-hot/one-cold values, powers of two,
+- [ ] Add deterministic strata, beginning with the zero/all-one/one-hot tuples
+  required by XSmir affine rules, then extrema, one-hot/one-cold values, powers of two,
   alternating masks, byte/word boundaries, carry boundaries, large shifts,
   divisors, and correlated variable assignments.
 - [ ] Keep independent training and validation banks.
@@ -123,13 +150,17 @@ from a recorded seed and explicit sample manifest.
 
 ## Milestone 7: adaptive synthesis scheduling
 
-- [ ] Bound each backend call by the remaining global deadline.
+- [ ] Bound each backend call by the remaining global deadline. Xyntia now uses
+  wall time internally; the caller still needs to pass the smaller remaining budget.
 - [ ] Start with short probes and escalate promising node/horizon pairs.
 - [ ] Rank work by possible cost reduction, cut-label count, repeated semantic
   classes, constants, operator family, and adjacent-horizon history.
 - [ ] Skip targets whose lower bound cannot beat the incumbent.
 - [ ] Cap labels/horizons and permit a backend portfolio for hard targets.
-- [ ] Preserve completed proved rewrites across every timeout boundary.
+- [x] Preserve completed proved rewrites across every timeout boundary.
+- [x] Restart small CHS horizons after child reductions expose a shallower rule.
+- [x] Avoid caching partial-timeout CHS results and bound relational inversion
+  traversal by `local_extend_depth`.
 
 Acceptance: accepted reductions are no worse and backend time/attempt counts fall
 on the 57-case CHS set and C-Full level-5.
