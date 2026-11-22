@@ -169,6 +169,30 @@ let test_linear_mba () =
     (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
     "two-value Boolean micro-steps did not replay within one second"
 
+let test_five_atom_boolean_recovery () =
+  let variables = Array.init 5 (fun index -> var 8 ("p" ^ string_of_int index)) in
+  let conjunction terms =
+    match terms with
+    | head :: tail -> List.fold_left band head tail
+    | [] -> c 8 (-1)
+  in
+  let disjunction terms =
+    match terms with
+    | head :: tail -> List.fold_left bor head tail
+    | [] -> c 8 0
+  in
+  let minterms =
+    List.init 32 Fun.id
+    |> List.filter (fun assignment -> Z.popcount (Z.of_int assignment) mod 2 = 1)
+    |> List.map (fun assignment ->
+           Array.to_list variables
+           |> List.mapi (fun index variable ->
+                  if assignment land (1 lsl index) = 0 then E.unary E.Not variable
+                  else variable)
+           |> conjunction)
+  in
+  prove_shrinks "five-atom parity recovery" (disjunction minterms) 9
+
 let test_semilinear_masks () =
   let x16 = var 16 "mask16" in
   prove_shrinks "complementary masks"
@@ -314,13 +338,14 @@ let () =
   if solver_available then (
     test_peepholes ();
     test_linear_mba ();
+    test_five_atom_boolean_recovery ();
     test_semilinear_masks ();
     test_associative_canonicalization ();
     test_compositional_polynomial_identity ();
     test_normalization_portfolio ();
     test_preprocessing_portfolio ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 45 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 46 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"

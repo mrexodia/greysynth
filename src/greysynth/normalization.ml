@@ -418,7 +418,8 @@ let linear_candidates cost expression =
   let visited = ref 0 in
   let tick () =
     incr visited;
-    if !visited > 256 then raise Too_complex;
+    let visit_limit = max 512 (8 * (1 lsl min 10 !c_normalization_max_atoms)) in
+    if !visited > visit_limit then raise Too_complex;
     if !visited mod 32 = 0 then check_timeout ()
   in
   let atom expression =
@@ -547,7 +548,7 @@ let linear_candidates cost expression =
       Array.to_list target |> List.sort_uniq Z.compare
     in
     (match distinct with
-    | [ low; high ] when count <= 4 ->
+    | [ low; high ] when count <= min 6 !c_normalization_max_atoms ->
         let truth = Array.map (Z.equal high) target in
         List.iter
           (fun boolean ->
