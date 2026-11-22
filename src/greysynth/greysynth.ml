@@ -280,10 +280,13 @@ let report_json ~initial_size ~total_time ?proof gt result =
 let run ?proof_output obf config gt =
   Logging.reset ();
   load_config_from_json config;
+  evaluator :=
+    Sample_evaluator.make ~variables:(Sample_evaluator.variables_of_expr obf)
+      ~seed:0 !c_nb_samples;
   log_obfuscated_expression := obf;
   g_start_time := Unix.gettimeofday ();
   g_has_timedout := false;
-  Rewrite.reset ();
+  Rewrite.reset ~original:obf ();
   Option.iter (fun _ -> Rewrite.start_recording obf) proof_output;
 
   let initial_size = size_of_expr obf in

@@ -128,6 +128,17 @@ let test_node_hash_collisions () =
   expect_bv "first colliding node" (expected a) (ev.eval a 0);
   expect_bv "second colliding node" (expected b) (ev.eval b 0)
 
+let test_structured_variable_tuples () =
+  let x = Expr.var "a" 8 "a" and y = Expr.var "b" 8 "b" in
+  let variables = Sample_evaluator.variables_of_expr (Expr.binary Expr.Plus x y) in
+  let ev = Sample_evaluator.make ~variables ~seed:7 16 in
+  expect_bv "first basis variable" (Bitvector.ones 8) (ev.eval x 5);
+  expect_bv "first basis zero" (Bitvector.zeros 8) (ev.eval y 5);
+  expect_bv "second basis zero" (Bitvector.zeros 8) (ev.eval x 6);
+  expect_bv "second basis variable" (Bitvector.ones 8) (ev.eval y 6);
+  let again = Sample_evaluator.make ~variables ~seed:7 16 in
+  expect_bv "reproducible stratified tail" (ev.eval x 12) (again.eval x 12)
+
 let test_sample_ids () =
   expect_invalid "zero sample count" (fun () -> Sample_evaluator.make 0);
   expect_invalid "negative sample count" (fun () -> Sample_evaluator.make (-1));
@@ -151,5 +162,6 @@ let () =
   test_total_division ();
   test_complete_signatures ();
   test_node_hash_collisions ();
+  test_structured_variable_tuples ();
   test_sample_ids ();
   print_endline "sample_evaluator_test: all checks passed"

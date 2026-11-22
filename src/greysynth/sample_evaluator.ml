@@ -55,17 +55,65 @@ type t = {
     Expr.t -> int -> (Sexpr.Expr.t, Sexpr.Expr.t) Hashtbl.t -> Bitvector.t;
 }
 
-let get_random_value size sample_id nb_samples =
+let variables_of_expr expression =
+  let variables = Hashtbl.create 16 in
+  let rec visit = function
+    | Expr.Var variable -> Hashtbl.replace variables (variable.name, variable.size) ()
+    | Expr.Unary { x; _ } -> visit x
+    | Expr.Binary { x; y; _ } -> visit x; visit y
+    | Expr.Ite { c; t; e; _ } -> visit c; visit t; visit e
+    | _ -> ()
+  in
+  visit expression;
+  Hashtbl.fold (fun variable () result -> variable :: result) variables []
+  |> List.sort compare
+
+let deterministic_random ~seed ~name ~size sample_id =
+  let state = Random.State.make [| seed; Hashtbl.hash name; size; sample_id |] in
+  let rec bits remaining shift result =
+    if remaining <= 0 then result
+    else
+      let count = min 30 remaining in
+      let mask = (1 lsl count) - 1 in
+      let chunk = Random.State.bits state land mask |> Z.of_int in
+      bits (remaining - count) (shift + count)
+        (Z.logor result (Z.shift_left chunk shift))
+  in
+  Bitvector.create (bits size 0 Z.zero) size
+
+let sample_value ~seed ~ranks ~variable_count ~name ~size sample_id =
   match sample_id with
   | 0 -> Bitvector.zeros size
   | 1 -> Bitvector.ones size
   | 2 -> Bitvector.fill size
   | 3 -> Bitvector.max_sbv size
   | 4 -> Bitvector.min_sbv size
-  | _ ->
-      let threshold = nb_samples / 10 in
-      if sample_id <= 4 + threshold then Bitvector.rand size
-      else Bitvector.of_int ~size (Random.int 101 - 50)
+  | id when id < 5 + variable_count ->
+      let rank = Hashtbl.find_opt ranks (name, size) in
+      if rank = Some (id - 5) then Bitvector.ones size else Bitvector.zeros size
+  | id ->
+      let offset = id - 5 - variable_count in
+      let bit = if size = 0 then 0 else offset mod size in
+      (match offset mod 7 with
+      | 0 -> Bitvector.create (Z.shift_left Z.one bit) size
+      | 1 ->
+          Bitvector.create
+            (Z.logxor (Z.pred (Z.shift_left Z.one size)) (Z.shift_left Z.one bit))
+            size
+      | 2 -> Bitvector.create (Z.pred (Z.shift_left Z.one (bit + 1))) size
+      | 3 ->
+          let value = ref Z.zero in
+          for index = 0 to size - 1 do
+            if index mod 2 = 0 then
+              value := Z.logor !value (Z.shift_left Z.one index)
+          done;
+          Bitvector.create !value size
+      | 4 -> Bitvector.create (Z.shift_left Z.one (max 0 (size - 1))) size
+      | 5 -> deterministic_random ~seed ~name ~size id
+      | _ ->
+          let random = deterministic_random ~seed ~name ~size id in
+          Bitvector.of_int ~size
+            ((Z.to_int (Z.rem (Bitvector.value_of random) (Z.of_int 101))) - 50))
 
 (* SMT-LIB operations are total. In particular, shift counts are unsigned
    bitvectors, not host integers or x86-masked amounts. Bound them before
@@ -116,9 +164,13 @@ let rec eval_with_bindings (bindings : (Expr.t, Bitvector.t) Hashtbl.t)
           else eval_with_bindings bindings t
       | Expr.Load _ -> invalid_arg "sample evaluator: memory load"
 
-let make nb_samples : t =
+let make ?(variables = []) ?(seed = 0) nb_samples : t =
   if nb_samples <= 0 then
     invalid_arg "sample evaluator: nb_samples must be positive";
+
+  let ranks = Hashtbl.create (List.length variables) in
+  List.iteri (fun index variable -> Hashtbl.replace ranks variable index) variables;
+  let variable_count = List.length variables in
 
   (* Allocate sample tables lazily rather than indexing a fixed retry array.
      Public callers can safely request held-out samples with any nonnegative
@@ -146,7 +198,8 @@ let make nb_samples : t =
         let result =
           match node with
           | Expr.Cst n -> n
-          | Expr.Var v -> get_random_value v.size sample_id nb_samples
+          | Expr.Var v ->
+              sample_value ~seed ~ranks ~variable_count ~name:v.name ~size:v.size sample_id
           | Expr.Unary { f; x; _ } -> Term.Bv.unary f (eval x sample_id)
           | Expr.Binary { f; x; y; _ } ->
               eval_binary f (eval x sample_id) (eval y sample_id)

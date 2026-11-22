@@ -43,10 +43,15 @@ let proofs : (Sexpr.Expr.t * Sexpr.Expr.t, equiv_t) Hashtbl.t =
 let proof_budgets : (Sexpr.Expr.t * Sexpr.Expr.t, float) Hashtbl.t =
   Hashtbl.create 128
 
-let reset () =
+let reset ?original () =
   List.iter (fun counter -> counter := 0)
     [ checked; proved; sample_rejections; disproved; inconclusive ];
-  holdout := Sample_evaluator.make 32;
+  holdout :=
+    (match original with
+    | None -> Sample_evaluator.make ~seed:1 32
+    | Some expression ->
+        Sample_evaluator.make ~variables:(Sample_evaluator.variables_of_expr expression)
+          ~seed:1 32);
   Hashtbl.clear proofs;
   Hashtbl.clear proof_budgets;
   journal := None

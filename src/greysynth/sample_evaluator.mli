@@ -61,5 +61,11 @@ val eval_with_bindings :
   (Sexpr.Expr.t, Bitvector.t) Hashtbl.t -> Sexpr.Expr.t -> Bitvector.t
 (** Evaluate with an explicit environment. Every variable must be bound. *)
 
-val make : int -> t
-(** [make n] creates a fresh evaluator. [n] must be positive. *)
+val variables_of_expr : Sexpr.Expr.t -> (string * int) list
+(** Stable width-tagged variable inventory used to build tuple-level samples. *)
+
+val make : ?variables:(string * int) list -> ?seed:int -> int -> t
+(** [make n] creates a fresh evaluator. With [variables], the bank includes a
+    zero tuple, all-one tuple, and every one-hot variable tuple before its
+    stratified bit-pattern/random tail. [seed] makes that tail reproducible.
+    [n] must be positive. *)
