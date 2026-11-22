@@ -21,6 +21,7 @@ let reset ?(strict = false) () =
   C.evaluator := Sample_evaluator.make 100;
   C.c_nb_samples := 100;
   C.c_cegis_retries := 1;
+  C.c_learn_synthesis_rules := true;
   U.cost_model := U.Legacy;
   C.c_reject_non_equiv_simplifications := strict;
   C.c_equiv_timeout := 5;
@@ -40,7 +41,8 @@ let reset ?(strict = false) () =
   C.g_has_timedout := false;
   C.c_synthesizer_name := "regression mock";
   C.c_synthesizer := (fun _ -> None);
-  R.reset ()
+  R.reset ();
+  S.reset_rule_cache ()
 
 let at_xy expression vx vy =
   let labels = Hashtbl.create 2 in
@@ -219,6 +221,7 @@ let test_ite_substitution () =
 let test_synthesis_partial_timeout () =
   let run global =
     reset ();
+    C.c_learn_synthesis_rules := false;
     let left = plus (plus x zero) zero in
     let right = plus (plus y zero) zero in
     let original = plus left right in
@@ -266,6 +269,32 @@ let test_oes_partial_timeout () =
     "OES timeout discarded its completed left child";
   require (!count = 1) "OES partial rewrite count is wrong";
   expect_same_at original result 17 29
+
+let test_universal_rule_reuse () =
+  reset ~strict:true ();
+  let pattern left right = plus (E.binary E.Or left right) (E.binary E.And left right) in
+  let first = pattern x y in
+  let template, labels = S.truncate first 2 in
+  let calls = ref 0 in
+  C.c_synthesizer := (fun (problem : Greysynth__Synth_backends.problem) ->
+      incr calls;
+      let input index =
+        let item = problem.inputs.(index) in
+        E.var item.name item.size item.name
+      in
+      Some (plus (input 0) (input 1)));
+  (match S.synthesize ~original:first template labels 1 1 with
+  | Some _ -> () | None -> failwith "universal source rule was not synthesized");
+  require (S.universal_rule_count () = 1) "universal rule was not learned";
+  let u = E.var "u" 64 "u" and v = E.var "v" 64 "v" in
+  let second = pattern u v in
+  let second_template, second_labels = S.truncate second 2 in
+  (match S.synthesize ~original:second second_template second_labels 1 1 with
+  | Some (_, candidate, _) ->
+      require (E.is_equal candidate (plus u v) || E.is_equal candidate (plus v u))
+        "learned rule produced the wrong candidate"
+  | None -> failwith "learned universal rule was not reused");
+  require (!calls = 1) "universal rule reuse called the synthesizer again"
 
 let test_cegis_retry () =
   reset ~strict:true ();
@@ -546,6 +575,7 @@ let () =
   print_endline "pipeline_test: 23 solver-independent regressions passed";
   if solver_available then (
     test_context_proof ();
+    test_universal_rule_reuse ();
     test_cegis_retry ();
     test_larger_proof_budget_retries ();
     test_chs_horizon_restart ();

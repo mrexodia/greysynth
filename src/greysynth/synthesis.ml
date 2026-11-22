@@ -32,6 +32,10 @@ open Config
 open Sexpr.Expr
 open Sample_evaluator
 
+let universal_rules : Sexpr.Expr.t Sexpr.BvTbl.t = Sexpr.BvTbl.create 128
+let reset_rule_cache () = Sexpr.BvTbl.clear universal_rules
+let universal_rule_count () = Sexpr.BvTbl.length universal_rules
+
 class ['a] greek_oracle () =
   object (_)
     val mutable table : ('a, string) Hashtbl.t = Hashtbl.create 16
@@ -440,7 +444,6 @@ let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
       if seconds <= 0 then raise Timeout_exception;
       min synthesis_timeout seconds
   in
-  let problem = make_problem e new_leafs synthesis_timeout synthesis_repeat in
   let record status time is_simplification =
     let attempt : Logging.synthesis_attempt =
       {
@@ -454,6 +457,19 @@ let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
       log_global_synthesis_attempts := attempt :: !log_global_synthesis_attempts
     else log_chs_synthesis_attempts := attempt :: !log_chs_synthesis_attempts
   in
+  let cached_candidate =
+    match if !c_learn_synthesis_rules then Sexpr.BvTbl.find_opt universal_rules e else None with
+    | None -> None
+    | Some template ->
+        prepare_candidates template new_leafs
+        |> List.find_opt (Rewrite.accepts ~pass:"learned rule" original)
+  in
+  match cached_candidate with
+  | Some candidate ->
+      record "rule_cache" 0. true;
+      Some (Option.get (Sexpr.BvTbl.find_opt universal_rules e), candidate, 0.)
+  | None ->
+  let problem = make_problem e new_leafs synthesis_timeout synthesis_repeat in
   match run_backend problem with
   | (No_result | Backend_timed_out | Backend_failed | Ill_formed as outcome), time ->
       record (status_of_outcome outcome) time false;
@@ -474,6 +490,15 @@ let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
 
       match candidate with
       | Some candidate ->
+        let generic_verdict =
+          if !c_learn_synthesis_rules then
+            fst
+              (Rewrite_proof.prove_equality
+                 ~timeout:(min 1. (float_of_int !c_equiv_timeout)) e synth_expr)
+          else Disabled
+        in
+        if !c_learn_synthesis_rules && generic_verdict = Yes then
+          Sexpr.BvTbl.replace universal_rules e synth_expr;
         let synth_size = Greysynth_utils.Utils.size_of_expr candidate in
         if !c_current_mode_is_global then
           log_global_number_simplifications :=

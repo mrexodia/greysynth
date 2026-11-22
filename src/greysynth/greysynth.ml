@@ -287,6 +287,7 @@ let run ?proof_output obf config gt =
   g_start_time := Unix.gettimeofday ();
   g_has_timedout := false;
   Rewrite.reset ~original:obf ();
+  Synthesis.reset_rule_cache ();
   Option.iter (fun _ -> Rewrite.start_recording obf) proof_output;
 
   let initial_size = size_of_expr obf in

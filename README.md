@@ -117,6 +117,7 @@ working example. An optional second positional argument names the certificate.
 | `synthesizer` | `xyntia`, `syntia` or `cvc5`. Backend-specific keys: `xyntia_grammar` (`auto` chooses `mba`, `mba_shift`, or `full` per target), `xsmir_ops`, `synthesizer_cmd`, `synthesizer_script`. |
 | `synthesis_timeout`, `synthesis_repeat` | Per-call synthesizer timeout (s) and attempts. |
 | `cegis_retries` | Retry synthesis after an SMT refutation contributes a new explicit counterexample. Defaults to 1. |
+| `learn_synthesis_rules` | Prove successful Greek-variable templates universally and reuse them across concrete contexts. Defaults to true. |
 | `add_constants_to_synthesis` | Pass the sub-tree's constants to the synthesizer. |
 | `nb_samples` | Number of input samples used by OES and synthesis. |
 | `check_equiv`, `equiv_timeout` | Check each pass against the ground truth, or the original input when no ground truth is supplied. The timeout also bounds individual rewrite proofs. |
