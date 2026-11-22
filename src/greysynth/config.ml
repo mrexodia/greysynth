@@ -38,7 +38,7 @@ let c_ac_normalization = ref false
 let c_oes = ref false
 let c_oes_extended = ref false
 let c_oes_fixedpoint = ref false
-let c_oes_candidate_limit = ref 4
+let c_oes_candidate_limit = ref 1
 let c_local_extend = ref false
 let c_local_extend_depth = ref 6
 let c_fast_simplify = ref false
@@ -103,7 +103,7 @@ let load_config_from_json json_file : unit =
        | v -> to_bool v);
     (c_oes_candidate_limit :=
        match json |> member "oes_candidate_limit" with
-       | `Null -> 4
+       | `Null -> 1
        | v -> to_int v);
     if !c_oes_candidate_limit <= 0 then
       failwith "config: oes_candidate_limit must be positive";

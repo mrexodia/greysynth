@@ -5,7 +5,7 @@
   "oes": true,
   "oes_extended": false,
   "oes_fixedpoint": false,
-  "oes_candidate_limit": 4,
+  "oes_candidate_limit": 1,
   "local_extend": false,
   "local_extend_depth": 4,
   "synthesizer": "xyntia",
