@@ -45,8 +45,14 @@ let log_global_size_after = ref 0
 let log_global_time = ref 0.0
 let log_global_number_simplifications = ref 0
 
-let log_global_synthesis_attempts : (int * bool * float * bool) list ref =
-  ref []
+type synthesis_attempt = {
+  input_size : int;
+  status : string;
+  time : float;
+  is_simplification : bool;
+}
+
+let log_global_synthesis_attempts : synthesis_attempt list ref = ref []
 
 let log_global_horizon = ref 0
 
@@ -56,7 +62,7 @@ let log_global_rules_found :
 
 let log_global_is_equiv = ref Disabled
 let log_chs_size_after = ref 0
-let log_chs_synthesis_attempts : (int * bool * float * bool) list ref = ref []
+let log_chs_synthesis_attempts : synthesis_attempt list ref = ref []
 let log_chs_number_simplifications = ref 0
 let log_chs_time = ref 0.0
 let log_chs_time_per_horizon : (int, float) Hashtbl.t = Hashtbl.create 10

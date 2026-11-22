@@ -418,6 +418,21 @@ let test_legacy_simplifier_edges () =
   let reassociated = U.binsec_simplify (plus a (plus b d)) in
   require (E.sizeof reassociated = 8) "legacy reassociation changed the result width"
 
+let test_backend_statuses () =
+  reset ();
+  let problem = S.make_problem (c 8 1) (Hashtbl.create 0) 1 1 in
+  let expect expected backend =
+    C.c_synthesizer := backend;
+    let outcome, _ = S.run_backend problem in
+    require (S.status_of_outcome outcome = expected)
+      (Printf.sprintf "backend status %s was reported as %s" expected
+         (S.status_of_outcome outcome))
+  in
+  expect "no_result" (fun _ -> None);
+  expect "backend_timeout" (fun _ -> raise (Greysynth__Synth_backends.Backend_timeout "test"));
+  expect "backend_error" (fun _ -> raise (Greysynth__Synth_backends.Backend_failure "test"));
+  expect "ill_formed" (fun _ -> Some (E.var "foreign" 8 "foreign"))
+
 let test_backend_budget_is_bounded () =
   reset ();
   C.g_total_timeout := 3.;
@@ -449,7 +464,8 @@ let test_derived_constant_seeding () =
 
 let test_logging_reset () =
   L.log_linear_size_after := 99;
-  L.log_chs_synthesis_attempts := [ (3, true, 1., true) ];
+  L.log_chs_synthesis_attempts :=
+    [ { input_size = 3; status = "returned"; time = 1.; is_simplification = true } ];
   Hashtbl.replace L.log_chs_time_per_horizon 2 1.;
   L.log_normalization_is_equiv := U.Yes;
   L.log_fast_simplify_is_equiv := U.No;
@@ -481,10 +497,11 @@ let () =
   test_sampling_strategies ();
   test_oes_proof_fallback ();
   test_legacy_simplifier_edges ();
+  test_backend_statuses ();
   test_backend_budget_is_bounded ();
   test_derived_constant_seeding ();
   test_logging_reset ();
-  print_endline "pipeline_test: 22 solver-independent regressions passed";
+  print_endline "pipeline_test: 23 solver-independent regressions passed";
   if solver_available then (
     test_context_proof ();
     test_larger_proof_budget_retries ();

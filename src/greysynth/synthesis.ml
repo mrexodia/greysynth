@@ -312,27 +312,44 @@ let make_problem e new_leafs synthesis_timeout synthesis_repeat :
     repeat = synthesis_repeat;
   }
 
-(* Run the configured backend. Any failure (exception or ill-formed result)
-   counts as "no result"; only the global timeout propagates. *)
-let run_backend (problem : Synth_backends.problem) : Sexpr.Expr.t option * float
-    =
+type backend_outcome =
+  | Returned of Sexpr.Expr.t
+  | No_result
+  | Backend_timed_out
+  | Backend_failed
+  | Ill_formed
+
+let status_of_outcome = function
+  | Returned _ -> "returned"
+  | No_result -> "no_result"
+  | Backend_timed_out -> "backend_timeout"
+  | Backend_failed -> "backend_error"
+  | Ill_formed -> "ill_formed"
+
+let run_backend (problem : Synth_backends.problem) : backend_outcome * float =
   let t0 = Unix.gettimeofday () in
-  let result =
-    try !c_synthesizer problem with
+  let outcome =
+    try
+      match !c_synthesizer problem with
+      | None -> No_result
+      | Some result when Synth_backends.well_formed problem result -> Returned result
+      | Some result ->
+          _log_warn !c_synthesizer_name "discarding ill-formed result: %s"
+            (Greysynth_utils.Utils.pp result);
+          Ill_formed
+    with
     | Timeout_exception -> raise Timeout_exception
+    | Synth_backends.Backend_timeout command ->
+        _log_warn !c_synthesizer_name "hard timeout: %s" command;
+        Backend_timed_out
+    | Synth_backends.Backend_failure message ->
+        _log_warn !c_synthesizer_name "failed: %s" message;
+        Backend_failed
     | exn ->
         _log_warn !c_synthesizer_name "failed: %s" (Printexc.to_string exn);
-        None
+        Backend_failed
   in
-  let result =
-    match result with
-    | Some r when not (Synth_backends.well_formed problem r) ->
-        _log_warn !c_synthesizer_name "discarding ill-formed result: %s"
-          (Greysynth_utils.Utils.pp r);
-        None
-    | r -> r
-  in
-  (result, Unix.gettimeofday () -. t0)
+  (outcome, Unix.gettimeofday () -. t0)
 
 let replace_greek_vars expr new_leafs =
   let rec aux node =
@@ -385,19 +402,24 @@ let synthesize ~original e new_leafs synthesis_timeout synthesis_repeat =
       min synthesis_timeout seconds
   in
   let problem = make_problem e new_leafs synthesis_timeout synthesis_repeat in
+  let record status time is_simplification =
+    let attempt : Logging.synthesis_attempt =
+      {
+        input_size = Greysynth_utils.Utils.size_of_expr original;
+        status;
+        time;
+        is_simplification;
+      }
+    in
+    if !c_current_mode_is_global then
+      log_global_synthesis_attempts := attempt :: !log_global_synthesis_attempts
+    else log_chs_synthesis_attempts := attempt :: !log_chs_synthesis_attempts
+  in
   match run_backend problem with
-  | None, time ->
-      if !c_current_mode_is_global then (
-        log_global_synthesis_attempts :=
-          (Greysynth_utils.Utils.size_of_expr e, false, time, false)
-          :: !log_global_synthesis_attempts;
-        None)
-      else (
-        log_chs_synthesis_attempts :=
-          (Greysynth_utils.Utils.size_of_expr e, false, time, false)
-          :: !log_chs_synthesis_attempts;
-        None)
-  | Some synth_expr, time ->
+  | (No_result | Backend_timed_out | Backend_failed | Ill_formed as outcome), time ->
+      record (status_of_outcome outcome) time false;
+      None
+  | Returned synth_expr, time ->
       (* Cut leaves are correlated by the original expression. Check the
          concrete replacement, after restoring them and simplifying, against
          the original subtree. Template size/equivalence is insufficient. *)
@@ -408,14 +430,8 @@ let synthesize ~original e new_leafs synthesis_timeout synthesis_repeat =
         |> List.find_opt (Rewrite.accepts ~pass:mode original)
       in
       let is_simplification = Option.is_some candidate in
-      if !c_current_mode_is_global then
-        log_global_synthesis_attempts :=
-          (previous_size, true, time, is_simplification)
-          :: !log_global_synthesis_attempts
-      else
-        log_chs_synthesis_attempts :=
-          (previous_size, true, time, is_simplification)
-          :: !log_chs_synthesis_attempts;
+      record (if is_simplification then "returned" else "rejected") time
+        is_simplification;
 
       match candidate with
       | Some candidate ->

@@ -57,6 +57,9 @@ type problem = {
 
 type synthesizer = problem -> Sexpr.Expr.t option
 
+exception Backend_timeout of string
+exception Backend_failure of string
+
 (** What a backend implements. *)
 module type BACKEND = sig
   val name : string
@@ -66,6 +69,9 @@ module type BACKEND = sig
   (** Called once with the whole config JSON: read backend-specific keys
       here, then return the synthesis function. *)
 end
+
+val run_command : timeout:int -> string -> string
+(** Run an external backend under a process-group wall deadline. *)
 
 val xyntia_tree_to_expr : unit Xyntia_utils.Tree.t -> Sexpr.Expr.t
 (** Translate a Xyntia result without dropping width or ternary-operator

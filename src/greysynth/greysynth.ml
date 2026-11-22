@@ -148,13 +148,14 @@ let per_horizon tbl to_json =
 let attempts_json attempts =
   `List
     (List.map
-       (fun (size, success, time, is_simplification) ->
+       (fun (attempt : Logging.synthesis_attempt) ->
          `Assoc
            [
-             ("input_size", `Int size);
-             ("success", `Bool success);
-             ("time", `Float time);
-             ("is_simplification", `Bool is_simplification);
+             ("input_size", `Int attempt.input_size);
+             ("status", `String attempt.status);
+             ("success", `Bool (attempt.status = "returned"));
+             ("time", `Float attempt.time);
+             ("is_simplification", `Bool attempt.is_simplification);
            ])
        attempts)
 

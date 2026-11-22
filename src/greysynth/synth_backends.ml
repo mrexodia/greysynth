@@ -118,12 +118,66 @@ let well_formed (p : problem) (e : Sexpr.Expr.t) : bool =
   in
   sizeof e = p.output_size && ok e
 
-(* Run a shell command and return its standard output. *)
-let run_command (cmd : string) : string =
-  let ic = Unix.open_process_in cmd in
+exception Backend_timeout of string
+exception Backend_failure of string
+
+(* Run an external backend in its own process group. Capturing through files
+   avoids pipe-buffer deadlocks, and killing the negative pid terminates helper
+   processes as well as the shell when the hard wall deadline expires. *)
+let run_command ~(timeout : int) (cmd : string) : string =
+  let stdout_path = Filename.temp_file "greysynth_backend_" ".out" in
+  let stderr_path = Filename.temp_file "greysynth_backend_" ".err" in
+  let read path = In_channel.with_open_bin path In_channel.input_all in
   Fun.protect
-    ~finally:(fun () -> ignore (Unix.close_process_in ic))
-    (fun () -> In_channel.input_all ic)
+    ~finally:(fun () ->
+      List.iter (fun path -> try Sys.remove path with Sys_error _ -> ())
+        [ stdout_path; stderr_path ])
+    (fun () ->
+      let devnull = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 in
+      let stdout_fd =
+        Unix.openfile stdout_path [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600
+      in
+      let stderr_fd =
+        Unix.openfile stderr_path [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600
+      in
+      let pid =
+        Fun.protect
+          ~finally:(fun () ->
+            Unix.close devnull;
+            Unix.close stdout_fd;
+            Unix.close stderr_fd)
+          (fun () ->
+            Unix.create_process "/usr/bin/setsid"
+              [| "setsid"; "/bin/sh"; "-c"; cmd |]
+              devnull stdout_fd stderr_fd)
+      in
+      let deadline = Unix.gettimeofday () +. float_of_int timeout in
+      let rec wait () =
+        match Unix.waitpid [ Unix.WNOHANG ] pid with
+        | 0, _ when Unix.gettimeofday () < deadline ->
+            Unix.sleepf 0.01;
+            wait ()
+        | 0, _ ->
+            (try Unix.kill (-pid) Sys.sigkill with Unix.Unix_error _ -> ());
+            ignore (Unix.waitpid [] pid);
+            `Timeout
+        | _, status -> `Status status
+      in
+      match wait () with
+      | `Timeout -> raise (Backend_timeout cmd)
+      | `Status (Unix.WEXITED 0) -> read stdout_path
+      | `Status status ->
+          let status =
+            match status with
+            | Unix.WEXITED code -> Printf.sprintf "exit %d" code
+            | Unix.WSIGNALED signal -> Printf.sprintf "signal %d" signal
+            | Unix.WSTOPPED signal -> Printf.sprintf "stopped %d" signal
+          in
+          raise
+            (Backend_failure
+               (Printf.sprintf "%s: %s%s" status (read stderr_path)
+                  (let output = read stdout_path in
+                   if output = "" then "" else "\nstdout:\n" ^ output))))
 
 (* Write [contents] to a fresh temporary file and run [f] on its path; the
    file is removed afterwards. *)
@@ -370,7 +424,7 @@ module Syntia_backend : BACKEND = struct
         let out =
           with_temp_file ~prefix:"syntia_sample_" ~suffix:".json"
             (samples_json p) (fun path ->
-              run_command
+              run_command ~timeout:p.timeout
                 (Printf.sprintf "%s %s --sample %s --timeout %d" cmd
                    (Filename.quote script) (Filename.quote path) p.timeout))
         in
@@ -630,7 +684,7 @@ module Cvc5_backend = struct
       let out =
         with_temp_file ~prefix:"cvc5_sygus_" ~suffix:".sy" (sygus_problem p)
           (fun path ->
-            run_command
+            run_command ~timeout:p.timeout
               (Printf.sprintf "%s --lang=sygus2 --tlimit=%d %s" cmd
                  (p.timeout * 1000) (Filename.quote path)))
       in

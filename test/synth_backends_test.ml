@@ -19,6 +19,18 @@ let check label tree expected =
        (Bitvector.to_hexstring actual) (Bitvector.to_hexstring expected))
 
 let () =
+  require (String.trim (B.run_command ~timeout:2 "printf external-ok") = "external-ok")
+    "external backend output was not captured";
+  let started = Unix.gettimeofday () in
+  (match B.run_command ~timeout:1 "sleep 5" with
+  | _ -> failwith "external backend hard timeout was ignored"
+  | exception B.Backend_timeout _ -> ());
+  require (Unix.gettimeofday () -. started < 3.)
+    "external backend process group survived its deadline";
+  (match B.run_command ~timeout:2 "exit 7" with
+  | _ -> failwith "external backend failure status was ignored"
+  | exception B.Backend_failure _ -> ());
+
   let x = leaf 8 0x91 and y = leaf 8 3 in
   List.iter
     (fun op ->
