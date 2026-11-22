@@ -28,6 +28,7 @@ build:
 
 test:
 	GREYSYNTH_REQUIRE_SOLVER=1 dune runtest
+	python3 test/audit_test.py
 
 install:
 	dune install

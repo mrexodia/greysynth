@@ -31,8 +31,8 @@ You can now run GreySynth directly using `greysynth`.
 
 Run the regression suite with `make test`. It exercises the evaluator, parser,
 SMT checker, OES, synthesis, and cache acceptance. An installed SMT backend is
-required for the proof tests. It also tests deterministic normalization
-and independent certificate replay.
+required for the proof tests. It also tests deterministic normalization,
+independent certificate replay, and the audit's result classification.
 
 ## Running
 
@@ -144,6 +144,15 @@ For dataset provenance, benchmark denominators, and reproduction commands, see
 `scripts/audit_dataset.py` keeps proofs, refutations, sampling agreement,
 timeouts, and errors separate and checks each result against its original
 input.
+
+For independent replay in a corpus run, pass `--proof-checker /path/to/mba_proof`
+to that harness. It retains certificates, preserves the direct checker outcome,
+and reports compositional proofs separately. The size metric excludes extension
+and restriction wrappers; a one-leaf expression already has the minimum size.
+An unchanged result is not by itself evidence of a failure or of minimality.
+See [`docs/COVERAGE.md`](docs/COVERAGE.md) for the follow-up's complete
+1,000-case proof replay, portfolio results, remaining minimal expressions,
+and inconsistent input/ground-truth pairs.
 
 # Cite us
 

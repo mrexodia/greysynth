@@ -20,6 +20,12 @@ each process (including its process group); the solver also gets --smt-timeout.
 Rows are flushed and fsynced as they finish. A sibling .summary.json records
 counts and provenance; JSONL row order can vary with --workers. Existing output
 files are refused. Exit 0 means the audit completed, not that every case passed.
+
+With --proof-checker, GreySynth also exports a certificate for independent
+SMT replay and congruence checking. Certificates are retained beside the audit.
+The direct whole-expression verdict is preserved in against_input; a separate
+proved_compositional verdict records a successful independent replay when the
+direct query is inconclusive. A malformed certificate is an audit error.
 """
 
 from __future__ import annotations
@@ -46,7 +52,7 @@ import time
 STOP = threading.Event()
 PROCESSES: set[subprocess.Popen] = set()
 PROCESS_LOCK = threading.Lock()
-VERDICTS = ("sampled", "proved", "refuted", "unknown", "error", "timeout")
+VERDICTS = ("sampled", "proved", "proved_compositional", "refuted", "unknown", "error", "timeout")
 
 
 def sha256_file(path: Path) -> str:
@@ -221,6 +227,44 @@ def check_pair(args, original: Path, candidate: Path, width: int, tmpdir: Path) 
     return {"verdict": smt["status"], "sample": sample, "smt": smt}
 
 
+def replay_proof(args, original: Path, candidate: Path, certificate: Path,
+                 width: int, tmpdir: Path) -> dict:
+    if not certificate.is_file():
+        return {"status": "error", "error": "simplifier did not emit the requested certificate"}
+    command = [str(args.proof_checker), "-size", str(width),
+               "-obf", "-string-file", str(original),
+               "-gt", "-string-file", str(candidate),
+               str(certificate), str(args.proof_timeout)]
+    run = run_process(command, args.proof_process_timeout, tmpdir)
+    report, error = decode_report(run)
+    result = {k: v for k, v in run.items() if k != "stdout"}
+    result.update(certificate=str(certificate), certificate_sha256=sha256_file(certificate))
+    if report is None:
+        result.update(status="timeout" if run["status"] == "timeout" else "error", error=error)
+        return result
+    status = report.get("verification")
+    if status not in {"proved_compositional", "unknown", "timeout", "invalid_certificate", "error", "refuted"}:
+        result.update(status="error", error="unexpected certificate verifier contract", report=report)
+        return result
+    result.update(status=status, report=report)
+    return result
+
+
+def combined_verdict(direct: dict, replay: dict) -> str:
+    """Keep direct refutations and invalid certificates visible, never fail open."""
+    status = replay["status"]
+    refuted = direct["verdict"] == "refuted" or direct.get("sample", {}).get("status") == "refuted"
+    if refuted:
+        return "error" if status == "proved_compositional" else "refuted"
+    if status in {"invalid_certificate", "error", "refuted"}:
+        # A refuted edge invalidates the certificate, not necessarily the final
+        # expression. Do not present it as a counterexample to the output.
+        return "error"
+    if direct["verdict"] == "proved":
+        return "proved"
+    return "proved_compositional" if status == "proved_compositional" else direct["verdict"]
+
+
 def classify_size(row: dict, report: dict) -> None:
     check = row.get("against_input", {})
     sizes = next((r for r in (check.get("sample", {}), check.get("smt", {}))
@@ -259,6 +303,10 @@ def execute_case(args, case: Case) -> dict:
             source, candidate, ground_truth = (tmpdir / name for name in ("original.txt", "candidate.txt", "ground_truth.txt"))
             source.write_text(original)
             command = [str(args.binary), "-size", str(width), "-obf", "-string-file", str(source), str(args.config)]
+            certificate = None
+            if args.proof_checker:
+                certificate = args.certificate_dir / (text_hash(case.identifier) + ".proof.json")
+                command.append(str(certificate))
             # Keep the benchmark's expected answer out of the simplifier.
             run = run_process(command, args.timeout, tmpdir)
             report, error = decode_report(run)
@@ -278,6 +326,9 @@ def execute_case(args, case: Case) -> dict:
                 candidate.write_text(expression)
                 row["against_input"] = check_pair(args, source, candidate, width, tmpdir)
                 row["verdict"] = row["against_input"]["verdict"]
+                if certificate is not None:
+                    row["proof_replay"] = replay_proof(args, source, candidate, certificate, width, tmpdir)
+                    row["verdict"] = combined_verdict(row["against_input"], row["proof_replay"])
                 classify_size(row, report)
                 if args.check_ground_truth and truth is not None:
                     ground_truth.write_text(truth)
@@ -290,7 +341,7 @@ def execute_case(args, case: Case) -> dict:
 
 def summarize(rows: list[dict], metadata: dict, complete: bool) -> dict:
     verdicts, sizes, synthesis = Counter(), Counter(), Counter()
-    samples, smt, truth, matrix = Counter(), Counter(), Counter(), Counter()
+    samples, smt, truth, matrix, replay = Counter(), Counter(), Counter(), Counter(), Counter()
     for row in rows:
         verdicts[row["verdict"]] += 1
         sizes[row["size"]["relation"]] += 1
@@ -300,12 +351,16 @@ def summarize(rows: list[dict], metadata: dict, complete: bool) -> dict:
             counter[row.get("against_input", {}).get(kind, {}).get("status", "not_run")] += 1
         if "against_ground_truth" in row:
             truth[row["against_ground_truth"]["verdict"]] += 1
+        replay[row.get("proof_replay", {}).get("status", "not_run")] += 1
     return {**metadata, "complete": complete, "completed_cases": len(rows),
             "verdict_counts": {s: verdicts[s] for s in VERDICTS},
             "sample_status_counts": dict(samples), "smt_status_counts": dict(smt),
+            "proof_replay_status_counts": dict(replay),
             "ground_truth_verdict_counts": dict(truth), "synthesis_status_counts": dict(synthesis),
             "size_counts": dict(sizes), "verdict_by_size": dict(matrix),
-            "proved_strict_decreases": matrix["proved:strict_decrease"],
+            "proved_strict_decreases": matrix["proved:strict_decrease"] + matrix["proved_compositional:strict_decrease"],
+            "direct_proved_strict_decreases": matrix["proved:strict_decrease"],
+            "compositional_proved_strict_decreases": matrix["proved_compositional:strict_decrease"],
             "internal_timeouts": sum(bool(row.get("simplifier_report", {}).get("has_timed_out")) for row in rows),
             "summed_case_seconds": sum(row["wall_seconds"] for row in rows)}
 
@@ -332,6 +387,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--binary", type=executable, required=True)
     parser.add_argument("--checker", type=executable, required=True)
+    parser.add_argument("--proof-checker", type=executable,
+                        help="independent mba_proof executable; enables certificate generation and replay")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--dataset", type=Path, action="append", required=True)
     parser.add_argument("--output", type=Path, required=True, help="new JSONL file (never overwritten)")
@@ -340,12 +397,18 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=30, help="hard seconds per process/group")
     parser.add_argument("--samples", type=int, default=256)
     parser.add_argument("--smt-timeout", type=int, default=1)
+    parser.add_argument("--proof-timeout", type=int, default=2, help="seconds per certificate equality obligation")
+    parser.add_argument("--proof-process-timeout", type=float, default=60,
+                        help="hard seconds for the entire independent certificate verifier")
+    parser.add_argument("--certificate-dir", type=Path, help="new directory for retained proof certificates")
+    parser.add_argument("--case-ids", type=Path, help="JSON list of exact case IDs to audit")
     parser.add_argument("--raw-bitwidth", type=int, default=64)
     parser.add_argument("--check-ground-truth", action="store_true")
     parser.add_argument("--tmpdir", type=Path, help="defaults to a temporary directory beside --output")
     args = parser.parse_args()
-    if any(value <= 0 for value in (args.workers, args.timeout, args.samples, args.smt_timeout, args.raw_bitwidth)):
-        parser.error("workers, timeout, samples, smt-timeout and raw-bitwidth must be positive")
+    if any(value <= 0 for value in (args.workers, args.timeout, args.samples, args.smt_timeout,
+                                    args.proof_timeout, args.proof_process_timeout, args.raw_bitwidth)):
+        parser.error("workers, timeouts, samples and raw-bitwidth must be positive")
     if args.limit is not None and args.limit < 1:
         parser.error("limit must be positive; omit it to audit every case")
     args.config, args.output = args.config.resolve(), args.output.resolve()
@@ -360,14 +423,35 @@ def main() -> int:
     total_available = len(cases)
     if not cases:
         parser.error("no expression cases found")
+    if args.case_ids:
+        try:
+            selected = json.loads(args.case_ids.read_text())
+            if (not isinstance(selected, list) or not selected
+                    or any(not isinstance(x, str) for x in selected)
+                    or len(set(selected)) != len(selected)):
+                raise ValueError("case-ids must contain a nonempty JSON array of unique strings")
+            missing = set(selected) - {case.identifier for case in cases}
+            if missing:
+                raise ValueError(f"case IDs not found: {sorted(missing)}")
+            selected = set(selected)
+            cases = [case for case in cases if case.identifier in selected]
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
     cases = cases if args.limit is None else cases[:args.limit]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     summary_path = args.output.with_suffix(".summary.json")
     if args.output.exists() or summary_path.exists():
         parser.error("output or summary already exists; choose a new output path")
+    if args.proof_checker:
+        args.certificate_dir = (args.certificate_dir or args.output.with_suffix(".certificates")).resolve()
+        if args.certificate_dir.exists():
+            parser.error("certificate directory already exists; choose a new path")
+        args.certificate_dir.mkdir(parents=True)
+    elif args.certificate_dir:
+        parser.error("--certificate-dir requires --proof-checker")
     args.tmpdir = (args.tmpdir or args.output.parent / "audit-tmp").resolve()
     args.tmpdir.mkdir(parents=True, exist_ok=True)
-    metadata = {"schema_version": 1, "started_at": datetime.now(timezone.utc).isoformat(),
+    metadata = {"schema_version": 2, "started_at": datetime.now(timezone.utc).isoformat(),
                 "binary": str(args.binary), "binary_sha256": sha256_file(args.binary),
                 "checker": str(args.checker), "checker_sha256": sha256_file(args.checker),
                 "config": config, "config_path": str(args.config), "config_sha256": sha256_file(args.config),
@@ -375,6 +459,10 @@ def main() -> int:
                 "selected_cases": len(cases), "selected_ids_sha256": text_hash("\n".join(case.identifier for case in cases)),
                 "workers": args.workers, "hard_process_timeout": args.timeout, "samples": args.samples,
                 "smt_timeout": args.smt_timeout, "raw_bitwidth": args.raw_bitwidth,
+                "proof_checker": str(args.proof_checker) if args.proof_checker else None,
+                "proof_checker_sha256": sha256_file(args.proof_checker) if args.proof_checker else None,
+                "proof_timeout": args.proof_timeout, "proof_process_timeout": args.proof_process_timeout,
+                "certificate_dir": str(args.certificate_dir) if args.proof_checker else None,
                 "check_ground_truth": args.check_ground_truth,
                 "primary_reference": "original_input", "output": str(args.output)}
     rows, complete = [], False
