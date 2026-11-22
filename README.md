@@ -31,7 +31,7 @@ You can now run GreySynth directly using `greysynth`.
 
 Run the regression suite with `make test`. It exercises the evaluator, parser,
 SMT checker, OES, synthesis, and cache acceptance. An installed SMT backend is
-required for the proof tests.
+required for the proof tests. The suite also tests deterministic normalization.
 
 ## Running
 
@@ -59,7 +59,8 @@ The last argument is a JSON file; `default.json` is a working example.
 
 | Key | Meaning |
 |---|---|
-| `oes` | Run OES first (and after each CHS horizon, and once at the end). |
+| `normalization` | Run deterministic, proof-gated bitvector and local linear-MBA normalization before OES. Defaults to true; false permits comparison with the earlier pipeline. |
+| `oes` | Run OES after normalization, after each CHS horizon, and once at the end. |
 | `oes_extended`, `local_extend`, `local_extend_depth` | Extra vocabulary added to the OES cache. |
 | `oes_fixedpoint` | Repeat OES until the size stops decreasing. |
 | `fast_simplify` | OES extension with relational vocabulary (not in the CCS'26 paper). |
@@ -82,7 +83,7 @@ The default configuration requires an SMT proof before accepting a rewrite.
 A candidate must have the same bit width and a strictly smaller **restored**
 expression, agree with the complete synthesis sample bank and an independent
 validation bank, and pass the proof. This applies to OES, relational vocabulary,
-CHS, global synthesis, and cached results. Set
+normalization, CHS, global synthesis, and cached results. Set
 `reject_non_equiv_simplifications` to `false` only when sample-based heuristic
 results are acceptable; finite agreement is not a proof.
 

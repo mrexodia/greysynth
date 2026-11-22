@@ -33,6 +33,8 @@ open Config
 open Oes
 open Synthesis
 
+let normalization_enabled = ref true
+
 (* Helper that checks equiv of [e] if ground truth is set AND check_equiv is
    enabled *)
 let check_equiv gt ~tag (verdict : equiv_t ref) e =
@@ -80,6 +82,9 @@ let chs gt best =
 let run_passes gt obf =
   let best = ref obf in
   (try
+     if !normalization_enabled && not !g_has_timedout then (
+       best := Normalization.run !best;
+       check_equiv gt ~tag:"normalization" log_linear_is_equiv !best);
      if !c_oes && not !g_has_timedout then (
        best := oes_with_logs !best;
        check_equiv gt ~tag:"OES" log_linear_is_equiv !best);
@@ -179,6 +184,7 @@ let report_json ~initial_size ~total_time gt result =
     @ ground_truth
     @ [
         (* configuration *)
+        ("is_normalization_enabled", `Bool !normalization_enabled);
         ("is_linear_enabled", `Bool !c_oes);
         ("is_fast_simplify_enabled", `Bool !c_fast_simplify);
         ("is_global_enabled", `Bool !c_global_synthesis);
@@ -239,6 +245,11 @@ let report_json ~initial_size ~total_time gt result =
 
 let run obf config gt =
   load_config_from_json config;
+  normalization_enabled :=
+    (match Yojson.Basic.Util.member "normalization" (Yojson.Basic.from_file config) with
+    | `Null -> true
+    | `Bool enabled -> enabled
+    | _ -> failwith "config: normalization must be a boolean");
   log_obfuscated_expression := obf;
   g_start_time := Unix.gettimeofday ();
   g_has_timedout := false;

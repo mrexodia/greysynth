@@ -1,4 +1,5 @@
 {
+  "normalization": true,
   "oes": true,
   "oes_extended": false,
   "oes_fixedpoint": false,
