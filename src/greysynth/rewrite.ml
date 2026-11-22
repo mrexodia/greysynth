@@ -116,12 +116,22 @@ let accepts_compositional ~pass ~equalities original candidate =
       last_rejection := "none";
       record_equalities ();
       true)
-    else if Hashtbl.find_opt proofs (proof_key original candidate) = Some Yes then (
-      last_rejection := "none";
-      incr proved;
-      record_equalities ();
-      true)
     else
+      let key = proof_key original candidate in
+      let budget = float_of_int !c_equiv_timeout in
+      let cached = Hashtbl.find_opt proofs key in
+      let attempted = Option.value (Hashtbl.find_opt proof_budgets key) ~default:0. in
+      if cached = Some Yes then (
+        last_rejection := "none";
+        incr proved;
+        record_equalities ();
+        true)
+      else if attempted >= budget
+              && (match cached with Some verdict -> verdict <> Yes | None -> false) then (
+        last_rejection := "smt_inconclusive";
+        incr inconclusive;
+        false)
+      else
       let proof = Rewrite_proof.create original in
       List.iter (fun (left, right) -> Rewrite_proof.record proof ~pass left right) equalities;
       let certificate = Rewrite_proof.finish proof candidate in
@@ -135,10 +145,8 @@ let accepts_compositional ~pass ~equalities original candidate =
       | Some "proved_compositional" ->
           incr proved;
           last_rejection := "none";
-          let key = proof_key original candidate in
           Hashtbl.replace proofs key Yes;
-          Hashtbl.replace proof_budgets key
-            (float_of_int !c_equiv_timeout);
+          Hashtbl.replace proof_budgets key budget;
           record_equalities ();
           true
       | _ ->
@@ -149,6 +157,8 @@ let accepts_compositional ~pass ~equalities original candidate =
           | _ ->
               incr inconclusive;
               last_rejection := "smt_inconclusive");
+          Hashtbl.replace proofs key Unknown;
+          Hashtbl.replace proof_budgets key budget;
           false)
 
 let accepts ~pass original candidate =
