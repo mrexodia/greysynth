@@ -480,13 +480,17 @@ let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
          the original subtree. Template size/equivalence is insufficient. *)
       let previous_size = Greysynth_utils.Utils.size_of_expr original in
       let mode = if !c_current_mode_is_global then "global" else "CHS" in
+      let prepared = prepare_candidates synth_expr new_leafs in
       let candidate =
-        prepare_candidates synth_expr new_leafs
-        |> List.find_opt (Rewrite.accepts ~pass:mode original)
+        prepared |> List.find_opt (Rewrite.accepts ~pass:mode original)
       in
       let is_simplification = Option.is_some candidate in
-      record (if is_simplification then "returned" else "rejected") time
-        is_simplification;
+      let status =
+        if is_simplification then "returned"
+        else if prepared = [] then "unusable_result"
+        else !(Rewrite.last_rejection)
+      in
+      record status time is_simplification;
 
       match candidate with
       | Some candidate ->

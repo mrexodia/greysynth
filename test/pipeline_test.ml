@@ -334,7 +334,11 @@ let test_cegis_retry () =
            !calls (List.length !(R.counterexamples))));
   require (!calls = 2) "CEGIS did not perform exactly one retry";
   require (!second_samples > 1) "SMT counterexample was not added to synthesis samples";
-  require (!(R.counterexamples) <> []) "SMT counterexample was not retained"
+  require (!(R.counterexamples) <> []) "SMT counterexample was not retained";
+  let statuses = List.map (fun (attempt : L.synthesis_attempt) -> attempt.status)
+      !(L.log_chs_synthesis_attempts) in
+  require (List.mem "smt_refuted" statuses && List.mem "returned" statuses)
+    "CEGIS attempt outcomes were not classified"
 
 let test_larger_proof_budget_retries () =
   reset ~strict:true ();
