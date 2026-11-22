@@ -315,7 +315,7 @@ let test_universal_rule_reuse () =
   | Some _ -> () | None -> failwith "universal source rule was not synthesized");
   require (S.universal_rule_count () = 1) "universal rule was not learned";
   let u = E.var "u" 64 "u" and v = E.var "v" 64 "v" in
-  let second = pattern u v in
+  let second = plus (E.binary E.And v u) (E.binary E.Or u v) in
   let second_template, second_labels = S.truncate second 2 in
   (match S.synthesize ~original:second second_template second_labels 1 1 with
   | Some (_, candidate, _) ->

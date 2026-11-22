@@ -139,6 +139,47 @@ let balance_associative expr =
   in
   normalize expr
 
+let canonical_rule_pair template result =
+  let names = Hashtbl.create 16 in
+  let inverse = Hashtbl.create 16 in
+  let serial = ref 0 in
+  let rec normalize = function
+    | (Var variable as node) ->
+        let key = (variable.name, variable.size) in
+        (match Hashtbl.find_opt names key with
+        | Some canonical -> canonical
+        | None ->
+            let name = Printf.sprintf "$greysynth.rule.%d" !serial in
+            incr serial;
+            let canonical = var name variable.size name in
+            Hashtbl.add names key canonical;
+            Hashtbl.add inverse canonical node;
+            canonical)
+    | Unary r -> unary r.f (normalize r.x)
+    | Binary r ->
+        let x = normalize r.x and y = normalize r.y in
+        if associative r.f && Sexpr.Expr.compare x y > 0 then binary r.f y x
+        else binary r.f x y
+    | Ite r -> ite (normalize r.c) (normalize r.t) (normalize r.e)
+    | node -> node
+  in
+  let key = normalize template |> balance_associative in
+  let result = Option.map (fun expression -> normalize expression |> balance_associative) result in
+  (key, result, inverse)
+
+let instantiate_rule inverse expression =
+  let rec visit node =
+    match Hashtbl.find_opt inverse node with
+    | Some variable -> variable
+    | None ->
+        match node with
+        | Unary r -> unary r.f (visit r.x)
+        | Binary r -> binary r.f (visit r.x) (visit r.y)
+        | Ite r -> ite (visit r.c) (visit r.t) (visit r.e)
+        | _ -> node
+  in
+  visit expression
+
 let truncate (expr : Sexpr.Expr.t) (depth : int) =
   let greek_counter = new greek_oracle () in
   greek_counter#init ();
@@ -526,17 +567,24 @@ let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
       log_global_synthesis_attempts := attempt :: !log_global_synthesis_attempts
     else log_chs_synthesis_attempts := attempt :: !log_chs_synthesis_attempts
   in
+  let rule_key, _, rule_inverse = canonical_rule_pair e None in
+  let cached_template =
+    if !c_learn_synthesis_rules then Sexpr.BvTbl.find_opt universal_rules rule_key
+    else None
+  in
   let cached_candidate =
-    match if !c_learn_synthesis_rules then Sexpr.BvTbl.find_opt universal_rules e else None with
+    match cached_template with
     | None -> None
     | Some template ->
-        prepare_candidates template new_leafs
+        let instantiated = instantiate_rule rule_inverse template in
+        prepare_candidates instantiated new_leafs
         |> List.find_opt (Rewrite.accepts ~pass:"learned rule" original)
   in
   match cached_candidate with
   | Some candidate ->
       record "rule_cache" 0. true;
-      Some (Option.get (Sexpr.BvTbl.find_opt universal_rules e), candidate, 0.)
+      let template = Option.get cached_template |> instantiate_rule rule_inverse in
+      Some (template, candidate, 0.)
   | None ->
   let problem = make_problem e new_leafs synthesis_timeout synthesis_repeat in
   match run_backend problem with
@@ -564,14 +612,22 @@ let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
       match candidate with
       | Some candidate ->
         let generic_verdict =
-          if !c_learn_synthesis_rules then
-            fst
-              (Rewrite_proof.prove_equality
-                 ~timeout:(min 1. (float_of_int !c_equiv_timeout)) e synth_expr)
+          if !c_learn_synthesis_rules then (
+            check_timeout ();
+            let budget =
+              if !g_total_timeout <= 0. then min 1. (float_of_int !c_equiv_timeout)
+              else
+                min (min 1. (float_of_int !c_equiv_timeout))
+                  (!g_total_timeout -. (Unix.gettimeofday () -. !g_start_time))
+            in
+            if budget <= 0. then Timeout
+            else fst (Rewrite_proof.prove_equality ~timeout:budget e synth_expr))
           else Disabled
         in
-        if !c_learn_synthesis_rules && generic_verdict = Yes then
-          Sexpr.BvTbl.replace universal_rules e synth_expr;
+        check_timeout ();
+        if !c_learn_synthesis_rules && generic_verdict = Yes then (
+          let key, result, _ = canonical_rule_pair e (Some synth_expr) in
+          Sexpr.BvTbl.replace universal_rules key (Option.get result));
         let synth_size = Greysynth_utils.Utils.size_of_expr candidate in
         if !c_current_mode_is_global then
           log_global_number_simplifications :=
