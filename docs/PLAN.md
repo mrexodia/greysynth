@@ -107,20 +107,22 @@ runs in one process have isolated metrics; reports account for every attempt.
   100-case PLDI Poly sample from 31 to 100 strict reductions.
 - [x] Decompose constant-scaled complement terms into replayable local algebra
   steps, making the 16-bit constant-offset case reliable at a one-second budget.
-- [ ] Generalize decomposed certificates to arbitrary minterm polynomials, AC
-  cancellation, and permutation-polynomial inversion so producer and replay do
-  not depend on monolithic bit-blasted queries.
+- [ ] Implement the native compositional disjoint-minterm proof builder for
+  arbitrary 2–6 atom linear MBAs using binary distributivity and binary
+  coefficient accumulation; this is the immediate PLDI Non-Poly milestone.
+- [ ] Implement native two-term multiplicative factor grouping and recursively
+  simplify cofactors; this is the immediate MBA-Obfuscator nonlinear milestone.
+- [ ] Generalize decomposed certificates further to polynomial normalization and
+  permutation-polynomial inversion.
 - [x] Add two-value affine-Boolean extraction with compact DNF/CNF/ANF recovery
   before falling back to a dense AND-monomial basis. NPN/ESOP tables remain a
   possible performance refinement.
 - [x] Normalize after every CHS horizon and before the final OES cleanup.
-- [x] Add optional `rumba` and `cobra` CLI adapters for bounded uniform-width
-  pure-MBA subtree candidates. Maximal roots are attempted top-down before local
-  residuals, constant shifts are supported, time is clamped to the remaining
-  global budget, trailing diagnostics are ignored safely, and all answers remain
-  untrusted/proof-gated.
-  Broader mixed-width adapters and automatic executable discovery remain out of
-  scope; no external implementation code is copied.
+- [x] Add optional `rumba` and `cobra` CLI adapters for differential testing and
+  bounded candidate experiments. They remain disabled by default.
+- [ ] Replace oracle dependence with native OCaml implementations of the useful
+  coefficient/minterm, factor-grouping, semilinear, and worklist ideas. Do not
+  copy implementation source without explicit license/attribution review.
 
 Acceptance: property tests prove all committed rewrites; Poly, Non-Poly,
 MBA-Obfuscator, masked, and mixed-width suites improve without a regression on
