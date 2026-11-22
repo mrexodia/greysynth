@@ -85,12 +85,20 @@ let () =
     let verdict, method_ = P.prove_equality ~timeout:2. lhs rhs in
     require (verdict = U.Yes && method_ = "abstract")
       "shared nonlinear subterm abstraction should prove the MBA identity";
+    let factor = E.binary E.And x y in
+    let k1 = c 8 0x35 and k2 = c 8 0xcb in
+    let lhs = E.binary E.Plus (E.binary E.Mul k1 factor) (E.binary E.Mul k2 factor) in
+    let rhs = E.binary E.Mul (E.binary E.Plus k1 k2) factor in
+    let verdict, method_ = P.prove_equality ~timeout:2. lhs rhs in
+    require (verdict = U.Yes && method_ = "abstract")
+      "small shared factors and nontrivial constants were not abstracted";
     (* A stronger abstraction can be SAT although the original is valid. *)
     let x4 = var "x4" 4 in
     let a = E.binary E.Plus x4 (c 4 1) in
-    let p = E.binary E.Mul a a in
-    let lhs = E.binary E.Plus p p in
-    let rhs = E.binary E.Mul (E.binary E.Mul (c 4 2) a) a in
+    let b = E.binary E.Plus x4 (c 4 2) in
+    let lhs = E.binary E.Plus b (E.binary E.Minus a a) in
+    let rhs = E.binary E.Plus (E.binary E.Plus a (c 4 1))
+        (E.binary E.Minus b b) in
     let verdict, method_ = P.prove_equality ~timeout:2. lhs rhs in
     require (verdict = U.Yes && method_ = "concrete")
       "SAT abstraction must fall back to the concrete equality";

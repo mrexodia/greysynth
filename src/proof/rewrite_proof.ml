@@ -220,13 +220,15 @@ let abstract_pair original candidate =
   let g = graph () in
   let left = of_expr g original in
   let right = of_expr g candidate in
-  let occurrences = Array.make g.count 0 in
-  let rec count id =
-    if occurrences.(id) < 2 then (
-      occurrences.(id) <- occurrences.(id) + 1;
-      List.iter count (children (node g id).shape))
+  let occurs_left = Array.make g.count false in
+  let occurs_right = Array.make g.count false in
+  let rec mark occurrences id =
+    if not occurrences.(id) then (
+      occurrences.(id) <- true;
+      List.iter (mark occurrences) (children (node g id).shape))
   in
-  count left; count right;
+  mark occurs_left left;
+  mark occurs_right right;
   let names = Hashtbl.create 16 in
   for id = 0 to g.count - 1 do
     match (node g id).shape with
@@ -247,7 +249,16 @@ let abstract_pair original candidate =
     | None ->
         let current = node g id in
         let expression =
-          if occurrences.(id) >= 2 && current.cost >= 4 then (
+          let nontrivial_constant =
+            match current.expr with
+            | E.Cst value ->
+                not (Bitvector.is_zeros value
+                     || Bitvector.is_ones value
+                     || Bitvector.is_fill value)
+            | _ -> false
+          in
+          if occurs_left.(id) && occurs_right.(id)
+             && (current.cost >= 2 || nontrivial_constant) then (
             match Hashtbl.find_opt replacements id with
             | Some expression -> expression
             | None ->
