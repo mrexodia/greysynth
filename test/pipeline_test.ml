@@ -39,6 +39,7 @@ let reset ?(strict = false) () =
   C.c_synthesis_constant_limit := 12;
   C.c_balanced_tree := false;
   C.c_sampling_strategy := C.RealValues;
+  C.c_branch_covering_samples := true;
   C.c_current_mode_is_global := false;
   C.g_total_timeout := 0.;
   C.g_has_timedout := false;
@@ -272,6 +273,26 @@ let test_oes_partial_timeout () =
     "OES timeout discarded its completed left child";
   require (!count = 1) "OES partial rewrite count is wrong";
   expect_same_at original result 17 29
+
+let test_branch_covering_samples () =
+  reset ~strict:true ();
+  C.c_nb_samples := 5;
+  let x8 = E.var "branch_x" 8 "branch_x" in
+  C.evaluator := Sample_evaluator.make ~variables:[ ("branch_x", 8) ] 5;
+  let condition = E.binary E.Eq x8 (c 8 42) in
+  let source = E.ite condition (c 8 7) (c 8 9) in
+  let template, labels = S.truncate source 2 in
+  let problem = S.make_problem template labels 1 1 in
+  require (Array.length problem.samples > 5)
+    "branch covering did not add feasible SMT samples";
+  require
+    (Array.exists (fun (sample : Greysynth__Synth_backends.sample) ->
+         Bitvector.equal sample.res (Bitvector.of_int ~size:8 7)) problem.samples)
+    "true ITE branch is absent from synthesis samples";
+  require
+    (Array.exists (fun (sample : Greysynth__Synth_backends.sample) ->
+         Bitvector.equal sample.res (Bitvector.of_int ~size:8 9)) problem.samples)
+    "false ITE branch is absent from synthesis samples"
 
 let test_universal_rule_reuse () =
   reset ~strict:true ();
@@ -597,6 +618,7 @@ let () =
   print_endline "pipeline_test: 24 solver-independent regressions passed";
   if solver_available then (
     test_context_proof ();
+    test_branch_covering_samples ();
     test_universal_rule_reuse ();
     test_cegis_retry ();
     test_larger_proof_budget_retries ();

@@ -123,6 +123,7 @@ working example. An optional second positional argument names the certificate.
 | `add_constants_to_synthesis` | Pass original and bounded derived constants to the synthesizer. |
 | `synthesis_constant_limit` | Maximum constants injected into one synthesis problem (default 12). |
 | `nb_samples` | Number of input samples used by OES and synthesis. |
+| `branch_covering_samples` | Add feasible SMT-model samples for both sides of truncated ITE conditions. Defaults to true. |
 | `check_equiv`, `equiv_timeout` | Check each pass against the ground truth, or the original input when no ground truth is supplied. The timeout also bounds individual rewrite proofs. |
 | `reject_non_equiv_simplifications` | Require a proof for every OES, relational, synthesis, and cache rewrite. Enabled in `default.json`; unknown, timeout, errors, and missing solvers reject the candidate. |
 | `total_timeout` | Overall time limit (s); the best result so far is reported. |

@@ -242,30 +242,92 @@ let make_problem e new_leafs synthesis_timeout synthesis_repeat :
         in
         { Synth_backends.args = Array.of_list args; res })
   in
+  let original_variables =
+    Hashtbl.fold
+      (fun _ original variables ->
+        Sample_evaluator.variables_of_expr original @ variables)
+      new_leafs []
+    |> List.sort_uniq Stdlib.compare
+  in
+  let sample_of_environment environment =
+    try
+      let original_bindings = Hashtbl.create (List.length original_variables) in
+      List.iter
+        (fun (name, width) ->
+          Hashtbl.replace original_bindings (Sexpr.Expr.var name width name)
+            (Bitvector.zeros width))
+        original_variables;
+      List.iter
+        (fun (name, width, value) ->
+          Hashtbl.replace original_bindings (Sexpr.Expr.var name width name)
+            (Bitvector.create value width))
+        environment;
+      let args =
+        List.map
+          (fun leaf ->
+            let original = Hashtbl.find new_leafs leaf in
+            Sample_evaluator.eval_with_bindings original_bindings original)
+          leaves
+        |> Array.of_list
+      in
+      let label_bindings = Hashtbl.create (List.length leaves) in
+      List.iteri (fun index leaf -> Hashtbl.add label_bindings leaf args.(index)) leaves;
+      let res = Sample_evaluator.eval_with_bindings label_bindings e in
+      Some { Synth_backends.args; res }
+    with _ -> None
+  in
   let counterexample_samples =
-    List.filter_map
-      (fun environment ->
-        try
-          let original_bindings = Hashtbl.create (List.length environment) in
-          List.iter
-            (fun (name, width, value) ->
-              Hashtbl.add original_bindings (Sexpr.Expr.var name width name)
-                (Bitvector.create value width))
-            environment;
-          let args =
-            List.map
-              (fun leaf ->
-                let original = Hashtbl.find new_leafs leaf in
-                Sample_evaluator.eval_with_bindings original_bindings original)
-              leaves
-            |> Array.of_list
-          in
-          let label_bindings = Hashtbl.create (List.length leaves) in
-          List.iteri (fun index leaf -> Hashtbl.add label_bindings leaf args.(index)) leaves;
-          let res = Sample_evaluator.eval_with_bindings label_bindings e in
-          Some { Synth_backends.args; res }
-        with _ -> None)
-      !(Rewrite.counterexamples)
+    List.filter_map sample_of_environment !(Rewrite.counterexamples)
+  in
+  let branch_samples =
+    if not !c_branch_covering_samples then []
+    else
+      let rec restore node =
+        match Hashtbl.find_opt new_leafs node with
+        | Some original -> original
+        | None ->
+            match node with
+            | Unary r -> unary r.f (restore r.x)
+            | Binary r -> binary r.f (restore r.x) (restore r.y)
+            | Ite r -> ite (restore r.c) (restore r.t) (restore r.e)
+            | _ -> node
+      in
+      let rec conditions result = function
+        | Ite { c; t; e; _ } ->
+            conditions (conditions (restore c :: result) t) e
+        | Unary { x; _ } -> conditions result x
+        | Binary { x; y; _ } -> conditions (conditions result x) y
+        | _ -> result
+      in
+      let rec take count = function
+        | _ when count <= 0 -> []
+        | [] -> []
+        | head :: tail -> head :: take (count - 1) tail
+      in
+      conditions [] e |> List.sort_uniq Sexpr.Expr.compare |> take 4
+      |> List.concat_map (fun condition ->
+             check_timeout ();
+             let zero = Sexpr.Expr.constant (Bitvector.zeros 1) in
+             let one = Sexpr.Expr.constant (Bitvector.ones 1) in
+             [ zero; one ]
+             |> List.filter_map (fun expected ->
+                    match
+                      are_equivalent_seconds ~show_counter_example:true
+                        condition expected (Some 0.2)
+                    with
+                    | No, _, Some model ->
+                        let widths = Hashtbl.create 8 in
+                        List.iter (fun (name, width) -> Hashtbl.replace widths name width)
+                          original_variables;
+                        let environment =
+                          List.filter_map
+                            (fun (name, value) ->
+                              Option.map (fun width -> (name, width, value))
+                                (Hashtbl.find_opt widths name))
+                            model
+                        in
+                        sample_of_environment environment
+                    | _ -> None))
   in
   let same_sample left right =
     Bitvector.equal left.Synth_backends.res right.Synth_backends.res
@@ -277,7 +339,7 @@ let make_problem e new_leafs synthesis_timeout synthesis_repeat :
       (fun samples sample ->
         if Array.exists (same_sample sample) samples then samples
         else Array.append samples [| sample |])
-      samples counterexample_samples
+      samples (counterexample_samples @ branch_samples)
   in
 
   let operators =

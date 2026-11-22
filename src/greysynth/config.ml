@@ -54,6 +54,7 @@ let c_cegis_retries = ref 1
 let c_learn_synthesis_rules = ref true
 let c_balanced_tree = ref false
 let c_sampling_strategy = ref RealValues
+let c_branch_covering_samples = ref true
 let c_equiv_timeout = ref 1
 let c_check_equiv = ref false
 let c_nb_samples = ref 100
@@ -207,6 +208,10 @@ let load_config_from_json json_file : unit =
                 "Unknown sampling_strategy: %s (expected 'real' or 'label' or \
                  'wrong_naive')"
                 sampling_str));
+    (c_branch_covering_samples :=
+       match json |> member "branch_covering_samples" with
+       | `Null -> true
+       | v -> to_bool v);
 
     (* Print configuration summary *)
     let pipeline =
