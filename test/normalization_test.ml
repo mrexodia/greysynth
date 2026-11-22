@@ -119,6 +119,14 @@ let test_linear_mba () =
   in
   prove_shrinks "two-value Boolean recovery" two_value 7
 
+let test_semilinear_masks () =
+  let x16 = var 16 "mask16" in
+  prove_shrinks "complementary masks"
+    (plus (band x16 (c 16 0xff)) (band x16 (c 16 0xff00))) 1;
+  let x32 = var 32 "mask32" in
+  prove_shrinks "disjoint partial masks"
+    (plus (band x32 (c 32 0x00ff)) (band x32 (c 32 0xff00))) 3
+
 let test_associative_canonicalization () =
   let prove_ac name original maximum =
     reset ();
@@ -202,11 +210,12 @@ let () =
   if solver_available then (
     test_peepholes ();
     test_linear_mba ();
+    test_semilinear_masks ();
     test_associative_canonicalization ();
     test_compositional_polynomial_identity ();
     test_normalization_portfolio ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 24 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 26 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"

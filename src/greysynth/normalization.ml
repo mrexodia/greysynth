@@ -67,8 +67,33 @@ let peepholes evaluate expression =
         | Some _, Some _ -> (try [ E.constant (evaluate expression 0) ] with _ -> [])
         | _ -> []
       in
+      let merge_masked_addition () =
+        let masked = function
+          | E.Binary { f = E.And; x = base; y = E.Cst mask; _ }
+          | E.Binary { f = E.And; x = E.Cst mask; y = base; _ } -> Some (base, mask)
+          | E.Unary {
+              f = E.Uext _;
+              x = E.Unary { f = E.Restrict { lo = 0; hi }; x = base; _ };
+              size;
+              _;
+            } ->
+              Some (base, Bitvector.create (Z.pred (Z.shift_left Z.one (hi + 1))) size)
+          | _ -> None
+        in
+        match masked x, masked y with
+        | Some (left, left_mask), Some (right, right_mask) when same left right ->
+            let left_bits = Bitvector.value_of left_mask in
+            let right_bits = Bitvector.value_of right_mask in
+            if Z.equal (Z.logand left_bits right_bits) Z.zero then
+              let combined = Bitvector.logor left_mask right_mask in
+              if Bitvector.is_fill combined then [ left ]
+              else [ E.binary E.And left (E.constant combined) ]
+            else []
+        | _ -> []
+      in
       let identities =
         match f with
+        | E.Plus when merge_masked_addition () <> [] -> merge_masked_addition ()
         | E.Plus when is_number Z.zero x -> [ y ]
         | E.Plus | E.Minus | E.Or | E.Xor when is_number Z.zero y -> [ x ]
         | E.Or | E.Xor when is_number Z.zero x -> [ y ]
