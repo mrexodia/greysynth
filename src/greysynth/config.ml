@@ -62,10 +62,10 @@ let g_total_timeout = ref 0.
 let g_start_time = ref 0.
 let g_has_timedout = ref false
 
-let chs_cache_per_horizon : (int, Sexpr.Expr.t) Hashtbl.t =
+let chs_cache_per_horizon : (Sample_evaluator.outhash, Sexpr.Expr.t) Hashtbl.t =
   Hashtbl.create 1000
 
-let evaluator = ref (Sample_evaluator.make 0)
+let evaluator = ref (Sample_evaluator.make 1)
 
 exception Timeout_exception
 

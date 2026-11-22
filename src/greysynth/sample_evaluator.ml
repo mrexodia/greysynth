@@ -19,20 +19,29 @@
 (*                                                                        *)
 (**************************************************************************)
 
-(* Sample evaluator (what and why: sample_evaluator.mli). Values are cached
-   per sample, keyed by node hash. *)
+(* Sample evaluator. Cache complete expression keys and retain every sampled
+   output: a bounded structural hash is only a bucket selector, never evidence
+   of output equivalence. *)
 
 open Libterm.Sexpr
-module IntSet = Set.Make (Int)
 
-type outhash = int
+type outhash = { digest : int; values : Bitvector.t list }
 
-let const_max_retries = 100
+(* The full vector decides equality. A digest over every output comes first
+   so ordinary OCaml hash tables do not put all signatures with the same
+   corner-sample prefix into one bucket. *)
+let signature values =
+  let digest =
+    List.fold_left
+      (fun seed value ->
+        Hashtbl.seeded_hash seed
+          (Bitvector.size_of value, Z.hash (Bitvector.value_of value)))
+      0 values
+  in
+  { digest; values }
 
 module Fingerprint = struct
-  module IdMap = Map.Make (Int)
-
-  type t = Bitvector.t IdMap.t
+  type t = outhash
 end
 
 type t = {
@@ -47,166 +56,140 @@ type t = {
 }
 
 let get_random_value size sample_id nb_samples =
-  let max_signed = (1 lsl (size - 1)) - 1 in
-  let min_signed = -(1 lsl (size - 1)) in
-
   match sample_id with
-  | 0 -> Bitvector.of_int ~size 0
-  | 1 -> Bitvector.of_int ~size 1
-  | 2 -> Bitvector.of_int ~size (-1)
-  | 3 -> Bitvector.of_int ~size max_signed
-  | 4 -> Bitvector.of_int ~size min_signed
+  | 0 -> Bitvector.zeros size
+  | 1 -> Bitvector.ones size
+  | 2 -> Bitvector.fill size
+  | 3 -> Bitvector.max_sbv size
+  | 4 -> Bitvector.min_sbv size
   | _ ->
       let threshold = nb_samples / 10 in
       if sample_id <= 4 + threshold then Bitvector.rand size
+      else Bitvector.of_int ~size (Random.int 101 - 50)
+
+(* SMT-LIB operations are total. In particular, shift counts are unsigned
+   bitvectors, not host integers or x86-masked amounts. Bound them before
+   converting to int, and reduce rotates modulo the operand's actual width.
+   Keeping division-by-zero samples avoids changing the shared input bank
+   halfway through an OES pass. *)
+let eval_binary f x y =
+  let width = Bitvector.size_of x in
+  if f <> Expr.Concat && width <> Bitvector.size_of y then
+    invalid_arg "sample evaluator: binary operand widths differ";
+  let count = Bitvector.value_of y in
+  match f with
+  | Expr.Lsl | Expr.Lsr | Expr.Asr ->
+      if Z.geq count (Z.of_int width) then
+        if f = Expr.Asr && Bitvector.is_neg x then Bitvector.fill width
+        else Bitvector.zeros width
       else
-        let r = Random.int 101 - 50 in
-        Bitvector.of_int ~size r
+        let amount = Z.to_int count in
+        (match f with
+        | Expr.Lsl -> Bitvector.shift_left x amount
+        | Expr.Lsr -> Bitvector.shift_right x amount
+        | _ -> Bitvector.shift_right_signed x amount)
+  | Expr.Rol | Expr.Ror ->
+      let amount = Z.to_int (Z.rem count (Z.of_int width)) in
+      if f = Expr.Rol then Bitvector.rotate_left x amount
+      else Bitvector.rotate_right x amount
+  | Expr.Udiv when Bitvector.is_zeros y -> Bitvector.fill width
+  | Expr.Sdiv when Bitvector.is_zeros y ->
+      if Bitvector.is_neg x then Bitvector.ones width
+      else Bitvector.fill width
+  | Expr.Umod | Expr.Smod when Bitvector.is_zeros y -> x
+  | _ -> Term.Bv.binary f x y
 
 let make nb_samples : t =
-  let forbidden_sample_ids = ref IntSet.empty in
+  if nb_samples <= 0 then
+    invalid_arg "sample evaluator: nb_samples must be positive";
 
-  let nb_models = ref nb_samples in
-
-  (* hash node to Bitvector value *)
-  let nodes_val : (int, Bitvector.t) Hashtbl.t array =
-    Array.init (10 * !nb_models) (fun _ -> Hashtbl.create 32)
+  (* Allocate sample tables lazily rather than indexing a fixed retry array.
+     Public callers can safely request held-out samples with any nonnegative
+     id; signatures always use exactly ids 0 .. nb_samples - 1. *)
+  let nodes_val : (int, Bitvector.t Sexpr.BvTbl.t) Hashtbl.t =
+    Hashtbl.create nb_samples
+  in
+  let fingerprints : Fingerprint.t Sexpr.BvTbl.t = Sexpr.BvTbl.create 100 in
+  let sample_cache sample_id =
+    if sample_id < 0 then
+      invalid_arg "sample evaluator: sample id must be nonnegative";
+    match Hashtbl.find_opt nodes_val sample_id with
+    | Some cache -> cache
+    | None ->
+        let cache = Sexpr.BvTbl.create 32 in
+        Hashtbl.add nodes_val sample_id cache;
+        cache
   in
 
-  let rec eval (node : Sexpr.Expr.t) (sample_id : int) : Bitvector.t =
-    let hash = Hashtbl.hash node in
-
-    match Hashtbl.find_opt nodes_val.(sample_id) hash with
+  let rec eval (node : Expr.t) (sample_id : int) : Bitvector.t =
+    let cache = sample_cache sample_id in
+    match Sexpr.BvTbl.find_opt cache node with
     | Some result -> result
     | None ->
         let result =
           match node with
           | Expr.Cst n -> n
-          | Expr.Var v -> get_random_value v.size sample_id !nb_models
+          | Expr.Var v -> get_random_value v.size sample_id nb_samples
           | Expr.Unary { f; x; _ } -> Term.Bv.unary f (eval x sample_id)
-          | Expr.Binary { f; x; y; _ } -> (
-              let x_term = eval x sample_id in
-              let y_term = eval y sample_id in
-              match f with
-              | Sexpr.Expr.Lsl | Sexpr.Expr.Lsr | Sexpr.Expr.Asr
-              | Sexpr.Expr.Rol | Sexpr.Expr.Ror ->
-                  let mask = Term.Bv.of_int ~size:(Bitvector.size_of y_term) 63 in
-                  let masked_y = Term.Bv.binary Sexpr.Expr.And y_term mask in
-                  Term.Bv.binary f x_term masked_y
-              | _ -> Term.Bv.binary f x_term y_term)
-          | Expr.Ite { c; t; e; _ } ->
-              (* condition is a 1-bit truth value; evaluate only the taken
-                 branch (avoids spurious division-by-zero in the other one) *)
-              if Bitvector.is_zero (eval c sample_id) then eval e sample_id
-              else eval t sample_id
-          | _ -> failwith "Not implemented"
-        in
-        Hashtbl.add nodes_val.(sample_id) hash result;
-        result
-  in
-
-  let rec eval_label ?(debug = false) (node : Sexpr.Expr.t) (sample_id : int)
-      (relations : (Sexpr.Expr.t, Sexpr.Expr.t) Hashtbl.t) : Bitvector.t =
-    (* Format.eprintf "Entering node: %a@." Term.pp node; *)
-    match Hashtbl.find_opt relations node with
-    | Some labeled_node ->
-        let ret_val = eval labeled_node sample_id in
-        (* Format.eprintf "Node is a label %a mapped to %a with value %s@." Term.pp
-          node Term.pp labeled_node
-          (Bitvector.to_string ret_val); *)
-        ret_val
-    | None ->
-        (* Format.eprintf "Evaluating node %a@." Term.pp node; *)
-        let result =
-          match node with
-          | Expr.Unary { f; x; _ } ->
-              Term.Bv.unary f (eval_label ~debug x sample_id relations)
           | Expr.Binary { f; x; y; _ } ->
-              Term.Bv.binary f
-                (eval_label ~debug x sample_id relations)
-                (eval_label ~debug y sample_id relations)
-          | Expr.Cst n -> n
+              eval_binary f (eval x sample_id) (eval y sample_id)
           | Expr.Ite { c; t; e; _ } ->
-              if Bitvector.is_zero (eval_label ~debug c sample_id relations) then
-                eval_label ~debug e sample_id relations
-              else eval_label ~debug t sample_id relations
-          | _ ->
-              failwith
-                (Printf.sprintf "Not implemented %s"
-                   (Greysynth_utils.Utils.pp node))
+              if Bitvector.is_zeros (eval c sample_id) then eval e sample_id
+              else eval t sample_id
+          | Expr.Load _ -> invalid_arg "sample evaluator: memory load"
         in
+        Sexpr.BvTbl.add cache node result;
         result
   in
 
-  let reset sample_id = Hashtbl.clear nodes_val.(sample_id) in
-
-  let node_to_fingerprint (expr : Sexpr.Expr.t) : Fingerprint.t =
-    let samples = ref Fingerprint.IdMap.empty in
-    let current_sid = ref 0 in
-    let count = ref 0 in
-
-    while !count < !nb_models do
-      try
-        let value = eval expr !current_sid in
-        samples := Fingerprint.IdMap.add !current_sid value !samples;
-        incr count;
-        incr current_sid
-      with Division_by_zero ->
-        incr current_sid;
-        (* If the difference between tried IDs and successful IDs exceeds retries *)
-        if !current_sid - !count > const_max_retries then
-          failwith "Too many division by zero errors"
-    done;
-
-    !samples
+  let rec eval_label (node : Expr.t) (sample_id : int)
+      (relations : (Expr.t, Expr.t) Hashtbl.t) : Bitvector.t =
+    if sample_id < 0 then
+      invalid_arg "sample evaluator: sample id must be nonnegative";
+    match Hashtbl.find_opt relations node with
+    | Some labeled_node -> eval labeled_node sample_id
+    | None ->
+        match node with
+        | Expr.Unary { f; x; _ } ->
+            Term.Bv.unary f (eval_label x sample_id relations)
+        | Expr.Binary { f; x; y; _ } ->
+            eval_binary f
+              (eval_label x sample_id relations)
+              (eval_label y sample_id relations)
+        | Expr.Cst n -> n
+        | Expr.Ite { c; t; e; _ } ->
+            if Bitvector.is_zeros (eval_label c sample_id relations) then
+              eval_label e sample_id relations
+            else eval_label t sample_id relations
+        | Expr.Var _ ->
+            invalid_arg "sample evaluator: unbound synthesis label"
+        | Expr.Load _ -> invalid_arg "sample evaluator: memory load"
   in
 
-  let node_to_outhash (expr : Expr.t) : int =
-    let fails = ref 0 in
-    let rec aux sample_id =
-      if IntSet.mem sample_id !forbidden_sample_ids then (
-        incr fails;
-        aux (sample_id + 1))
-      else if sample_id - !fails >= !nb_models then []
-      else if sample_id >= !nb_models * 10 then
-        failwith "Too many sampling retries!"
-      else
-        try
-          let value = eval expr sample_id in
-          value :: aux (sample_id + 1)
-        with Division_by_zero ->
-          incr fails;
-          forbidden_sample_ids := IntSet.add sample_id !forbidden_sample_ids;
-          aux (sample_id + 1)
-    in
-
-    let out_array = aux 0 |> Array.of_list in
-    Hashtbl.hash (Array.to_list out_array)
+  let reset sample_id =
+    if sample_id < 0 then
+      invalid_arg "sample evaluator: sample id must be nonnegative";
+    Hashtbl.remove nodes_val sample_id;
+    if sample_id < nb_samples then Sexpr.BvTbl.clear fingerprints
   in
 
-  let eval_all expr =
-    for sample_id = 0 to !nb_models - 1 do
-      let _ = eval expr sample_id in
-      ()
-    done
+  let node_to_fingerprint (expr : Expr.t) : Fingerprint.t =
+    match Sexpr.BvTbl.find_opt fingerprints expr with
+    | Some signature -> signature
+    | None ->
+        let outputs = signature (List.init nb_samples (eval expr)) in
+        Sexpr.BvTbl.add fingerprints expr outputs;
+        outputs
   in
 
-  let is_node_constant : Expr.t -> Bitvector.t option =
-   fun expr ->
-    let hash = Hashtbl.hash expr in
-    let values = ref [] in
-    (try
-       for sample_id = 0 to !nb_models - 1 do
-         if not (IntSet.mem sample_id !forbidden_sample_ids) then
-           values := Hashtbl.find nodes_val.(sample_id) hash :: !values
-       done
-     with Not_found -> values := []);
-    match !values with
-    | [] -> None
-    | first :: rest ->
-        if List.for_all (fun x -> Bitvector.equal x first) rest then
-          Some first
-        else None
+  let node_to_outhash = node_to_fingerprint in
+
+  let eval_all expr = ignore (node_to_fingerprint expr) in
+
+  let is_node_constant expr =
+    match (node_to_fingerprint expr).values with
+    | first :: rest when List.for_all (Bitvector.equal first) rest -> Some first
+    | _ -> None
   in
 
   {

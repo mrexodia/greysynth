@@ -31,10 +31,10 @@ let log_linear_size_after = ref 0
 let log_linear_number_simplifications = ref 0
 let log_linear_vocab_injected = ref 0
 let log_local_extend_injected = ref 0
-let log_linear_number_unique_hash_before : (int, int) Hashtbl.t =
+let log_linear_number_unique_hash_before : (Sample_evaluator.outhash, int) Hashtbl.t =
   Hashtbl.create 100
 
-let log_linear_number_unique_hash_after : (int, int) Hashtbl.t =
+let log_linear_number_unique_hash_after : (Sample_evaluator.outhash, int) Hashtbl.t =
   Hashtbl.create 100
 
 let log_linear_time = ref 0.0

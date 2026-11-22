@@ -19,50 +19,43 @@
 (*                                                                        *)
 (**************************************************************************)
 
-(** Sample evaluator: evaluates expressions concretely on a fixed bank of
-    input samples, so that expressions can be compared by behaviour.
+(** Concrete bitvector evaluation on a fixed bank of shared input samples.
 
-    Sample [i] gives each variable one value (0, 1, -1, max and min signed for
-    the first five samples, random afterwards), drawn once and cached: every
-    expression evaluated by the same evaluator sees the same inputs. The
-    vector of outputs over all samples is therefore a semantic signature, and
-    two expressions with the same {!outhash} are probably equivalent.
+    The first five samples are 0, 1, -1, maximum signed and minimum signed
+    values at each variable's width; the remaining samples are random.
+    Variables are sampled once per id and shared by every expression.
+    Operations follow SMT-LIB bitvector semantics, including oversized shifts
+    and division by zero. *)
 
-    It is a separate library because GreySynth is not its only user:
-    - GreySynth: OES rewrites nodes sharing an outhash; synthesis samples
-      subtrees for the backends;
-    - mba_equiv [-sample]: compares two expressions on the same inputs;
-    - mba_noiser: rejects noise that is semantically constant;
-    - hardcoded_rules_simplifier: asserts each rewrite keeps the outhash. *)
-
-type outhash = int
+type outhash
+(** Complete, width-aware output vector. Despite the historical name, this is
+    not an integer hash: equality compares every sampled output. Agreement on
+    a finite sample bank is still a heuristic, not an equivalence proof. *)
 
 module Fingerprint : sig
-  type t
-  (** The value of an expression on each sample (sample id -> value). *)
+  type t = outhash
 end
 
 type t = {
   eval : Sexpr.Expr.t -> int -> Bitvector.t;
-      (** [eval e i]: value of [e] on sample [i] (cached).
-          @raise Division_by_zero *)
+      (** [eval e i] evaluates [e] on sample [i], caching by complete expression
+          keys. Any nonnegative id is valid, including held-out samples. *)
   eval_all : Sexpr.Expr.t -> unit;
-      (** Evaluate [e] on every sample, filling the cache. *)
-  reset : int -> unit;  (** Forget the cached values of sample [i]. *)
+      (** Evaluate [e] on all configured samples. *)
+  reset : int -> unit;
+      (** Forget one sample and invalidate any signatures that include it. *)
   node_to_fingerprint : Sexpr.Expr.t -> Fingerprint.t;
-      (** Values on the first samples that do not divide by zero. *)
+      (** Outputs on exactly the configured sample ids. *)
   node_to_outhash : Sexpr.Expr.t -> outhash;
-      (** Hash of the values on all samples, skipping any sample on which
-          some expression divided by zero. *)
+      (** Same complete signature as [node_to_fingerprint]. *)
   is_node_constant : Sexpr.Expr.t -> Bitvector.t option;
-      (** [Some v] if [e] evaluates to [v] on every sample. Reads the cache:
-          call [eval_all] first. *)
+      (** [Some v] if every configured sample produces [v]; evaluates missing
+          samples rather than relying on a partially populated cache. *)
   eval_label :
     Sexpr.Expr.t -> int -> (Sexpr.Expr.t, Sexpr.Expr.t) Hashtbl.t -> Bitvector.t;
-      (** [eval_label e i labels]: value of [e] on sample [i], where each
-          subterm bound in [labels] (e.g. a fresh variable standing for a cut
-          subtree) takes the value of the term it maps to. *)
+      (** Same semantics as [eval], substituting the cut subtrees in [labels].
+          Unbound variables in the truncated expression are rejected. *)
 }
 
 val make : int -> t
-(** [make n]: a fresh evaluator over [n] samples, with its own inputs. *)
+(** [make n] creates a fresh evaluator. [n] must be positive. *)

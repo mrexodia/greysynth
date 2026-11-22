@@ -370,7 +370,7 @@ let simplify_global synthesis_timeout synthesis_repeat (expr : Sexpr.Expr.t) =
   _log "global" "starting bottom-up synthesis  (size=%d)"
     (Greysynth_utils.Utils.size_of_expr expr);
 
-  let cache : (int, Sexpr.Expr.t) Hashtbl.t = Hashtbl.create 64 in
+  let cache : (outhash, Sexpr.Expr.t) Hashtbl.t = Hashtbl.create 64 in
 
   let process node =
     check_timeout ();

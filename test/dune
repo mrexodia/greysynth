@@ -1,0 +1,5 @@
+(test
+ (name sample_evaluator_test)
+ (modules sample_evaluator_test)
+ (libraries greysynth.sample_evaluator binsec.smt binsec.sse.term)
+ (flags (:standard -open Binsec -open Libsse -open Libterm)))
