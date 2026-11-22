@@ -454,7 +454,7 @@ let run expression =
              | _ -> original);
            if not !g_has_timedout then (
              let candidates = peepholes constants.eval !current
-                 @ canonical_candidates !current
+                 @ (if !c_ac_normalization then canonical_candidates !current else [])
                  @ (if cost !current >= 4 then linear_candidates cost !current else []) in
              let candidates = List.filter (fun candidate -> cost candidate < cost !current) candidates in
              let candidates = List.sort_uniq (fun a b ->

@@ -21,6 +21,7 @@ let reset ?(strict = true) () =
   C.evaluator := Sample_evaluator.make 100;
   C.c_nb_samples := 100;
   U.cost_model := U.Legacy;
+  C.c_ac_normalization := false;
   C.c_reject_non_equiv_simplifications := strict;
   C.c_equiv_timeout := 5;
   C.g_total_timeout := 0.;
@@ -107,8 +108,18 @@ let test_linear_mba () =
           (plus y (c 32 1)), 1 ]
 
 let test_associative_canonicalization () =
+  let prove_ac name original maximum =
+    reset ();
+    C.c_ac_normalization := true;
+    let result = N.run original in
+    require (U.size_of_expr result <= maximum)
+      (Printf.sprintf "%s: expected size <= %d, got %d" name maximum
+         (U.size_of_expr result));
+    let verdict, _, _ = U.are_equivalent original result (Some 5) in
+    require (verdict = U.Yes) (name ^ ": proof failed")
+  in
   let x = var 16 "x" and y = var 16 "y" in
-  List.iter (fun (name, original, maximum) -> prove_shrinks name original maximum)
+  List.iter (fun (name, original, maximum) -> prove_ac name original maximum)
     [ "xor cancellation", bxor (bxor x y) x, 1;
       "coefficient collection", plus (plus x x) x, 3;
       "idempotent conjunction", band (band x y) x, 3 ]
