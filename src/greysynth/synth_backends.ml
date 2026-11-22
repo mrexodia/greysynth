@@ -306,6 +306,7 @@ let rec xyntia_tree_to_expr (tree : unit XT.t) : Sexpr.Expr.t =
 
 let xyntia_grammar_for_profile configured (profile : operator_profile) =
   if configured <> "auto" then configured
+  else if profile.conditional && (profile.division || profile.shifts) then "full_ite"
   else if profile.division then "full"
   else if profile.conditional then "mba_ite"
   else if profile.shifts then "mba_shift"
@@ -318,7 +319,7 @@ module Xyntia_backend : BACKEND = struct
     let configured_grammar = config_string json "xyntia_grammar" ~default:"auto" in
     let valid_grammars =
       [ "auto"; "5"; "mba"; "expr"; "expr_ite"; "mba_shift"; "mba_ite";
-        "full"; "sygus"; "expr_x86"; "full_x86" ]
+        "full"; "full_ite"; "sygus"; "expr_x86"; "full_x86" ]
     in
     if not (List.mem configured_grammar valid_grammars) then
       failwith

@@ -233,6 +233,18 @@ module Mk_Mutations_Full(O : Oracle.ORACLE) : MUTATIONS =
     |] 
   end) (O)
 
+module Mk_Mutations_Full_ITE(O : Oracle.ORACLE) : MUTATIONS =
+  Mk_Mutations(struct
+    let spe_ops = [|
+      OP_Unop(Minus); OP_Unop(Not);
+      OP_Binop(Add); OP_Binop(Sub); OP_Binop(Mul);
+      OP_Binop(And); OP_Binop(Or); OP_Binop(Xor);
+      OP_Binop(RShiftu); OP_Binop(RShifts); OP_Binop(LShift);
+      OP_Triop(Div); OP_Triop(SDiv); OP_Triop(Mod); OP_Triop(SMod);
+      OP_Triop(ITE)
+    |]
+  end) (O)
+
 module Mk_Mutations_Full_x86(O : Oracle.ORACLE) : MUTATIONS = 
   Mk_Mutations(struct 
     let spe_ops = [|
@@ -284,6 +296,7 @@ let mutations_of_str (module O : Oracle.ORACLE) str =
   | "mba_shift" -> (module Mk_Mutations_Mba_Shift (O) : MUTATIONS)
   | "mba_ite" -> (module Mk_Mutations_Mba_ITE (O) : MUTATIONS)
   | "full" -> (module Mk_Mutations_Full (O) : MUTATIONS)
+  | "full_ite" -> (module Mk_Mutations_Full_ITE (O) : MUTATIONS)
   | "sygus" -> (module Mk_Mutations_Sygus (O) : MUTATIONS)
   | "expr_x86" -> (module Mk_Mutations_Expr_x86 (O) : MUTATIONS)
   | "full_x86" -> (module Mk_Mutations_Full_x86 (O) : MUTATIONS)

@@ -369,7 +369,7 @@ let to_synthesis_args (args : args_t) : synthesis_args =
     }
 
 let get_mutations args (module O : Oracle.ORACLE) = match args.ops with
-| "mba" | "expr" | "full" | "5" | "mba_shift" | "mba_ite" | "sygus" | "expr_ite" | "expr_x86" | "full_x86" -> Mutations.mutations_of_str (module O: Oracle.ORACLE) args.ops
+| "mba" | "expr" | "full" | "full_ite" | "5" | "mba_shift" | "mba_ite" | "sygus" | "expr_ite" | "expr_x86" | "full_x86" -> Mutations.mutations_of_str (module O: Oracle.ORACLE) args.ops
 | _ -> 
     let l = String.split_on_char ',' args.ops in
     let arr = Array.init (List.length l) (fun i -> String.trim (List.nth l i)) in

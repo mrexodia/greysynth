@@ -96,7 +96,9 @@ let () =
     [ "mba", profile false false false;
       "mba_shift", profile true false false;
       "mba_ite", profile false false true;
-      "full", profile false true false ];
+      "full", profile false true false;
+      "full_ite", profile true false true;
+      "full_ite", profile false true true ];
   require
     (B.xyntia_grammar_for_profile "mba" (profile true true true) = "mba")
     "explicit Xyntia grammar was not preserved";
