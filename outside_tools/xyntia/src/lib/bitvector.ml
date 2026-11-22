@@ -28,14 +28,15 @@ when the shift value is large by short-circuiting the computation *)
 let protected_shift f ?(is_arith = false) bv i =
   let size = size_of bv in
   if i < 0 then bv
-  else if i > size then (
-    if is_arith && Z.sign (value_of bv) < 0 then
-      ones size
-    else
-      zeros size
-  )
+  else if i >= size then
+    if is_arith && is_neg bv then max_ubv size else zeros size
   else
-    create (f (value_of bv) i) size
+    let value =
+      if is_arith && is_neg bv then
+        Z.sub (value_of bv) (Z.shift_left Z.one size)
+      else value_of bv
+    in
+    create (f value i) size
 
 let shift_left bv i = protected_shift Z.shift_left bv i
 

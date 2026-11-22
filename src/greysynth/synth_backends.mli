@@ -64,6 +64,10 @@ module type BACKEND = sig
       here, then return the synthesis function. *)
 end
 
+val xyntia_tree_to_expr : unit Xyntia_utils.Tree.t -> Sexpr.Expr.t
+(** Translate a Xyntia result without dropping width or ternary-operator
+    semantics. Exposed so the backend contract can be tested exhaustively. *)
+
 val names : string list
 (** Names of the available backends. *)
 

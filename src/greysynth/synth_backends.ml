@@ -150,40 +150,114 @@ let smtlib_literal (bv : Bitvector.t) : string =
 
 (* ── Xyntia (in-process) ───────────────────────────────────────── *)
 
+module XT = Xyntia_utils.Tree
+module XO = Xyntia_utils.Operators
+
+let same_width_binary op x y =
+  if sizeof x <> sizeof y then failwith "xyntia: binary operand widths differ";
+  binary op x y
+
+let x86_shift op x y =
+  let width = sizeof x in
+  let mask = if width = 64 then 63 else 31 in
+  same_width_binary op x
+    (same_width_binary And y (constant (Bitvector.of_int ~size:(sizeof y) mask)))
+
+(* Translate the complete Xyntia tree language, not only the small MBA grammar.
+   In particular, Xyntia's ternary division uses [concat high low] as a 2w-bit
+   numerator. Dropping [high] would silently change the synthesized function. *)
+let rec xyntia_tree_to_expr (tree : unit XT.t) : Sexpr.Expr.t =
+  let convert = xyntia_tree_to_expr in
+  match tree.node with
+  | XT.Var v -> var v.name v.sz v.name
+  | XT.Const c -> constant c.value
+  | XT.SizeMod (op, child) ->
+      let child = convert child in
+      let source = sizeof child in
+      (match op with
+      | XO.Extend width when width >= source -> unary (Uext (width - source)) child
+      | XO.Sextend width when width >= source -> unary (Sext (width - source)) child
+      | XO.Reduce width when width > 0 && width <= source ->
+          unary (Restrict { lo = 0; hi = width - 1 }) child
+      | _ -> failwith "xyntia: invalid width modifier in result")
+  | XT.Unop (op, child) ->
+      let child = convert child in
+      (match op with
+      | XO.Minus -> unary Minus child
+      | XO.Not -> unary Not child
+      | XO.Ehad -> same_width_binary Lsr child (constant (Bitvector.of_int ~size:(sizeof child) 1))
+      | XO.Arba -> same_width_binary Lsr child (constant (Bitvector.of_int ~size:(sizeof child) 4))
+      | XO.Shesh -> same_width_binary Lsr child (constant (Bitvector.of_int ~size:(sizeof child) 16))
+      | XO.Smol -> same_width_binary Lsl child (constant (Bitvector.of_int ~size:(sizeof child) 1))
+      | XO.Byteswap ->
+          let width = sizeof child in
+          if width mod 8 <> 0 then failwith "xyntia: byte swap width is not byte-aligned";
+          let bytes = width / 8 in
+          let rec build index =
+            let byte = unary (Restrict { lo = index * 8; hi = (index * 8) + 7 }) child in
+            if index = bytes - 1 then byte else binary Concat byte (build (index + 1))
+          in
+          build 0)
+  | XT.Binop (op, left, right) ->
+      let left = convert left and right = convert right in
+      (match op with
+      | XO.Add -> same_width_binary Plus left right
+      | XO.Sub -> same_width_binary Minus left right
+      | XO.Mul -> same_width_binary Mul left right
+      | XO.And -> same_width_binary And left right
+      | XO.Or -> same_width_binary Or left right
+      | XO.Xor -> same_width_binary Xor left right
+      | XO.LShift -> same_width_binary Lsl left right
+      | XO.RShiftu -> same_width_binary Lsr left right
+      | XO.RShifts -> same_width_binary Asr left right
+      | XO.RotateRight -> same_width_binary Ror left right
+      | XO.Div_x86 -> same_width_binary Udiv left right
+      | XO.SDiv_x86 -> same_width_binary Sdiv left right
+      | XO.Mod_x86 -> same_width_binary Umod left right
+      | XO.SMod_x86 -> same_width_binary Smod left right
+      | XO.LShift_x86 -> x86_shift Lsl left right
+      | XO.RShiftu_x86 -> x86_shift Lsr left right
+      | XO.RShifts_x86 -> x86_shift Asr left right
+      | XO.UMin -> ite (same_width_binary Ult left right) left right
+      | XO.UMax -> ite (same_width_binary Ugt left right) left right
+      | XO.SMin -> ite (same_width_binary Slt left right) left right
+      | XO.SMax -> ite (same_width_binary Sgt left right) left right)
+  | XT.Triop (op, first, second, third) ->
+      let first = convert first and second = convert second and third = convert third in
+      (match op with
+      | XO.ITE -> ite first second third
+      | XO.Im ->
+          let one = constant (Bitvector.ones (sizeof first)) in
+          ite (same_width_binary Eq first one) second third
+      | (XO.Div | XO.SDiv | XO.Mod | XO.SMod) as op ->
+          let width = sizeof third in
+          if sizeof first <> width || sizeof second <> width then
+            failwith "xyntia: ternary division operand widths differ";
+          let numerator = binary Concat first second in
+          let divisor =
+            unary (if op = XO.SDiv || op = XO.SMod then Sext width else Uext width) third
+          in
+          let operation =
+            match op with
+            | XO.Div -> Udiv | XO.SDiv -> Sdiv | XO.Mod -> Umod | XO.SMod -> Smod
+            | _ -> assert false
+          in
+          unary (Restrict { lo = 0; hi = width - 1 })
+            (binary operation numerator divisor))
+
 module Xyntia_backend : BACKEND = struct
   let name = "xyntia"
 
-  module T = Xyntia_utils.Tree
-  module Op = Xyntia_utils.Operators
-
-  let rec to_expr (tree : unit T.t) : Sexpr.Expr.t =
-    match tree.node with
-    | T.Var v -> var v.name v.sz v.name
-    | T.Const c -> constant c.value
-    | T.Unop (op, x) ->
-        unary
-          (match op with
-          | Op.Minus -> Minus
-          | Op.Not -> Not
-          | _ -> failwith "xyntia: unsupported unary operator in result")
-          (to_expr x)
-    | T.Binop (op, x, y) ->
-        binary
-          (match op with
-          | Op.Add -> Plus
-          | Op.Sub -> Minus
-          | Op.Mul -> Mul
-          | Op.And -> And
-          | Op.Or -> Or
-          | Op.Xor -> Xor
-          | Op.LShift -> Lsl
-          | Op.RShiftu -> Lsr
-          | Op.RShifts -> Asr
-          | _ -> failwith "xyntia: unsupported binary operator in result")
-          (to_expr x) (to_expr y)
-    | _ -> failwith "xyntia: unsupported node in result"
-
   let make json =
+    let grammar = config_string json "xyntia_grammar" ~default:"full" in
+    let valid_grammars =
+      [ "5"; "mba"; "expr"; "expr_ite"; "mba_shift"; "mba_ite"; "full";
+        "sygus"; "expr_x86"; "full_x86" ]
+    in
+    if not (List.mem grammar valid_grammars) then
+      failwith
+        (Printf.sprintf "config: invalid xyntia_grammar %S (expected one of: %s)"
+           grammar (String.concat ", " valid_grammars));
     (* "xsmir_ops": comma-separated inference rules *)
     let infrules =
       config_string json "xsmir_ops" ~default:""
@@ -192,8 +266,8 @@ module Xyntia_backend : BACKEND = struct
       |> List.map Xyntia_utils.Distance.str_to_infrule
     in
     fun p ->
-      let vars = Array.map (fun i -> T.var_of i.name i.size) p.inputs in
-      let res_var = T.var_of "res" p.output_size in
+      let vars = Array.map (fun i -> XT.var_of i.name i.size) p.inputs in
+      let res_var = XT.var_of "res" p.output_size in
       let samples =
         Array.map
           (fun s ->
@@ -210,7 +284,7 @@ module Xyntia_backend : BACKEND = struct
       let (module MU : Xyntia_utils.Mutations.MUTATIONS) =
         Xyntia_utils.Mutations.mutations_of_str
           (module O : Xyntia_utils.Oracle.ORACLE)
-          "mba"
+          grammar
       in
       let args : Xyntia.synthesis_args =
         {
@@ -230,7 +304,8 @@ module Xyntia_backend : BACKEND = struct
         }
       in
       let result = Xyntia.run (module O) (module MU) args in
-      if result.synthesis.success then Some (to_expr result.synthesis.simplified)
+      if result.synthesis.success then
+        Some (xyntia_tree_to_expr result.synthesis.simplified)
       else None
 end
 

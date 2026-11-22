@@ -34,6 +34,13 @@
  (flags (:standard -open Binsec -open Libsse -open Libterm)))
 
 (test
+ (name synth_backends_test)
+ (modules synth_backends_test)
+ (libraries greysynth.core greysynth.sample_evaluator xyntia xyntia.utils
+            binsec.smt binsec.sse.term)
+ (flags (:standard -open Binsec -open Libsse -open Libterm)))
+
+(test
  (name proof_test)
  (modules proof_test)
  (libraries greysynth.proof greysynth.utils binsec.smt binsec.sse.term yojson)

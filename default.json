@@ -6,6 +6,7 @@
   "local_extend": false,
   "local_extend_depth": 4,
   "synthesizer": "xyntia",
+  "xyntia_grammar": "full",
   "global_synthesis": false,
   "chs": true,
   "local_cache": true,

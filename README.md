@@ -110,7 +110,7 @@ working example. An optional second positional argument names the certificate.
 | `global_synthesis` | Run global (bottom-up, untruncated) synthesis. |
 | `chs` | Run CHS. |
 | `local_cache` | Reuse synthesis results for nodes with the same outhash. |
-| `synthesizer` | `xyntia`, `syntia` or `cvc5`. Backend-specific keys: `xsmir_ops` (Xyntia), `synthesizer_cmd`, `synthesizer_script`. |
+| `synthesizer` | `xyntia`, `syntia` or `cvc5`. Backend-specific keys: `xyntia_grammar` (`full` by default), `xsmir_ops`, `synthesizer_cmd`, `synthesizer_script`. |
 | `synthesis_timeout`, `synthesis_repeat` | Per-call synthesizer timeout (s) and attempts. |
 | `add_constants_to_synthesis` | Pass the sub-tree's constants to the synthesizer. |
 | `nb_samples` | Number of input samples used by OES and synthesis. |
