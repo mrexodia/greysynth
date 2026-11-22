@@ -63,9 +63,10 @@ let chs gt best =
   while not !g_has_timedout && !horizon <= depth_of_expr !best do
     try
       check_timeout ();
+      let before = size_of_expr !best in
       best := simplify_with_horizon !horizon !c_synthesis_timeout !c_synthesis_repeat !best;
       if !c_oes && not !g_has_timedout then best := oes_quiet !best;
-      incr horizon
+      if size_of_expr !best < before then horizon := 2 else incr horizon
     with Timeout_exception -> g_has_timedout := true
   done;
   let time = Unix.gettimeofday () -. start in

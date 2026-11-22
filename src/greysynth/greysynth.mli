@@ -21,6 +21,10 @@
 
 (** GreySynth: simplification of obfuscated (MBA) expressions. *)
 
+val chs : Sexpr.Expr.t option -> Sexpr.Expr.t ref -> unit
+(** Run the configured contextual-horizon loop in place. Exposed for focused
+    regression tests and advanced pipeline integrations. *)
+
 val run : ?proof_output:string -> Sexpr.Expr.t -> string -> Sexpr.Expr.t option -> unit
 (** [run obf config_file gt] loads the JSON configuration, runs the enabled
     passes on [obf] (OES, fast simplify, global synthesis then CHS) within

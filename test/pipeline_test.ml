@@ -5,6 +5,7 @@ module C = Greysynth__Config
 module R = Greysynth__Rewrite
 module O = Greysynth__Oes
 module S = Greysynth__Synthesis
+module G = Greysynth
 module L = Greysynth__Logging
 
 let require condition message = if not condition then failwith message
@@ -254,6 +255,34 @@ let test_oes_partial_timeout () =
   require (!count = 1) "OES partial rewrite count is wrong";
   expect_same_at original result 17 29
 
+let test_chs_horizon_restart () =
+  reset ~strict:true ();
+  C.c_oes := false;
+  C.c_check_equiv := false;
+  C.c_synthesis_timeout := 1;
+  C.c_synthesis_repeat := 1;
+  let padded value = plus (plus value zero) zero in
+  let left = padded x and right = padded y in
+  let original = plus (E.binary E.Or left right) (E.binary E.And left right) in
+  let calls = ref 0 in
+  C.c_synthesizer := (fun (problem : Greysynth__Synth_backends.problem) ->
+      incr calls;
+      let input index =
+        let item = problem.inputs.(index) in
+        E.var item.name item.size item.name
+      in
+      match !calls, Array.length problem.inputs with
+      | 1, _ -> None (* force the first root attempt to miss *)
+      | _, 1 -> Some (input 0)
+      | _, 2 -> Some (plus (input 0) (input 1))
+      | _ -> None);
+  let best = ref original in
+  G.chs (Some original) best;
+  require (U.size_of_expr !best = 3)
+    "CHS did not revisit a small horizon after child reductions";
+  let verdict, _, _ = U.are_equivalent original !best (Some 5) in
+  require (verdict = U.Yes) "CHS horizon restart changed semantics"
+
 let solver_available =
   Option.is_some Libsolver.bitwuzla_cxx
   || Option.is_some Libsolver.bitwuzla_c
@@ -384,7 +413,8 @@ let () =
   print_endline "pipeline_test: 20 solver-independent regressions passed";
   if solver_available then (
     test_context_proof ();
-    print_endline "pipeline_test: contextual SMT proof regression passed")
+    test_chs_horizon_restart ();
+    print_endline "pipeline_test: contextual proof and horizon restart passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "pipeline_test requires an installed SMT solver"
   else print_endline "pipeline_test: contextual SMT proof skipped (no solver installed)"

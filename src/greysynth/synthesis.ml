@@ -419,8 +419,8 @@ let simplify_with_horizon (horizon : int) synthesis_timeout synthesis_repeat
             | _ -> processed_node
           in
 
-          if !c_local_cache then
-            Hashtbl.add chs_cache_per_horizon outhash simplified_node;
+          if !c_local_cache && not !g_has_timedout then
+            Hashtbl.replace chs_cache_per_horizon outhash simplified_node;
           simplified_node
     with Timeout_exception ->
       g_has_timedout := true;

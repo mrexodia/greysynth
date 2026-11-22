@@ -364,14 +364,17 @@ let relational_pass (expr : Sexpr.Expr.t) : Sexpr.Expr.t * int =
                  | Some previous when size previous <= size g -> ()
                  | _ -> best := Some g
              in
-             let rec invert_kids node =
-               consider (Sexpr.Expr.unary Not node);
-               match node with
-               | Sexpr.Expr.Unary r -> invert_kids r.x
-               | Sexpr.Expr.Binary r -> invert_kids r.x; invert_kids r.y
-               | _ -> ()
+             let rec invert_kids node depth =
+               if depth <= !c_local_extend_depth then (
+                 consider (Sexpr.Expr.unary Not node);
+                 match node with
+                 | Sexpr.Expr.Unary r -> invert_kids r.x (depth + 1)
+                 | Sexpr.Expr.Binary r ->
+                     invert_kids r.x (depth + 1);
+                     invert_kids r.y (depth + 1)
+                 | _ -> ())
              in
-             invert_kids n;
+             invert_kids n 0;
              iter_relational_pairs (repeated_descendant_reps n) (fun op a b ->
                  check_timeout ();
                  if Sexpr.Expr.sizeof a = Sexpr.Expr.sizeof b then
