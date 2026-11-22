@@ -68,13 +68,14 @@ conversion errors.
 
 - [ ] Centralize configuration parsing, defaults, validation, and reporting.
 - [x] Implement `balanced_tree` and `sampling_strategy`.
-- [ ] Include normalization and the selected cost model in the pipeline summary.
+- [x] Include normalization and the selected cost model in pipeline summaries and
+  emit all cost models in simplifier/checker/audit reports.
 - [x] Reset all metric state for each library/API invocation.
 - [x] Populate before/after semantic-class metrics correctly.
 - [x] Record backend no-result, timeout, process error, ill-formed result, and
   post-validation rejection separately.
-- [ ] Split post-validation rejection into not-smaller, sample-refuted,
-  SMT-refuted, and SMT-inconclusive outcomes.
+- [x] Split post-validation rejection into width mismatch, not-smaller,
+  sample-refuted, SMT-refuted, and SMT-inconclusive outcomes.
 - [x] Memoize repeated structural nodes in cost/depth and OES traversals.
 
 Acceptance: changing a reported option changes behavior in a targeted test; two
