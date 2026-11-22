@@ -103,7 +103,8 @@ working example. An optional second positional argument names the certificate.
 | Key | Meaning |
 |---|---|
 | `normalization` | Run deterministic, proof-gated bitvector and local linear-MBA normalization before OES. Defaults to true; false permits comparison with the earlier pipeline. |
-| `ac_normalization` | Enable experimental associative coefficient collection and Boolean cancellation. Disabled by default until whole-pipeline extraction avoids local-greedy regressions. |
+| `ac_normalization` | Enable experimental associative coefficient collection and Boolean cancellation. |
+| `normalization_portfolio` | Run baseline and AC normalization from the same input and retain the cheaper proved branch. Disabled by default because it spends additional proof budget. |
 | `cost_model` | Candidate-selection objective: historical `legacy`, conversion-counting `paper_ast`, approximate `instruction`, or `readability`. Reports include every cost. |
 | `oes` | Run OES after normalization, after each CHS horizon, and once at the end. |
 | `oes_extended`, `local_extend`, `local_extend_depth` | Extra vocabulary added to the OES cache. |

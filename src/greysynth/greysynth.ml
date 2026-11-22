@@ -50,6 +50,26 @@ let check_equiv gt ~tag (verdict : equiv_t ref) e =
          verdict := Timeout)
   | _ -> verdict := Disabled
 
+let run_normalization expression =
+  if not !c_normalization_portfolio then Normalization.run expression
+  else
+    let configured = !c_ac_normalization in
+    Fun.protect
+      ~finally:(fun () -> c_ac_normalization := configured)
+      (fun () ->
+        c_ac_normalization := false;
+        let baseline = Normalization.run expression in
+        if !g_has_timedout then baseline
+        else (
+          c_ac_normalization := true;
+          let alternative = Normalization.run expression in
+          let baseline_cost = size_of_expr baseline and alternative_cost = size_of_expr alternative in
+          if alternative_cost < baseline_cost
+             || (alternative_cost = baseline_cost
+                 && Sexpr.Expr.compare alternative baseline < 0)
+          then alternative
+          else baseline))
+
 (* One OES pass, without the logging and stats of [oes_with_logs]. *)
 let oes_quiet e = fst (linear_simplify e)
 
@@ -65,7 +85,7 @@ let chs gt best =
       check_timeout ();
       let before = size_of_expr !best in
       best := simplify_with_horizon !horizon !c_synthesis_timeout !c_synthesis_repeat !best;
-      if !c_normalization && not !g_has_timedout then best := Normalization.run !best;
+      if !c_normalization && not !g_has_timedout then best := run_normalization !best;
       if !c_oes && not !g_has_timedout then best := oes_quiet !best;
       if size_of_expr !best < before then horizon := 2 else incr horizon
     with Timeout_exception -> g_has_timedout := true
@@ -83,7 +103,7 @@ let run_passes gt obf =
   let best = ref obf in
   (try
      if !c_normalization && not !g_has_timedout then (
-       best := Normalization.run !best;
+       best := run_normalization !best;
        check_equiv gt ~tag:"normalization" log_normalization_is_equiv !best);
      if !c_oes && not !g_has_timedout then (
        best := oes_with_logs !best;
@@ -277,7 +297,7 @@ let run ?proof_output obf config gt =
   let result = run_passes reference obf in
   let result =
     if !c_normalization && not !g_has_timedout then
-      try Normalization.run result with Timeout_exception ->
+      try run_normalization result with Timeout_exception ->
         g_has_timedout := true;
         result
     else result

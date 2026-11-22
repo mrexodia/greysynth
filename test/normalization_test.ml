@@ -5,6 +5,7 @@ module U = Greysynth_utils.Utils
 module C = Greysynth__Config
 module R = Greysynth__Rewrite
 module N = Greysynth__Normalization
+module G = Greysynth
 
 let require condition message = if not condition then failwith message
 let c width value = E.constant (Bitvector.of_int ~size:width value)
@@ -22,6 +23,7 @@ let reset ?(strict = true) () =
   C.c_nb_samples := 100;
   U.cost_model := U.Legacy;
   C.c_ac_normalization := false;
+  C.c_normalization_portfolio := false;
   C.c_reject_non_equiv_simplifications := strict;
   C.c_equiv_timeout := 5;
   C.g_total_timeout := 0.;
@@ -133,6 +135,27 @@ let test_associative_canonicalization () =
       "coefficient collection", plus (plus x x) x, 3;
       "idempotent conjunction", band (band x y) x, 3 ]
 
+let test_normalization_portfolio () =
+  reset ();
+  C.c_normalization_portfolio := true;
+  let x = var 64 "x" and y = var 64 "y" and z = var 64 "z" in
+  let w = var 64 "w" and a = var 64 "a" and b = var 64 "b" in
+  let carry p q = plus (bxor p q) (mul (c 64 2) (band p q)) in
+  let original =
+    minus
+      (minus
+         (minus
+            (minus
+               (minus (plus (plus (carry x y) (carry z w)) (plus (bor a b) (band a b))) x)
+               y)
+            z)
+         w)
+      a
+  in
+  let result = G.run_normalization original in
+  require (E.is_equal result b) "normalization portfolio did not select the best branch";
+  require (!(R.proved) > 0) "normalization portfolio bypassed local proofs"
+
 let test_nonlinear_is_opaque () =
   reset ();
   let x = var 8 "x" and y = var 8 "y" in
@@ -163,8 +186,9 @@ let () =
     test_peepholes ();
     test_linear_mba ();
     test_associative_canonicalization ();
+    test_normalization_portfolio ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 22 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 23 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"

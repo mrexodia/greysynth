@@ -21,6 +21,10 @@
 
 (** GreySynth: simplification of obfuscated (MBA) expressions. *)
 
+val run_normalization : Sexpr.Expr.t -> Sexpr.Expr.t
+(** Run the configured deterministic normalizer, optionally racing the
+    baseline and AC variants and returning the cheaper proved result. *)
+
 val chs : Sexpr.Expr.t option -> Sexpr.Expr.t ref -> unit
 (** Run the configured contextual-horizon loop in place. Exposed for focused
     regression tests and advanced pipeline integrations. *)

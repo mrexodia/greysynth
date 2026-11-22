@@ -1,6 +1,7 @@
 {
   "normalization": true,
   "ac_normalization": false,
+  "normalization_portfolio": false,
   "cost_model": "legacy",
   "oes": true,
   "oes_extended": false,

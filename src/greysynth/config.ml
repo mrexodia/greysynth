@@ -35,6 +35,7 @@ let string_of_sampling = function
 (* ── Config knobs ──────────────────────────────────────────────── *)
 let c_normalization = ref true
 let c_ac_normalization = ref false
+let c_normalization_portfolio = ref false
 let c_oes = ref false
 let c_oes_extended = ref false
 let c_oes_fixedpoint = ref false
@@ -90,6 +91,10 @@ let load_config_from_json json_file : unit =
        | v -> to_bool v);
     (c_ac_normalization :=
        match json |> member "ac_normalization" with
+       | `Null -> false
+       | v -> to_bool v);
+    (c_normalization_portfolio :=
+       match json |> member "normalization_portfolio" with
        | `Null -> false
        | v -> to_bool v);
     c_oes := json |> member "oes" |> to_bool;

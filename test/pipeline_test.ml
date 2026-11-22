@@ -23,6 +23,7 @@ let reset ?(strict = false) () =
   C.c_reject_non_equiv_simplifications := strict;
   C.c_equiv_timeout := 5;
   C.c_ac_normalization := false;
+  C.c_normalization_portfolio := false;
   C.c_oes_extended := false;
   C.c_local_extend := false;
   C.c_local_extend_depth := 8;
