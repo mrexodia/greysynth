@@ -26,11 +26,33 @@ let reset ?(strict = true) () =
   C.c_ac_normalization := false;
   C.c_normalization_portfolio := false;
   C.c_normalization_max_atoms := 6;
+  C.c_mba_oracle := "none";
+  C.c_mba_oracle_command := "";
+  C.c_mba_oracle_timeout := 2;
+  C.c_mba_oracle_calls := 4;
   C.c_reject_non_equiv_simplifications := strict;
   C.c_equiv_timeout := 5;
   C.g_total_timeout := 0.;
   C.g_has_timedout := false;
   R.reset ()
+
+let test_external_oracle_adapter () =
+  reset ();
+  let script = Filename.temp_file "greysynth-oracle-" ".sh" in
+  Fun.protect
+    ~finally:(fun () -> try Sys.remove script with Sys_error _ -> ())
+    (fun () ->
+      Out_channel.with_open_text script (fun channel ->
+          output_string channel "#!/bin/sh\nprintf 'v0\\n'\n");
+      Unix.chmod script 0o700;
+      C.c_mba_oracle := "rumba";
+      C.c_mba_oracle_command := script;
+      let x = var 64 "oracle_x" in
+      let source = plus x (c 64 0) in
+      match N.oracle_candidate source with
+      | Some candidate ->
+          require (E.is_equal candidate x) "MBA oracle variable mapping changed"
+      | None -> failwith "MBA oracle adapter returned no candidate")
 
 let test_fail_closed () =
   reset ();
@@ -256,6 +278,7 @@ let solver_available =
   || Option.is_some Libsolver.z3
 
 let () =
+  test_external_oracle_adapter ();
   test_fail_closed ();
   test_metric_minimum ();
   test_partial_timeout ();

@@ -725,10 +725,88 @@ let rec product_partition_candidate expression =
               | _ -> None))
   | _ -> None
 
+let oracle_candidate expression =
+  if !c_mba_oracle = "none" then None
+  else
+    let width = E.sizeof expression in
+    let variables = Hashtbl.create 16 in
+    let rec inspect = function
+      | E.Var variable when variable.size = width ->
+          Hashtbl.replace variables (variable.name, variable.size) (); true
+      | E.Cst value -> Bitvector.size_of value = width
+      | E.Unary { f = (E.Not | E.Minus); x; _ } -> inspect x
+      | E.Binary { f = (E.Plus | E.Minus | E.Mul | E.And | E.Or | E.Xor);
+                   x; y; _ } -> inspect x && inspect y
+      | _ -> false
+    in
+    if not (inspect expression) then None
+    else
+      let variables =
+        Hashtbl.fold (fun variable () result -> variable :: result) variables []
+        |> List.sort Stdlib.compare |> Array.of_list
+      in
+      let positions = Hashtbl.create (Array.length variables) in
+      Array.iteri (fun index variable -> Hashtbl.add positions variable index) variables;
+      let rec rename = function
+        | E.Var variable ->
+            let index = Hashtbl.find positions (variable.name, variable.size) in
+            E.var (Printf.sprintf "v%d" index) variable.size
+              (Printf.sprintf "v%d" index)
+        | E.Unary { f; x; _ } -> E.unary f (rename x)
+        | E.Binary { f; x; y; _ } -> E.binary f (rename x) (rename y)
+        | node -> node
+      in
+      let rendered = Greysynth_utils.Utils.pp ~show_size:false (rename expression) in
+      let command =
+        match !c_mba_oracle with
+        | "rumba" ->
+            Printf.sprintf "%s --n %d %s" !c_mba_oracle_command width
+              (Filename.quote rendered)
+        | "cobra" ->
+            Printf.sprintf "%s --mba %s --bitwidth %d" !c_mba_oracle_command
+              (Filename.quote rendered) width
+        | _ -> assert false
+      in
+      try
+        let output =
+          Synth_backends.run_command ~timeout:!c_mba_oracle_timeout command
+          |> String.split_on_char '\n'
+          |> List.filter (fun line -> String.trim line <> "")
+          |> List.rev
+        in
+        match output with
+        | [] -> None
+        | answer :: _ ->
+            let parsed = String_to_sexpr.parse ~default_size:width (String.trim answer) in
+            let rec restore = function
+              | E.Var variable when String.length variable.name >= 2
+                                  && variable.name.[0] = 'v' ->
+                  let index =
+                    int_of_string
+                      (String.sub variable.name 1 (String.length variable.name - 1))
+                  in
+                  let name, size = variables.(index) in
+                  if variable.size <> size then failwith "MBA oracle changed variable width";
+                  E.var name size name
+              | E.Var _ -> failwith "MBA oracle returned an unknown variable"
+              | E.Unary { f; x; _ } -> E.unary f (restore x)
+              | E.Binary { f; x; y; _ } -> E.binary f (restore x) (restore y)
+              | E.Ite _ | E.Load _ -> failwith "MBA oracle returned an unsupported node"
+              | node -> node
+            in
+            let candidate = restore parsed in
+            if E.sizeof candidate = width then Some candidate else None
+      with
+      | Config.Timeout_exception -> raise Config.Timeout_exception
+      | exn ->
+          Logging._log_warn "mba-oracle" "%s" (Printexc.to_string exn);
+          None
+
 let run expression =
   let results = Nodes.create 128 in
   let sizes = Nodes.create 128 in
   let constants = Sample_evaluator.make 1 in
+  let oracle_calls = ref 0 in
   let rec cost expression =
     match Nodes.find_opt sizes expression with
     | Some value -> value
@@ -745,7 +823,7 @@ let run expression =
         Nodes.add sizes expression value;
         value
   in
-  let rec visit original =
+  let rec visit ?(allow_oracle = true) original =
     if !g_has_timedout then original
     else match Nodes.find_opt results original with
     | Some result -> result
@@ -761,6 +839,21 @@ let run expression =
                  let c = visit c in let t = visit t in let e = visit e in E.ite c t e
              | _ -> original);
            if not !g_has_timedout then (
+             let oracle =
+               if allow_oracle && !oracle_calls < !c_mba_oracle_calls
+                  && cost !current >= 5 && !c_mba_oracle <> "none"
+               then (
+                 incr oracle_calls;
+                 match oracle_candidate !current with
+                 | Some candidate when cost candidate < cost !current
+                                      && Rewrite.accepts ~pass:"mba-oracle"
+                                           !current candidate -> Some candidate
+                 | _ -> None)
+               else None
+             in
+             match oracle with
+             | Some candidate -> current := candidate; current := visit ~allow_oracle:false candidate
+             | None ->
              let decomposed =
                match product_partition_candidate !current with
                | Some (candidate, equalities)

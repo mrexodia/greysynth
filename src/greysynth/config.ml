@@ -37,6 +37,10 @@ let c_normalization = ref true
 let c_ac_normalization = ref false
 let c_normalization_portfolio = ref false
 let c_normalization_max_atoms = ref 6
+let c_mba_oracle = ref "none"
+let c_mba_oracle_command = ref ""
+let c_mba_oracle_timeout = ref 2
+let c_mba_oracle_calls = ref 4
 let c_oes = ref false
 let c_oes_extended = ref false
 let c_oes_fixedpoint = ref false
@@ -110,6 +114,20 @@ let load_config_from_json json_file : unit =
        | v -> to_int v);
     if !c_normalization_max_atoms < 1 || !c_normalization_max_atoms > 10 then
       failwith "config: normalization_max_atoms must be between 1 and 10";
+    (c_mba_oracle :=
+       match json |> member "mba_oracle" with `Null -> "none" | v -> to_string v);
+    if not (List.mem !c_mba_oracle [ "none"; "rumba"; "cobra" ]) then
+      failwith "config: mba_oracle must be none, rumba, or cobra";
+    (c_mba_oracle_command :=
+       match json |> member "mba_oracle_command" with `Null -> "" | v -> to_string v);
+    (c_mba_oracle_timeout :=
+       match json |> member "mba_oracle_timeout" with `Null -> 2 | v -> to_int v);
+    (c_mba_oracle_calls :=
+       match json |> member "mba_oracle_calls" with `Null -> 4 | v -> to_int v);
+    if !c_mba_oracle_timeout <= 0 || !c_mba_oracle_calls < 0 then
+      failwith "config: MBA oracle timeout must be positive and calls nonnegative";
+    if !c_mba_oracle <> "none" && !c_mba_oracle_command = "" then
+      failwith "config: mba_oracle_command is required when an MBA oracle is enabled";
     c_oes := json |> member "oes" |> to_bool;
     (c_oes_extended :=
        match json |> member "oes_extended" with
