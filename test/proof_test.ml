@@ -14,6 +14,10 @@ let certificate original candidate edges =
   let builder = P.create original in
   List.iter (fun (left, right) -> P.record builder ~pass:"test" left right) edges;
   P.finish builder candidate
+let ring_certificate original candidate =
+  let builder = P.create original in
+  P.record_ring builder ~pass:"ring-test" original candidate;
+  P.finish builder candidate
 let update name value = function
   | `Assoc fields -> `Assoc ((name, value) :: List.remove_assoc name fields)
   | _ -> failwith "object expected"
@@ -62,7 +66,32 @@ let () =
     E.unary (E.Uext 8) x; E.unary (E.Sext 8) x;
     E.restrict ~lo:2 ~hi:5 x; E.ite (c 1 1) x y;
     c 128 (-1); var "x!1" 16; var "with\000nul" 32 ];
-  Printf.printf "proof_test: typed DAG, endpoint binding and incomplete-derivation regressions passed\n";
+  let rx = var "rx" 64 and ry = var "ry" 64 in
+  let factor = E.binary E.And rx ry in
+  let k1 = c 64 0x35 and k2 = c 64 0x17 in
+  let ring_lhs = E.binary E.Plus (E.binary E.Mul k1 factor)
+      (E.binary E.Mul k2 factor) in
+  let ring_rhs = E.binary E.Mul (E.binary E.Plus k1 k2) factor in
+  let ring_report = P.verify ~original:ring_lhs ~candidate:ring_rhs
+      (ring_certificate ring_lhs ring_rhs) in
+  expect "proved_compositional" ring_report;
+  require (field "ring_proofs" ring_report = `Int 1) "ring proof was not reported";
+  let overflow_lhs = E.binary E.Plus (c 64 (-1)) (c 64 1) in
+  let overflow_rhs = c 64 0 in
+  expect "proved_compositional"
+    (P.verify ~original:overflow_lhs ~candidate:overflow_rhs
+       (ring_certificate overflow_lhs overflow_rhs));
+  let invalid_rhs = E.binary E.Mul (E.binary E.Plus k1 (c 64 1)) factor in
+  expect "error"
+    (P.verify ~original:ring_lhs ~candidate:invalid_rhs
+       (ring_certificate ring_lhs invalid_rhs));
+  let factors = List.init 17 (fun _ -> rx) in
+  let left_degree = List.fold_left (E.binary E.Mul) (List.hd factors) (List.tl factors) in
+  let right_degree = List.fold_right (E.binary E.Mul) (List.tl factors) (List.hd factors) in
+  expect "error"
+    (P.verify ~original:left_degree ~candidate:right_degree
+       (ring_certificate left_degree right_degree));
+  Printf.printf "proof_test: typed DAG, ring kernel, endpoint binding and incomplete-derivation regressions passed\n";
   if not available then (
     if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
       failwith "proof_test: solver required but unavailable";
@@ -110,4 +139,23 @@ let () =
     require (verdict = U.No) "abstraction variables must be fresh";
     let verdict, _ = P.prove_equality ~timeout:0. n1 n2 in
     require (verdict = U.Timeout) "exhausted proof budget must not imply equivalence";
-    Printf.printf "proof_test: fresh SMT replay, abstraction, transitivity and congruence regressions passed\n")
+    Random.init 2027;
+    List.iter
+      (fun width ->
+        let a = var ("ra" ^ string_of_int width) width in
+        let b = var ("rb" ^ string_of_int width) width in
+        let opaque = E.binary E.Xor a b in
+        for index = 0 to 9 do
+          let k1 = c width (Random.bits ()) and k2 = c width (Random.bits ()) in
+          let left = E.binary E.Mul k1 (E.binary E.Plus opaque k2) in
+          let right = E.binary E.Plus (E.binary E.Mul k1 opaque)
+              (E.binary E.Mul k1 k2) in
+          let report = P.verify ~original:left ~candidate:right
+              (ring_certificate left right) in
+          expect "proved_compositional" report;
+          let verdict, _, _ = U.are_equivalent left right (Some 2) in
+          require (verdict = U.Yes)
+            (Printf.sprintf "ring/SMT disagreement at width %d case %d" width index)
+        done)
+      [ 8; 16; 32; 64 ];
+    Printf.printf "proof_test: fresh SMT replay, abstraction, ring cross-checks, transitivity and congruence regressions passed\n")

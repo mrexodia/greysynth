@@ -19,7 +19,8 @@ type graph = {
   intern : (int * shape, int) Hashtbl.t;
   expressions : (E.t, int) Hashtbl.t;
 }
-type edge = { left : int; right : int; pass : string }
+type proof_rule = Smt | Ring_mod2w
+type edge = { left : int; right : int; pass : string; rule : proof_rule }
 type builder = {
   graph : graph;
   original : int;
@@ -178,7 +179,7 @@ let restore builder edges =
         (min edge.left edge.right, max edge.left edge.right) ())
     edges
 
-let record builder ~pass left right =
+let record_with_rule builder ~pass ~rule left right =
   let left = of_expr builder.graph left in
   let right = of_expr builder.graph right in
   if (node builder.graph left).width <> (node builder.graph right).width then
@@ -186,7 +187,13 @@ let record builder ~pass left right =
   let key = min left right, max left right in
   if left <> right && not (Hashtbl.mem builder.edge_set key) then (
     Hashtbl.add builder.edge_set key ();
-    builder.edges <- {left; right; pass} :: builder.edges)
+    builder.edges <- { left; right; pass; rule } :: builder.edges)
+
+let record builder ~pass left right =
+  record_with_rule builder ~pass ~rule:Smt left right
+
+let record_ring builder ~pass left right =
+  record_with_rule builder ~pass ~rule:Ring_mod2w left right
 
 let ints xs = `List (List.map (fun x -> `Int x) xs)
 let node_json node =
@@ -210,7 +217,9 @@ let finish builder candidate =
       (fun id -> node_json (node builder.graph id)));
     "equalities", `List (List.rev_map (fun edge -> `Assoc [
       "lhs", `Int edge.left; "rhs", `Int edge.right;
-      "pass", `String edge.pass]) builder.edges);
+      "pass", `String edge.pass;
+      "rule", `String (match edge.rule with Smt -> "smt" | Ring_mod2w -> "ring_mod2w")
+    ]) builder.edges);
   ]
 
 (* Replace repeated complex subterms consistently by fresh typed variables.
@@ -358,7 +367,13 @@ let load certificate =
     let left = reference (J.member "lhs" json) in
     let right = reference (J.member "rhs" json) in
     if (node g left).width <> (node g right).width then fail "equality changes width";
-    {left; right; pass = "untrusted"}) encoded_edges in
+    let rule =
+      match J.member "rule" json with
+      | `Null | `String "smt" -> Smt
+      | `String "ring_mod2w" -> Ring_mod2w
+      | _ -> fail "unknown equality proof rule"
+    in
+    { left; right; pass = "untrusted"; rule }) encoded_edges in
   g, original, candidate, edges
 
 (* This small closure checker trusts only equality edges supplied by its caller.
@@ -400,10 +415,82 @@ let congruent g equalities left right =
   done;
   find left = find right
 
+module Monomial = struct
+  type t = int list
+  let compare = Stdlib.compare
+end
+
+module Polynomial = Map.Make (Monomial)
+
+exception Ring_limit
+
+let ring_equal g left right =
+  let width = (node g left).width in
+  if width <> (node g right).width then false
+  else
+    let modulus = Z.shift_left Z.one width in
+    let normalize value =
+      let value = Z.erem value modulus in
+      if Z.sign value < 0 then Z.add value modulus else value
+    in
+    let add_term monomial coefficient polynomial =
+      if List.length monomial > 16 then raise Ring_limit;
+      let coefficient = normalize coefficient in
+      let old = Option.value (Polynomial.find_opt monomial polynomial) ~default:Z.zero in
+      let value = normalize (Z.add old coefficient) in
+      let polynomial =
+        if Z.equal value Z.zero then Polynomial.remove monomial polynomial
+        else Polynomial.add monomial value polynomial
+      in
+      if Polynomial.cardinal polynomial > 4096 then raise Ring_limit;
+      polynomial
+    in
+    let add left right =
+      Polynomial.fold add_term left right
+    in
+    let neg polynomial =
+      Polynomial.fold
+        (fun monomial coefficient result -> add_term monomial (Z.neg coefficient) result)
+        polynomial Polynomial.empty
+    in
+    let mul left right =
+      Polynomial.fold
+        (fun left_monomial left_coefficient result ->
+          Polynomial.fold
+            (fun right_monomial right_coefficient result ->
+              add_term
+                (List.sort Int.compare (left_monomial @ right_monomial))
+                (Z.mul left_coefficient right_coefficient) result)
+            right result)
+        left Polynomial.empty
+    in
+    let memo = Hashtbl.create 128 in
+    let rec polynomial id =
+      match Hashtbl.find_opt memo id with
+      | Some result -> result
+      | None ->
+          let current = node g id in
+          let opaque () = Polynomial.singleton [ id ] Z.one in
+          let result =
+            match current.shape, current.expr with
+            | Value _, E.Cst value ->
+                add_term [] (Bitvector.value_of value) Polynomial.empty
+            | Unary ("bvneg", [], x), _ -> neg (polynomial x)
+            | Binary ("bvadd", x, y), _ -> add (polynomial x) (polynomial y)
+            | Binary ("bvsub", x, y), _ -> add (polynomial x) (neg (polynomial y))
+            | Binary ("bvmul", x, y), _ -> mul (polynomial x) (polynomial y)
+            | _ -> opaque ()
+          in
+          Hashtbl.add memo id result;
+          result
+    in
+    try Polynomial.equal Z.equal (polynomial left) (polynomial right)
+    with Ring_limit -> false
+
 let verify ?(timeouts = [1.]) ~original ~candidate certificate =
   let started = Unix.gettimeofday () in
   let checked = ref 0 and proved = ref 0 and unknown = ref 0 and timed_out = ref 0 in
-  let abstract = ref 0 and direct = ref 0 in
+  let abstract = ref 0 and direct = ref 0 and ring = ref 0 in
   let nodes = ref 0 and edges_count = ref 0 in
   let result verification reason = `Assoc [
     "verification", `String verification;
@@ -413,6 +500,7 @@ let verify ?(timeouts = [1.]) ~original ~candidate certificate =
     "nodes", `Int !nodes; "provided_equalities", `Int !edges_count;
     "checked_equalities", `Int !checked; "proved_equalities", `Int !proved;
     "abstract_proofs", `Int !abstract; "direct_proofs", `Int !direct;
+    "ring_proofs", `Int !ring;
     "unknown_equalities", `Int !unknown; "timeout_equalities", `Int !timed_out;
   ] in
   try
@@ -440,11 +528,19 @@ let verify ?(timeouts = [1.]) ~original ~candidate certificate =
               | (U.Unknown | U.Timeout), _ :: _ -> attempt remaining
               | _ -> verdict, method_
         in
-        let verdict, method_ = attempt timeouts in
+        let verdict, method_ =
+          match edge.rule with
+          | Ring_mod2w ->
+              if ring_equal g edge.left edge.right then U.Yes, "ring_mod2w"
+              else U.No, "ring_mod2w"
+          | Smt -> attempt timeouts
+        in
         match verdict with
         | U.Yes ->
             incr proved;
-            if method_ = "abstract" then incr abstract else incr direct;
+            if method_ = "abstract" then incr abstract
+            else if method_ = "ring_mod2w" then incr ring
+            else incr direct;
             established := edge :: !established
         | U.No -> fail "a local equality was refuted; this does not refute the final output"
         | U.Timeout -> incr timed_out

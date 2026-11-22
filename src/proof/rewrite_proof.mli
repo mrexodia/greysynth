@@ -12,6 +12,10 @@ val record : builder -> pass:string -> Sexpr.Expr.t -> Sexpr.Expr.t -> unit
 (** Record a concrete equality. Extra unused equalities are allowed; the
     verifier must derive the externally supplied final endpoints. *)
 
+val record_ring : builder -> pass:string -> Sexpr.Expr.t -> Sexpr.Expr.t -> unit
+(** [record_ring] requests exact formal commutative-ring normalization modulo
+    the common bit width. Non-ring subterms are opaque indeterminates. *)
+
 val finish : builder -> Sexpr.Expr.t -> Yojson.Basic.t
 
 val prove_equality_with_model : timeout:float -> Sexpr.Expr.t -> Sexpr.Expr.t ->

@@ -90,13 +90,16 @@ let samples_agree original candidate =
   | Timeout_exception -> raise Timeout_exception
   | _ -> false
 
-let accepts_compositional ~pass ~equalities original candidate =
+let accepts_compositional ?(ring_equalities = []) ~pass ~equalities original candidate =
   let record_equalities () =
     Option.iter
       (fun journal ->
         List.iter
           (fun (left, right) -> Rewrite_proof.record journal ~pass left right)
-          equalities)
+          equalities;
+        List.iter
+          (fun (left, right) -> Rewrite_proof.record_ring journal ~pass left right)
+          ring_equalities)
       !journal
   in
   if Sexpr.Expr.sizeof original <> Sexpr.Expr.sizeof candidate then (
@@ -134,6 +137,9 @@ let accepts_compositional ~pass ~equalities original candidate =
       else
       let proof = Rewrite_proof.create original in
       List.iter (fun (left, right) -> Rewrite_proof.record proof ~pass left right) equalities;
+      List.iter
+        (fun (left, right) -> Rewrite_proof.record_ring proof ~pass left right)
+        ring_equalities;
       let certificate = Rewrite_proof.finish proof candidate in
       let report =
         Rewrite_proof.verify ~timeouts:[ float_of_int !c_equiv_timeout ]
