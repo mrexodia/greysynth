@@ -51,6 +51,52 @@ let reset () =
   Hashtbl.clear proof_budgets;
   journal := None
 
+let samples_agree original candidate =
+  let agrees bank =
+    bank.Sample_evaluator.node_to_outhash original
+    = bank.Sample_evaluator.node_to_outhash candidate
+  in
+  try agrees !evaluator && agrees !holdout
+  with
+  | Timeout_exception -> raise Timeout_exception
+  | _ -> false
+
+let accepts_compositional ~pass ~equalities original candidate =
+  if
+    Sexpr.Expr.sizeof original <> Sexpr.Expr.sizeof candidate
+    || size_of_expr candidate >= size_of_expr original
+  then false
+  else (
+    check_timeout ();
+    incr checked;
+    if not (samples_agree original candidate) then (
+      incr sample_rejections;
+      false)
+    else
+      let proof = Rewrite_proof.create original in
+      List.iter (fun (left, right) -> Rewrite_proof.record proof ~pass left right) equalities;
+      let certificate = Rewrite_proof.finish proof candidate in
+      let report =
+        Rewrite_proof.verify ~timeouts:[ float_of_int !c_equiv_timeout ]
+          ~original ~candidate certificate
+      in
+      let open Yojson.Basic.Util in
+      match member "verification" report |> to_string_option with
+      | Some "proved_compositional" ->
+          incr proved;
+          Option.iter
+            (fun journal ->
+              List.iter
+                (fun (left, right) -> Rewrite_proof.record journal ~pass left right)
+                equalities)
+            !journal;
+          true
+      | _ ->
+          (match member "equiv" report |> to_string_option with
+          | Some "no" -> incr disproved
+          | _ -> incr inconclusive);
+          false)
+
 let accepts ~pass original candidate =
   if
     Sexpr.Expr.sizeof original <> Sexpr.Expr.sizeof candidate
@@ -59,17 +105,7 @@ let accepts ~pass original candidate =
   else (
     check_timeout ();
     incr checked;
-    let agrees bank =
-      bank.Sample_evaluator.node_to_outhash original
-      = bank.Sample_evaluator.node_to_outhash candidate
-    in
-    let samples_match =
-      try agrees !evaluator && agrees !holdout
-      with
-      | Timeout_exception -> raise Timeout_exception
-      | _ -> false
-    in
-    if not samples_match then (
+    if not (samples_agree original candidate) then (
       incr sample_rejections;
       Logging._log_warn pass "discarding a rewrite that fails validation samples";
       false)

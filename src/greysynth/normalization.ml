@@ -492,6 +492,63 @@ let linear_candidates cost expression =
     !results
   with Too_complex -> []
 
+(* A first proof-decomposed polynomial identity. The direct 64-bit obligation
+   routinely times out because it contains multiplication. The local Boolean
+   partitions and distributive ring steps below each prove quickly, while the
+   certificate checker derives the endpoints through congruence/transitivity. *)
+let product_partition_candidate expression =
+  let same = E.is_equal in
+  let commutative op left right = function
+    | E.Binary { f; x; y; _ } when f = op ->
+        (same x left && same y right) || (same x right && same y left)
+    | _ -> false
+  in
+  let product left right = commutative E.Mul left right in
+  let union left right = commutative E.Or left right in
+  let try_order first second =
+    match first with
+    | E.Binary { f = E.Mul; x = factor; y = other; _ } ->
+        let try_factors m1 union_term =
+          match m1 with
+          | E.Binary { f = E.And; x; y; _ } when union x y union_term ->
+              let m2 = E.binary E.And x (E.unary E.Not y) in
+              let m3 = E.binary E.And (E.unary E.Not x) y in
+              if not (product m2 m3 second) then None
+              else
+                let add = E.binary E.Plus and mul = E.binary E.Mul in
+                let candidate = mul x y in
+                let x_parts = add m1 m2 and y_parts = add m1 m3 in
+                let all_parts = add (add m1 m2) m3 in
+                let left0 = mul m1 all_parts in
+                let left1 = add (mul m1 (add m1 m2)) (mul m1 m3) in
+                let left2 = add (add (mul m1 m1) (mul m1 m2)) (mul m1 m3) in
+                let expanded_left = add left2 (mul m2 m3) in
+                let right0 = mul x_parts y_parts in
+                let right1 = add (mul x_parts m1) (mul x_parts m3) in
+                let expanded_right =
+                  add (add (mul m1 m1) (mul m1 m2))
+                    (add (mul m1 m3) (mul m2 m3))
+                in
+                Some
+                  (candidate,
+                   [ x, x_parts; y, y_parts; union_term, all_parts;
+                     left0, left1; mul m1 (add m1 m2), add (mul m1 m1) (mul m1 m2);
+                     right0, right1; mul x_parts m1, add (mul m1 m1) (mul m2 m1);
+                     mul x_parts m3, add (mul m1 m3) (mul m2 m3);
+                     mul m2 m1, mul m1 m2;
+                     expanded_left, expanded_right ])
+          | _ -> None
+        in
+        (match try_factors factor other with
+        | Some result -> Some result
+        | None -> try_factors other factor)
+    | _ -> None
+  in
+  match expression with
+  | E.Binary { f = E.Plus; x; y; _ } ->
+      (match try_order x y with Some result -> Some result | None -> try_order y x)
+  | _ -> None
+
 let run expression =
   let results = Nodes.create 128 in
   let sizes = Nodes.create 128 in
@@ -544,16 +601,28 @@ let run expression =
                  let c = visit c in let t = visit t in let e = visit e in E.ite c t e
              | _ -> original);
            if not !g_has_timedout then (
-             let candidates = peepholes constants.eval !current
-                 @ (if !c_ac_normalization then canonical_candidates !current else [])
-                 @ (if cost !current >= 4 then linear_candidates cost !current else []) in
-             let candidates = List.filter (fun candidate -> cost candidate < cost !current) candidates in
-             let candidates = List.sort_uniq (fun a b ->
-                 let order = Int.compare (cost a) (cost b) in
-                 if order = 0 then E.compare a b else order) candidates in
-             match List.find_opt (Rewrite.accepts ~pass:"normalize" !current) candidates with
+             let decomposed =
+               match product_partition_candidate !current with
+               | Some (candidate, equalities)
+                 when cost candidate < cost !current
+                      && Rewrite.accepts_compositional ~pass:"polynomial"
+                           ~equalities !current candidate ->
+                   Some candidate
+               | _ -> None
+             in
+             match decomposed with
              | Some candidate -> current := candidate; current := visit candidate
-             | None -> ())
+             | None ->
+                 let candidates = peepholes constants.eval !current
+                     @ (if !c_ac_normalization then canonical_candidates !current else [])
+                     @ (if cost !current >= 4 then linear_candidates cost !current else []) in
+                 let candidates = List.filter (fun candidate -> cost candidate < cost !current) candidates in
+                 let candidates = List.sort_uniq (fun a b ->
+                     let order = Int.compare (cost a) (cost b) in
+                     if order = 0 then E.compare a b else order) candidates in
+                 match List.find_opt (Rewrite.accepts ~pass:"normalize" !current) candidates with
+                 | Some candidate -> current := candidate; current := visit candidate
+                 | None -> ())
          with Timeout_exception -> g_has_timedout := true);
         Nodes.replace results original !current;
         !current
