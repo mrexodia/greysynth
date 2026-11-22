@@ -30,6 +30,17 @@ open Config
 open Sexpr.Expr
 open Sample_evaluator
 
+let record_semantics table expr =
+  let rec visit node =
+    Greysynth_utils.Utils.increment_counter table (!evaluator.node_to_outhash node);
+    match node with
+    | Unary r -> visit r.x
+    | Binary r -> visit r.x; visit r.y
+    | Ite r -> visit r.c; visit r.t; visit r.e
+    | _ -> ()
+  in
+  visit expr
+
 (* OES vocabulary extension *)
 let extend_node (n : Sexpr.Expr.t) : Sexpr.Expr.t list =
   let sz = Sexpr.Expr.sizeof n in
@@ -178,8 +189,6 @@ let linear_simplify ?(seed = true) (expr : Sexpr.Expr.t) =
   let rec first_pass n =
     check_timeout ();
     let outhash = !evaluator.node_to_outhash n in
-    Greysynth_utils.Utils.increment_counter log_linear_number_unique_hash_before
-      outhash;
     (match !evaluator.is_node_constant n with
     | Some cst ->
         (* [n] evaluates to a constant on every sample: cache the literal *)
@@ -256,6 +265,9 @@ let oes_single_pass (expr : Sexpr.Expr.t) =
 
   log_linear_vocab_injected := 0;
   log_local_extend_injected := 0;
+  Hashtbl.clear log_linear_number_unique_hash_before;
+  Hashtbl.clear log_linear_number_unique_hash_after;
+  record_semantics log_linear_number_unique_hash_before expr;
   let start_time = Unix.gettimeofday () in
   let ret, nb_simplifications = linear_simplify expr in
   let end_time = Unix.gettimeofday () in
@@ -269,6 +281,8 @@ let oes_single_pass (expr : Sexpr.Expr.t) =
   log_linear_time := end_time -. start_time;
   log_linear_number_simplifications := !nb_simplifications;
   log_linear_size_after := Greysynth_utils.Utils.size_of_expr ret;
+  record_semantics log_linear_number_unique_hash_after ret;
+  tmp_uniq_semantic := Hashtbl.length log_linear_number_unique_hash_after;
   ret
 
 (* OES entry point. Runs a single pass, or — when [c_oes_fixedpoint] is set —
@@ -410,12 +424,17 @@ let fast_simplify (expr : Sexpr.Expr.t) : Sexpr.Expr.t =
 let fast_simplify_with_logs (expr : Sexpr.Expr.t) : Sexpr.Expr.t =
   let size = Greysynth_utils.Utils.size_of_expr in
   _log "OES" "running fast_simplify (size=%d)" (size expr);
+  Hashtbl.clear log_linear_number_unique_hash_before;
+  Hashtbl.clear log_linear_number_unique_hash_after;
+  record_semantics log_linear_number_unique_hash_before expr;
   let start_time = Unix.gettimeofday () in
   let ret, base_simpl, relational = fast_simplify_counted expr in
   let end_time = Unix.gettimeofday () in
   log_linear_time := end_time -. start_time;
   log_linear_number_simplifications := base_simpl + relational;
   log_linear_size_after := size ret;
+  record_semantics log_linear_number_unique_hash_after ret;
+  tmp_uniq_semantic := Hashtbl.length log_linear_number_unique_hash_after;
   _log_dim "OES"
     "fast_simplify: %d base + %d relational replacement(s) (size=%d, %.3fs)"
     base_simpl relational (size ret) (end_time -. start_time);

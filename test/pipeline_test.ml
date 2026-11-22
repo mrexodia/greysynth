@@ -5,6 +5,7 @@ module C = Greysynth__Config
 module R = Greysynth__Rewrite
 module O = Greysynth__Oes
 module S = Greysynth__Synthesis
+module L = Greysynth__Logging
 
 let require condition message = if not condition then failwith message
 let c width value = E.constant (Bitvector.of_int ~size:width value)
@@ -318,6 +319,17 @@ let test_sampling_strategies () =
     "wrong_naive no longer represents the mismatched ablation";
   C.c_sampling_strategy := C.RealValues
 
+let test_logging_reset () =
+  L.log_linear_size_after := 99;
+  L.log_chs_synthesis_attempts := [ (3, true, 1., true) ];
+  Hashtbl.replace L.log_chs_time_per_horizon 2 1.;
+  L.log_final_is_equiv := U.Yes;
+  L.reset ();
+  require (!(L.log_linear_size_after) = 0) "linear metrics survived reset";
+  require (!(L.log_chs_synthesis_attempts) = []) "attempt metrics survived reset";
+  require (Hashtbl.length L.log_chs_time_per_horizon = 0) "horizon metrics survived reset";
+  require (!(L.log_final_is_equiv) = U.Disabled) "equivalence metrics survived reset"
+
 let () =
   test_oes_legacy_collision ();
   test_strict_oes_unknown ();
@@ -333,7 +345,8 @@ let () =
   test_oes_partial_timeout ();
   test_balanced_targets ();
   test_sampling_strategies ();
-  print_endline "pipeline_test: 17 solver-independent regressions passed";
+  test_logging_reset ();
+  print_endline "pipeline_test: 18 solver-independent regressions passed";
   if solver_available then (
     test_context_proof ();
     print_endline "pipeline_test: contextual SMT proof regression passed")

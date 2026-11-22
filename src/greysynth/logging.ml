@@ -69,6 +69,35 @@ let tmp_uniq_semantic = ref 0
 let log_chs_is_equiv = ref Disabled
 let log_final_is_equiv = ref Disabled
 
+let reset () =
+  log_obfuscated_expression := Sexpr.Expr.zero;
+  log_linear_size_after := 0;
+  log_linear_number_simplifications := 0;
+  log_linear_vocab_injected := 0;
+  log_local_extend_injected := 0;
+  Hashtbl.clear log_linear_number_unique_hash_before;
+  Hashtbl.clear log_linear_number_unique_hash_after;
+  log_linear_time := 0.;
+  log_linear_is_equiv := Disabled;
+  log_global_size_after := 0;
+  log_global_time := 0.;
+  log_global_number_simplifications := 0;
+  log_global_synthesis_attempts := [];
+  log_global_horizon := 0;
+  Hashtbl.clear log_global_rules_found;
+  log_global_is_equiv := Disabled;
+  log_chs_size_after := 0;
+  log_chs_synthesis_attempts := [];
+  log_chs_number_simplifications := 0;
+  log_chs_time := 0.;
+  Hashtbl.clear log_chs_time_per_horizon;
+  Hashtbl.clear log_chs_process_per_horizon;
+  Hashtbl.clear log_chs_cache_hits_per_horizon;
+  Hashtbl.clear log_chs_rules_found;
+  tmp_uniq_semantic := 0;
+  log_chs_is_equiv := Disabled;
+  log_final_is_equiv := Disabled
+
 (* ── Logging helpers ───────────────────────────────────────────── *)
 let _log section fmt =
   Format.eprintf ("\027[1;34m[%s]\027[0m " ^^ fmt ^^ "\n%!") section

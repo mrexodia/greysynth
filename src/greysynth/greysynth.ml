@@ -245,6 +245,7 @@ let report_json ~initial_size ~total_time ?proof gt result =
 (* ── Entry point ───────────────────────────────────────────────── *)
 
 let run ?proof_output obf config gt =
+  Logging.reset ();
   load_config_from_json config;
   normalization_enabled :=
     (match Yojson.Basic.Util.member "normalization" (Yojson.Basic.from_file config) with
