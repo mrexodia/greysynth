@@ -33,6 +33,7 @@ let string_of_sampling = function
   | WrongNaive -> "wrong_naive"
 
 (* ── Config knobs ──────────────────────────────────────────────── *)
+let c_normalization = ref true
 let c_oes = ref false
 let c_oes_extended = ref false
 let c_oes_fixedpoint = ref false
@@ -81,6 +82,10 @@ let load_config_from_json json_file : unit =
   try
     let json = Yojson.Basic.from_file json_file in
     let open Yojson.Basic.Util in
+    (c_normalization :=
+       match json |> member "normalization" with
+       | `Null -> true
+       | v -> to_bool v);
     c_oes := json |> member "oes" |> to_bool;
     (c_oes_extended :=
        match json |> member "oes_extended" with
@@ -151,6 +156,7 @@ let load_config_from_json json_file : unit =
       String.concat " -> "
         (List.filter_map Fun.id
            [
+             (if !c_normalization then Some "Normalize" else None);
              (if !c_oes then
                 Some
                   ((if !c_oes_extended then "OES+" else "OES")
