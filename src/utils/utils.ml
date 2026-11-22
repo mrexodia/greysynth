@@ -478,7 +478,7 @@ let rec binsec_simplify expr =
     (* absorbing element *)
     | (Mul, _, Cst bv | And, _, Cst bv) when Bv.is_zeros bv -> y
     | Or, _, Cst bv when Bv.is_fill bv -> y
-    | (Lsr | Lsl | Asr | Rol | Ror | Smod | Sdiv | Udiv | Umod), Cst bv, _
+    | (Lsr | Lsl | Asr | Rol | Ror | Smod | Umod), Cst bv, _
       when Bv.is_zeros bv ->
         x
     | (Lsl, x, Cst bv | Lsr, x, Cst bv) when sizeof x <= Bv.to_uint bv ->
@@ -496,7 +496,6 @@ let rec binsec_simplify expr =
       when compare b c = 0 ->
         a
     | (Smod | Umod), a, Cst bv when Bv.is_ones bv -> zeros (sizeof a)
-    | (Sdiv | Udiv), x, y when compare x y = 0 -> ones (sizeof x)
     | (Smod | Umod), x, y when compare x y = 0 -> zeros (sizeof x)
     | (Lsl, x, Cst bv | Lsr, x, Cst bv) when Bv.to_uint bv >= sizeof x ->
         zeros (sizeof x)
@@ -544,10 +543,9 @@ let rec binsec_simplify expr =
     | And, a, Binary { f = And; x = b; y = c; _ }
     | Or, a, Binary { f = Or; x = b; y = c; _ }
     | Xor, a, Binary { f = Xor; x = b; y = c; _ } ->
-        binary f (binary f a b sx) c (sx + sizeof b)
+        binary f (binary f a b sx) c sx
     (* TODO: possibly more to come *)
     (* inversion *)
-    | Minus, a, Cst bv when Bv.is_one bv -> unary Not a
     | Xor, a, Cst bv when Bv.is_fill bv -> unary Not a
     | Minus, a, Unary { f = Minus; x = b; _ } -> binary Plus a b sx
     | Minus, a, Binary { f = Plus; x = b; y = c; _ } ->

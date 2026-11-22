@@ -123,12 +123,12 @@ let test_raw_candidate_fallback () =
   C.c_synthesizer := (fun _ -> Some (E.binary E.Udiv zero cut));
   match S.synthesize ~original template labels 1 1 with
   | Some (_, candidate, _) ->
-      (* 0 / x is all ones at x=0 under SMT-LIB; the legacy simplifier's
-         unconditional 0 / x -> 0 must not destroy this valid raw result. *)
+      (* 0 / x is all ones at x=0 under SMT-LIB. The postprocessor must
+         preserve the raw quotient instead of proposing the old 0/x -> 0 rule. *)
       require (E.compare candidate quotient = 0)
-        "valid raw synthesis was lost after an unsound algebraic rewrite";
-      require (!(R.sample_rejections) > 0)
-        "the unsound algebraic candidate was not checked";
+        "valid raw synthesis was changed by algebraic postprocessing";
+      require (!(R.sample_rejections) = 0)
+        "removed zero-division rewrite still produced a candidate";
       expect_same_at original candidate 0 0;
       expect_same_at original candidate 17 0
   | None -> failwith "valid raw candidate was not rescued"
@@ -333,6 +333,25 @@ let test_oes_proof_fallback () =
   require (!(R.sample_rejections) >= 1)
     "OES fallback did not exercise the false sampled representatives"
 
+let test_legacy_simplifier_edges () =
+  let x8 = E.var "x8" 8 "x8" in
+  let eval expression value =
+    let labels = Hashtbl.create 1 in
+    Hashtbl.add labels x8 (c 8 value);
+    (Sample_evaluator.make 1).eval_label expression 0 labels
+  in
+  let check label expression value =
+    let simplified = U.binsec_simplify expression in
+    require (Bitvector.equal (eval expression value) (eval simplified value))
+      (label ^ ": legacy simplifier changed an edge case")
+  in
+  check "zero quotient at zero" (E.binary E.Udiv (c 8 0) x8) 0;
+  check "self quotient at zero" (E.binary E.Udiv x8 x8) 0;
+  check "subtract one" (E.binary E.Minus x8 (c 8 1)) 2;
+  let a = E.var "a" 8 "a" and b = E.var "b" 8 "b" and d = E.var "d" 8 "d" in
+  let reassociated = U.binsec_simplify (plus a (plus b d)) in
+  require (E.sizeof reassociated = 8) "legacy reassociation changed the result width"
+
 let test_logging_reset () =
   L.log_linear_size_after := 99;
   L.log_chs_synthesis_attempts := [ (3, true, 1., true) ];
@@ -360,8 +379,9 @@ let () =
   test_balanced_targets ();
   test_sampling_strategies ();
   test_oes_proof_fallback ();
+  test_legacy_simplifier_edges ();
   test_logging_reset ();
-  print_endline "pipeline_test: 19 solver-independent regressions passed";
+  print_endline "pipeline_test: 20 solver-independent regressions passed";
   if solver_available then (
     test_context_proof ();
     print_endline "pipeline_test: contextual SMT proof regression passed")
