@@ -129,7 +129,7 @@ C-Full.
   real AST representatives.
 - [ ] Rank representatives by extraction cost and expected proof complexity.
   Frontier growth remains opt-in after measured timeout regressions.
-- [ ] Canonicalize proof-cache keys.
+- [x] Canonicalize proof-cache keys symmetrically across equality direction.
 - [x] Retry inconclusive obligations only when a larger budget is available.
 - [x] Reuse successful producer-side compositional endpoint proofs and honor
   timeout/non-strict policy; independent replay deliberately remains cache-free.
