@@ -228,8 +228,8 @@ let depth_of_expr expr =
     non-equivalence. *)
 exception Equivalence_timeout
 
-let are_equivalent ?(show_counter_example = false) (expr1 : Sexpr.Expr.t)
-    (expr2 : Sexpr.Expr.t) (timeout : int option) :
+let are_equivalent_seconds ?(show_counter_example = false) (expr1 : Sexpr.Expr.t)
+    (expr2 : Sexpr.Expr.t) (timeout : float option) :
     equiv_t * float * (string * Z.t) list option =
   let started = Unix.gettimeofday () in
   let finish result model = (result, Unix.gettimeofday () -. started, model) in
@@ -244,6 +244,9 @@ let are_equivalent ?(show_counter_example = false) (expr1 : Sexpr.Expr.t)
         | None -> Libsolver.z3)
   in
   if Sexpr.Expr.sizeof expr1 <> Sexpr.Expr.sizeof expr2 then finish No None
+  else if Option.fold ~none:false
+      ~some:(fun t -> t <= 0. || not (Float.is_finite t)) timeout then
+    finish Timeout None
   else
     match factory with
     | None -> finish Unknown None
@@ -254,7 +257,7 @@ let are_equivalent ?(show_counter_example = false) (expr1 : Sexpr.Expr.t)
           Fun.protect
             ~finally:(fun () -> try Solver.close () with _ -> ())
             (fun () ->
-              let solver_timeout = Option.map float_of_int timeout in
+              let solver_timeout = timeout in
               let var_cache : (string * int, Solver.Bv.t) Hashtbl.t =
                 Hashtbl.create 16
               in
@@ -355,7 +358,9 @@ let are_equivalent ?(show_counter_example = false) (expr1 : Sexpr.Expr.t)
               (* Keep native solver deadlines and a wall-clock backstop. Do
                  not replace an earlier caller alarm by a longer deadline. *)
               let wall_timeout =
-                match timeout with Some t when t > 0 -> t + 5 | _ -> 120
+                match timeout with
+                | Some t when t > 0. -> max 1 (int_of_float (ceil t)) + 5
+                | _ -> 120
               in
               let old_handler =
                 Sys.signal Sys.sigalrm
@@ -376,6 +381,12 @@ let are_equivalent ?(show_counter_example = false) (expr1 : Sexpr.Expr.t)
                   | Equivalence_timeout -> finish Timeout None
                   | _ -> finish Unknown None))
         with _ -> finish Unknown None)
+
+(* Preserve the public integer-timeout API while allowing proof replay to
+   share one fractional budget between abstraction and concrete fallback. *)
+let are_equivalent ?show_counter_example expr1 expr2 timeout =
+  are_equivalent_seconds ?show_counter_example expr1 expr2
+    (Option.map float_of_int timeout)
 
 let equiv_gt_then_obf expr gt obf timeout =
   let equiv_result, time_gt, _ = are_equivalent expr gt timeout in

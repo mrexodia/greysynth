@@ -31,7 +31,8 @@ You can now run GreySynth directly using `greysynth`.
 
 Run the regression suite with `make test`. It exercises the evaluator, parser,
 SMT checker, OES, synthesis, and cache acceptance. An installed SMT backend is
-required for the proof tests. The suite also tests deterministic normalization.
+required for the proof tests. It also tests deterministic normalization
+and independent certificate replay.
 
 ## Running
 
@@ -52,10 +53,27 @@ variables with an optional width (`x<32>`), see
 Progress is logged to stderr; a JSON report is printed to stdout (`syn_expr`,
 `syn_sz`, `equiv`, `time`, plus per-pass statistics).
 
+An optional second positional argument exports a proof certificate:
+
+```sh
+greysynth -obf -string-file input.txt default.json proof.json > result.json
+python3 -c 'import json,sys; print(json.load(sys.stdin)["syn_expr"])' < result.json > output.txt
+mba_proof -obf -string-file input.txt -gt -string-file output.txt proof.json 1,5,30
+```
+
+Use the same `-size` on both commands when unsized literals are not 64 bits.
+The replay tool binds the certificate to these actual input/output expressions,
+proves local equality obligations afresh, and derives endpoint equality through
+congruence and transitivity. Its optional comma-separated timeouts retry only
+inconclusive obligations. `verification: "proved_compositional"` establishes
+equivalence even when a separate whole-expression query times out. The producer's
+`proof_certificate.status: "recorded_not_replayed"` makes no such claim.
+
 
 ## Configuration
 
-The last argument is a JSON file; `default.json` is a working example.
+The first positional argument is a JSON configuration; `default.json` is a
+working example. An optional second positional argument names the certificate.
 
 | Key | Meaning |
 |---|---|

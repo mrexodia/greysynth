@@ -21,9 +21,13 @@
 
 (** GreySynth: simplification of obfuscated (MBA) expressions. *)
 
-val run : Sexpr.Expr.t -> string -> Sexpr.Expr.t option -> unit
+val run : ?proof_output:string -> Sexpr.Expr.t -> string -> Sexpr.Expr.t option -> unit
 (** [run obf config_file gt] loads the JSON configuration, runs the enabled
     passes on [obf] (OES, fast simplify, global synthesis then CHS) within
     the total timeout, logs progress to stderr and prints a JSON report to
     stdout. The ground truth [gt], if given, is only used for equivalence
     checks and in the report. *)
+
+(** When [proof_output] is supplied, write a typed rewrite certificate. Its
+    equality edges require independent replay with [mba_proof]; merely writing
+    the certificate does not establish equivalence. *)

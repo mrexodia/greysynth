@@ -150,7 +150,7 @@ let rule_json src dst count extra =
      ]
     @ extra)
 
-let report_json ~initial_size ~total_time gt result =
+let report_json ~initial_size ~total_time ?proof gt result =
   let equiv r = `String (equiv_to_str !r) in
   let ground_truth =
     match gt with
@@ -182,6 +182,7 @@ let report_json ~initial_size ~total_time gt result =
        ("has_timed_out", `Bool !g_has_timedout);
      ]
     @ ground_truth
+    @ (match proof with None -> [] | Some metadata -> ["proof_certificate", metadata])
     @ [
         (* configuration *)
         ("is_normalization_enabled", `Bool !normalization_enabled);
@@ -243,7 +244,7 @@ let report_json ~initial_size ~total_time gt result =
 
 (* ── Entry point ───────────────────────────────────────────────── *)
 
-let run obf config gt =
+let run ?proof_output obf config gt =
   load_config_from_json config;
   normalization_enabled :=
     (match Yojson.Basic.Util.member "normalization" (Yojson.Basic.from_file config) with
@@ -254,6 +255,7 @@ let run obf config gt =
   g_start_time := Unix.gettimeofday ();
   g_has_timedout := false;
   Rewrite.reset ();
+  Option.iter (fun _ -> Rewrite.start_recording obf) proof_output;
 
   let initial_size = size_of_expr obf in
   _log "greysynth" "input size=%d%s" initial_size
@@ -275,7 +277,8 @@ let run obf config gt =
   in
   check_equiv reference ~tag:"final" log_final_is_equiv result;
 
+  let proof = Option.map (fun path -> Rewrite.write_certificate path result) proof_output in
   let total_time = Unix.gettimeofday () -. !g_start_time in
   print_summary ~initial_size ~total_time gt result;
   Format.printf "%s\n"
-    (Yojson.pretty_to_string (report_json ~initial_size ~total_time gt result))
+    (Yojson.Basic.pretty_to_string (report_json ~initial_size ~total_time ?proof gt result))

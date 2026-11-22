@@ -33,15 +33,16 @@ let usage_msg =
   "Usage:\n\
   \  greysynth -obf -cil <file> <func> [-gt -cil <file> <func>] <config.json>\n\
   \  greysynth -obf -string \"<expr>\" [-gt -string \"<expr>\"] <config.json>\n\n\
-   Options:"
+   Optional second positional argument: proof-output.json\n\nOptions:"
 
 let () =
   let input = Cli_input.parse_command_line ~usage:usage_msg in
 
   (* The only positional argument should be the config file *)
-  let config_file =
+  let config_file, proof_output =
     match input.positional with
-    | [ config ] -> config
+    | [ config ] -> config, None
+    | [ config; proof ] -> config, Some proof
     | [] -> Cli_input.fail_usage usage_msg "Error: Missing config file argument\n"
     | _ -> Cli_input.fail_usage usage_msg "Error: Too many positional arguments\n"
   in
@@ -52,7 +53,7 @@ let () =
 
   
     (* This is where we actually call GreySynth *)
-  try Greysynth.run input.obf config_file input.gt
+  try Greysynth.run ?proof_output input.obf config_file input.gt
   with Failure msg ->
     Format.eprintf "Error: %s\n" msg;
     exit 1

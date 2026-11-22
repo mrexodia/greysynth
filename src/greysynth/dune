@@ -5,7 +5,7 @@
  (modules greysynth logging config synth_backends rewrite normalization oes synthesis)
  (flags
   (:standard -open Binsec -open Smt -open Libsse -open Libterm -open Yojson -w "-58"))
- (libraries binsec.smt binsec.sse binsec.sse.term yojson greysynth.sample_evaluator greysynth.utils greysynth.string_to_sexpr containers str unix xyntia xyntia.utils))
+ (libraries binsec.smt binsec.sse binsec.sse.term yojson greysynth.sample_evaluator greysynth.utils greysynth.proof greysynth.string_to_sexpr containers str unix xyntia xyntia.utils))
 
 ; Concrete evaluation on shared input samples (see sample_evaluator.ml);
 ; its own library because the tools use it too

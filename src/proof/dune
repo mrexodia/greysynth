@@ -1,0 +1,6 @@
+(library
+ (public_name greysynth.proof)
+ (name rewrite_proof)
+ (modules rewrite_proof)
+ (flags (:standard -open Binsec -open Libsse -open Libterm -w "-58"))
+ (libraries binsec.smt binsec.sse.term greysynth.utils yojson unix))

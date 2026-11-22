@@ -26,3 +26,11 @@
   greysynth.cil_to_sexpr
   greysynth.string_to_sexpr
   greysynth.sample_evaluator))
+
+; Replay a typed rewrite certificate independently of the synthesizer.
+(executable
+ (public_name mba_proof)
+ (name mba_proof)
+ (modules mba_proof)
+ (flags (:standard -open Binsec -open Libsse -open Libterm -w "-58"))
+ (libraries yojson greysynth.cli_input greysynth.proof))

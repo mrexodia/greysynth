@@ -32,3 +32,9 @@
  (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
             binsec.smt binsec.sse.term unix)
  (flags (:standard -open Binsec -open Libsse -open Libterm)))
+
+(test
+ (name proof_test)
+ (modules proof_test)
+ (libraries greysynth.proof greysynth.utils binsec.smt binsec.sse.term yojson)
+ (flags (:standard -open Binsec -open Libsse -open Libterm)))
