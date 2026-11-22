@@ -537,8 +537,22 @@ let linear_candidates cost expression =
    routinely times out because it contains multiplication. The local Boolean
    partitions and distributive ring steps below each prove quickly, while the
    certificate checker derives the endpoints through congruence/transitivity. *)
-let product_partition_candidate expression =
+let rec product_partition_candidate expression =
   let same = E.is_equal in
+  let commutative_operator = function
+    | E.Plus | E.Mul | E.And | E.Or | E.Xor -> true
+    | _ -> false
+  in
+  let rec canonical = function
+    | E.Unary { f; x; _ } -> E.unary f (canonical x)
+    | E.Binary { f; x; y; _ } ->
+        let x = canonical x and y = canonical y in
+        if commutative_operator f && E.compare x y > 0 then E.binary f y x
+        else E.binary f x y
+    | E.Ite { c; t; e; _ } -> E.ite (canonical c) (canonical t) (canonical e)
+    | expression -> expression
+  in
+  let canonical_expression = canonical expression in
   let commutative op left right = function
     | E.Binary { f; x; y; _ } when f = op ->
         (same x left && same y right) || (same x right && same y left)
@@ -546,17 +560,24 @@ let product_partition_candidate expression =
   in
   let product left right = commutative E.Mul left right in
   let union left right = commutative E.Or left right in
-  let try_order first second =
+  let cbin op left right =
+    if commutative_operator op && E.compare left right > 0 then E.binary op right left
+    else E.binary op left right
+  in
+  let try_order source first second =
     match first with
     | E.Binary { f = E.Mul; x = factor; y = other; _ } ->
         let try_factors m1 union_term =
           match m1 with
           | E.Binary { f = E.And; x; y; _ } when union x y union_term ->
-              let m2 = E.binary E.And x (E.unary E.Not y) in
-              let m3 = E.binary E.And (E.unary E.Not x) y in
+              let m2 = cbin E.And x (E.unary E.Not y) in
+              let m3 = cbin E.And (E.unary E.Not x) y in
               if not (product m2 m3 second) then None
               else
                 let add = E.binary E.Plus and mul = E.binary E.Mul in
+                let ordered_source = add first second in
+                let ordered_first = mul m1 union_term in
+                let ordered_second = mul m2 m3 in
                 let candidate = mul x y in
                 let x_parts = add m1 m2 and y_parts = add m1 m3 in
                 let all_parts = add (add m1 m2) m3 in
@@ -572,7 +593,11 @@ let product_partition_candidate expression =
                 in
                 Some
                   (candidate,
-                   [ x, x_parts; y, y_parts; union_term, all_parts;
+                   [ expression, canonical_expression;
+                     source, ordered_source;
+                     first, ordered_first;
+                     second, ordered_second;
+                     x, x_parts; y, y_parts; union_term, all_parts;
                      left0, left1; mul m1 (add m1 m2), add (mul m1 m1) (mul m1 m2);
                      right0, right1; mul x_parts m1, add (mul m1 m1) (mul m2 m1);
                      mul x_parts m3, add (mul m1 m3) (mul m2 m3);
@@ -585,9 +610,34 @@ let product_partition_candidate expression =
         | None -> try_factors other factor)
     | _ -> None
   in
-  match expression with
+  let scaled = function
+    | E.Binary { f = E.Mul; x = E.Cst coefficient; y; _ }
+    | E.Binary { f = E.Mul; x = y; y = E.Cst coefficient; _ } ->
+        Some (coefficient, y)
+    | _ -> None
+  in
+  match canonical_expression with
   | E.Binary { f = E.Plus; x; y; _ } ->
-      (match try_order x y with Some result -> Some result | None -> try_order y x)
+      (match try_order canonical_expression x y with
+      | Some result -> Some result
+      | None ->
+          (match try_order canonical_expression y x with
+          | Some result -> Some result
+          | None ->
+              match scaled x, scaled y with
+              | Some (left_coefficient, left), Some (right_coefficient, right)
+                when Bitvector.equal left_coefficient right_coefficient ->
+                  let inner = E.binary E.Plus left right in
+                  Option.map
+                    (fun (candidate, equalities) ->
+                      let factor = E.constant left_coefficient in
+                      let factored = E.binary E.Mul factor inner in
+                      let result = E.binary E.Mul factor candidate in
+                      (result,
+                       (expression, canonical_expression)
+                       :: (canonical_expression, factored) :: equalities))
+                    (product_partition_candidate inner)
+              | _ -> None))
   | _ -> None
 
 let run expression =

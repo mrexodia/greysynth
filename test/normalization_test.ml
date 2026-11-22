@@ -150,20 +150,30 @@ let test_associative_canonicalization () =
       "idempotent conjunction", band (band x y) x, 3 ]
 
 let test_compositional_polynomial_identity () =
-  reset ();
   let x = var 64 "px" and y = var 64 "py" in
   let m1 = band x y in
-  let original = plus (mul m1 (bor x y))
-      (mul (band x (E.unary E.Not y)) (band (E.unary E.Not x) y)) in
-  R.start_recording original;
-  let result = N.run original in
-  require (E.is_equal result (mul x y)) "polynomial partition identity was not recovered";
-  let builder = Option.get !(R.journal) in
-  let certificate = P.finish builder result in
-  let report = P.verify ~timeouts:[ 1.; 5. ] ~original ~candidate:result certificate in
-  require
-    (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
-    "polynomial micro-steps did not replay compositionally"
+  let first = mul m1 (bor x y) in
+  let second = mul (band x (E.unary E.Not y)) (band (E.unary E.Not x) y) in
+  let check label original expected =
+    reset ();
+    R.start_recording original;
+    let result = N.run original in
+    require (E.is_equal result expected) (label ^ ": identity was not recovered");
+    let builder = Option.get !(R.journal) in
+    let certificate = P.finish builder result in
+    let report = P.verify ~timeouts:[ 1.; 5. ] ~original ~candidate:result certificate in
+    require
+      (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+      (label ^ ": micro-steps did not replay compositionally")
+  in
+  check "polynomial partition" (plus first second) (mul x y);
+  let commuted_second =
+    mul (band (E.unary E.Not y) x) (band y (E.unary E.Not x))
+  in
+  check "commuted polynomial partition" (plus commuted_second first) (mul x y);
+  check "scaled polynomial partition"
+    (plus (mul (c 64 3) first) (mul (c 64 3) second))
+    (mul (c 64 3) (mul x y))
 
 let test_normalization_portfolio () =
   reset ();
@@ -223,7 +233,7 @@ let () =
     test_compositional_polynomial_identity ();
     test_normalization_portfolio ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 30 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 32 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"
