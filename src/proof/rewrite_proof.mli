@@ -2,7 +2,12 @@
     Producer counters and asserted verdicts are never trusted. *)
 
 type builder
+type checkpoint
 val create : Sexpr.Expr.t -> builder
+val checkpoint : builder -> checkpoint
+val restore : builder -> checkpoint -> unit
+(** Snapshot/restore equality obligations while sharing harmless interned terms. *)
+
 val record : builder -> pass:string -> Sexpr.Expr.t -> Sexpr.Expr.t -> unit
 (** Record a concrete equality. Extra unused equalities are allowed; the
     verifier must derive the externally supplied final endpoints. *)

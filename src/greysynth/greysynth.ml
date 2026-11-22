@@ -57,18 +57,34 @@ let run_normalization expression =
     Fun.protect
       ~finally:(fun () -> c_ac_normalization := configured)
       (fun () ->
+        let proof = !(Rewrite.journal) in
+        let restore state =
+          match proof, state with
+          | Some builder, Some checkpoint -> Rewrite_proof.restore builder checkpoint
+          | _ -> ()
+        in
+        let initial = Option.map Rewrite_proof.checkpoint proof in
         c_ac_normalization := false;
         let baseline = Normalization.run expression in
+        let baseline_proof = Option.map Rewrite_proof.checkpoint proof in
         if !g_has_timedout then baseline
         else (
+          restore initial;
           c_ac_normalization := true;
           let alternative = Normalization.run expression in
-          let baseline_cost = size_of_expr baseline and alternative_cost = size_of_expr alternative in
-          if alternative_cost < baseline_cost
-             || (alternative_cost = baseline_cost
-                 && Sexpr.Expr.compare alternative baseline < 0)
-          then alternative
-          else baseline))
+          let alternative_proof = Option.map Rewrite_proof.checkpoint proof in
+          let baseline_cost = size_of_expr baseline
+          and alternative_cost = size_of_expr alternative in
+          let choose_alternative =
+            alternative_cost < baseline_cost
+            || (alternative_cost = baseline_cost
+                && Sexpr.Expr.compare alternative baseline < 0)
+          in
+          let selected_proof =
+            if choose_alternative then alternative_proof else baseline_proof
+          in
+          restore selected_proof;
+          if choose_alternative then alternative else baseline))
 
 (* One OES pass, without the logging and stats of [oes_with_logs]. *)
 let oes_quiet e = fst (linear_simplify e)

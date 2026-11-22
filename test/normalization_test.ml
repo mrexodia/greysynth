@@ -198,10 +198,27 @@ let test_normalization_portfolio () =
   let direct = N.run original in
   require (E.is_equal direct b) "six-atom linear normalization failed";
   reset ();
+  C.c_ac_normalization := true;
+  R.start_recording original;
+  let ac_result = N.run original in
+  let ac_certificate = P.finish (Option.get !(R.journal)) ac_result in
+  let ac_edges =
+    Yojson.Basic.Util.member "equalities" ac_certificate
+    |> Yojson.Basic.Util.to_list |> List.length
+  in
+  reset ();
   C.c_normalization_portfolio := true;
+  R.start_recording original;
   let result = G.run_normalization original in
   require (E.is_equal result b) "normalization portfolio did not select the best branch";
-  require (!(R.proved) > 0) "normalization portfolio bypassed local proofs"
+  require (!(R.proved) > 0) "normalization portfolio bypassed local proofs";
+  let certificate = P.finish (Option.get !(R.journal)) result in
+  let portfolio_edges =
+    Yojson.Basic.Util.member "equalities" certificate
+    |> Yojson.Basic.Util.to_list |> List.length
+  in
+  require (portfolio_edges = ac_edges)
+    "normalization portfolio retained discarded-branch obligations"
 
 let test_nonlinear_is_opaque () =
   reset ();

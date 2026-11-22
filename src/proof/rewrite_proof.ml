@@ -26,6 +26,7 @@ type builder = {
   mutable edges : edge list;
   edge_set : (int * int, unit) Hashtbl.t;
 }
+type checkpoint = edge list
 
 let format = "greysynth.rewrite-proof.v1"
 let semantics = "smtlib-fixed-bitvectors-srem-v1"
@@ -166,6 +167,17 @@ let create original =
   let graph = graph () in
   let original = of_expr graph original in
   { graph; original; edges = []; edge_set = Hashtbl.create 64 }
+let checkpoint builder = builder.edges
+
+let restore builder edges =
+  builder.edges <- edges;
+  Hashtbl.clear builder.edge_set;
+  List.iter
+    (fun edge ->
+      Hashtbl.replace builder.edge_set
+        (min edge.left edge.right, max edge.left edge.right) ())
+    edges
+
 let record builder ~pass left right =
   let left = of_expr builder.graph left in
   let right = of_expr builder.graph right in
