@@ -239,11 +239,51 @@ let make_problem e new_leafs synthesis_timeout synthesis_repeat :
       | Sexpr.Expr.Cst c -> [ c ]
       | Sexpr.Expr.Unary r -> find_csts r.x
       | Sexpr.Expr.Binary r -> find_csts r.x @ find_csts r.y
+      | Sexpr.Expr.Ite r -> find_csts r.c @ find_csts r.t @ find_csts r.e
       | _ -> []
     in
-    if !c_add_constants_to_synthesis then
-      find_csts e |> List.sort_uniq Bitvector.compare
-    else []
+    if not !c_add_constants_to_synthesis then []
+    else
+      let original = find_csts e |> List.sort_uniq Bitvector.compare in
+      let widths =
+        Sexpr.Expr.sizeof e :: List.map Bitvector.size_of original
+        |> List.sort_uniq Int.compare
+      in
+      let seeds =
+        List.concat_map
+          (fun width ->
+            [ Bitvector.zeros width; Bitvector.ones width;
+              Bitvector.of_int ~size:width 2; Bitvector.fill width ])
+          widths
+      in
+      let unary =
+        List.concat_map
+          (fun value -> [ Bitvector.neg value; Bitvector.lognot value ])
+          original
+      in
+      let pairs =
+        List.concat_map
+          (fun left ->
+            original
+            |> List.filter (fun right -> Bitvector.size_of left = Bitvector.size_of right)
+            |> List.concat_map (fun right ->
+                   [ Bitvector.add left right; Bitvector.sub left right;
+                     Bitvector.sub right left; Bitvector.logxor left right ]))
+          original
+      in
+      let ranked = original @ seeds @ unary @ pairs in
+      let seen = Hashtbl.create 32 in
+      let rec unique count = function
+        | _ when count >= 32 -> []
+        | [] -> []
+        | value :: rest ->
+            let key = (Bitvector.size_of value, Bitvector.value_of value) in
+            if Hashtbl.mem seen key then unique count rest
+            else (
+              Hashtbl.add seen key ();
+              value :: unique (count + 1) rest)
+      in
+      unique 0 ranked
   in
   {
     inputs;

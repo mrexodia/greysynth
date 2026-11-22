@@ -392,6 +392,21 @@ let test_legacy_simplifier_edges () =
   let reassociated = U.binsec_simplify (plus a (plus b d)) in
   require (E.sizeof reassociated = 8) "legacy reassociation changed the result width"
 
+let test_derived_constant_seeding () =
+  reset ();
+  C.c_add_constants_to_synthesis := true;
+  let expression = plus (c 64 (-67)) (c 64 (-66)) in
+  let problem = S.make_problem expression (Hashtbl.create 0) 1 1 in
+  let has value =
+    List.exists
+      (fun constant -> Bitvector.equal constant (Bitvector.of_int ~size:64 value))
+      problem.constants
+  in
+  List.iter
+    (fun value -> require (has value) (Printf.sprintf "derived constant %d is missing" value))
+    [ 0; 1; 2; 66; 67 ];
+  require (List.length problem.constants <= 32) "derived constant grammar is unbounded"
+
 let test_logging_reset () =
   L.log_linear_size_after := 99;
   L.log_chs_synthesis_attempts := [ (3, true, 1., true) ];
@@ -420,8 +435,9 @@ let () =
   test_sampling_strategies ();
   test_oes_proof_fallback ();
   test_legacy_simplifier_edges ();
+  test_derived_constant_seeding ();
   test_logging_reset ();
-  print_endline "pipeline_test: 20 solver-independent regressions passed";
+  print_endline "pipeline_test: 21 solver-independent regressions passed";
   if solver_available then (
     test_context_proof ();
     test_larger_proof_budget_retries ();
