@@ -105,7 +105,16 @@ let test_linear_mba () =
       "scaled MBA", plus (mul (c 32 3) (bor x y))
           (mul (c 32 3) (band x y)), 5;
       "complemented arithmetic", plus (plus (E.unary E.Not (plus x y)) x)
-          (plus y (c 32 1)), 1 ]
+          (plus y (c 32 1)), 1 ];
+  let a = var 16 "a" and b = var 16 "b" and d = var 16 "c" in
+  let abc = band a (band b d) in
+  let two_value =
+    plus
+      (plus (bor (bxor a b) (bxor a d))
+         (mul (c 16 65469) (E.unary E.Not abc)))
+      (mul (c 16 65470) abc)
+  in
+  prove_shrinks "two-value Boolean recovery" two_value 7
 
 let test_associative_canonicalization () =
   let prove_ac name original maximum =
@@ -155,7 +164,7 @@ let () =
     test_linear_mba ();
     test_associative_canonicalization ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 21 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 22 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"

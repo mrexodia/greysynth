@@ -359,6 +359,73 @@ let linear_candidates cost expression =
       else if Z.equal coefficient mask then E.unary E.Minus value
       else E.binary E.Mul value (constant width coefficient)
     in
+    let combine op identity terms =
+      match terms with [] -> identity | terms -> build_balanced op terms
+    in
+    let boolean_candidates truth =
+      let assignments = Array.length target in
+      let literal assignment index =
+        if assignment land (1 lsl index) = 0 then E.unary E.Not atoms.(index)
+        else atoms.(index)
+      in
+      let minterms =
+        List.init assignments Fun.id
+        |> List.filter (fun assignment -> truth.(assignment))
+        |> List.map (fun assignment ->
+               List.init count (literal assignment)
+               |> combine E.And (constant width mask))
+      in
+      let clauses =
+        List.init assignments Fun.id
+        |> List.filter (fun assignment -> not truth.(assignment))
+        |> List.map (fun assignment ->
+               List.init count (fun index ->
+                   if assignment land (1 lsl index) = 0 then atoms.(index)
+                   else E.unary E.Not atoms.(index))
+               |> combine E.Or (zeros width))
+      in
+      let coefficients = Array.copy truth in
+      for bit = 0 to count - 1 do
+        for subset = 0 to assignments - 1 do
+          if subset land (1 lsl bit) <> 0 then
+            coefficients.(subset) <-
+              coefficients.(subset) <> coefficients.(subset lxor (1 lsl bit))
+        done
+      done;
+      let anf =
+        List.init assignments Fun.id
+        |> List.filter (fun subset -> coefficients.(subset))
+        |> List.map (fun subset ->
+               if subset = 0 then constant width mask
+               else
+                 List.init count Fun.id
+                 |> List.filter (fun index -> subset land (1 lsl index) <> 0)
+                 |> List.map (Array.get atoms)
+                 |> combine E.And (constant width mask))
+        |> combine E.Xor (zeros width)
+      in
+      [ combine E.Or (zeros width) minterms;
+        combine E.And (constant width mask) clauses;
+        anf ]
+      |> List.sort_uniq E.compare
+    in
+    let distinct =
+      Array.to_list target |> List.sort_uniq Z.compare
+    in
+    (match distinct with
+    | [ low; high ] when count <= 4 ->
+        let truth = Array.map (Z.equal high) target in
+        List.iter
+          (fun boolean ->
+            let coefficient = normalize (Z.sub high low) in
+            let weighted = scale coefficient boolean in
+            let candidate =
+              if Z.equal low Z.zero then weighted
+              else E.binary E.Plus (constant width low) weighted
+            in
+            offer candidate)
+          (boolean_candidates truth)
+    | _ -> ());
     let affine candidate form =
       check_timeout ();
       let values = table form in
