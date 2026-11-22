@@ -93,8 +93,14 @@ let sample_value ~seed ~ranks ~variable_count ~name ~size sample_id =
       if rank = Some (id - 5) then Bitvector.ones size else Bitvector.zeros size
   | id ->
       let offset = id - 5 - variable_count in
-      let bit = if size = 0 then 0 else offset mod size in
-      (match offset mod 7 with
+      let rank =
+        Option.value (Hashtbl.find_opt ranks (name, size))
+          ~default:(Hashtbl.hash (name, size) land 0x3fffffff)
+      in
+      let round = offset / 7 in
+      let bit = if size = 0 then 0 else (round + (rank * 7) + (seed * 13)) mod size in
+      let mode = (offset + (rank * 3) + (seed * 5)) mod 7 in
+      (match mode with
       | 0 -> Bitvector.create (Z.shift_left Z.one bit) size
       | 1 ->
           Bitvector.create
@@ -102,13 +108,17 @@ let sample_value ~seed ~ranks ~variable_count ~name ~size sample_id =
             size
       | 2 -> Bitvector.create (Z.pred (Z.shift_left Z.one (bit + 1))) size
       | 3 ->
+          let block = 1 lsl ((round + rank + seed) mod 4) in
           let value = ref Z.zero in
           for index = 0 to size - 1 do
-            if index mod 2 = 0 then
+            if (index / block) mod 2 = 0 then
               value := Z.logor !value (Z.shift_left Z.one index)
           done;
           Bitvector.create !value size
-      | 4 -> Bitvector.create (Z.shift_left Z.one (max 0 (size - 1))) size
+      | 4 ->
+          let sign = Z.shift_left Z.one (max 0 (size - 1)) in
+          let noise = Bitvector.value_of (deterministic_random ~seed ~name ~size id) in
+          Bitvector.create (Z.logxor sign noise) size
       | 5 -> deterministic_random ~seed ~name ~size id
       | _ ->
           let random = deterministic_random ~seed ~name ~size id in

@@ -137,7 +137,21 @@ let test_structured_variable_tuples () =
   expect_bv "second basis zero" (Bitvector.zeros 8) (ev.eval x 6);
   expect_bv "second basis variable" (Bitvector.ones 8) (ev.eval y 6);
   let again = Sample_evaluator.make ~variables ~seed:7 16 in
-  expect_bv "reproducible stratified tail" (ev.eval x 12) (again.eval x 12)
+  expect_bv "reproducible stratified tail" (ev.eval x 12) (again.eval x 12);
+  let training = Sample_evaluator.make ~variables ~seed:0 40 in
+  let holdout = Sample_evaluator.make ~variables ~seed:1 40 in
+  let cross_variable_differences = ref 0 and cross_seed_differences = ref 0 in
+  for sample = 7 to 39 do
+    if not (Bitvector.equal (training.eval x sample) (training.eval y sample)) then
+      incr cross_variable_differences;
+    if not (Bitvector.equal (training.eval x sample) (holdout.eval x sample)) then
+      incr cross_seed_differences
+  done;
+  if !cross_variable_differences < 24 then
+    fail "structured tail remains diagonally collapsed (%d/33 differ)"
+      !cross_variable_differences;
+  if !cross_seed_differences < 24 then
+    fail "holdout tail is not independent (%d/33 differ)" !cross_seed_differences
 
 let test_sample_ids () =
   expect_invalid "zero sample count" (fun () -> Sample_evaluator.make 0);
