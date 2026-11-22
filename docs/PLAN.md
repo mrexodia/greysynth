@@ -90,9 +90,10 @@ runs in one process have isolated metrics; reports account for every attempt.
   the abstract minterm polynomial through small ring micro-steps. Do the same
   for AC cancellation and permutation-polynomial inversion so producer and
   replay do not depend on one monolithic bit-blasted query.
-- [ ] Add two-value affine-Boolean extraction and compact NPN/ANF/ESOP recovery
-  before falling back to a dense AND-monomial basis.
-- [ ] Normalize after every CHS horizon and after the final OES cleanup.
+- [x] Add two-value affine-Boolean extraction with compact DNF/CNF/ANF recovery
+  before falling back to a dense AND-monomial basis. NPN/ESOP tables remain a
+  possible performance refinement.
+- [x] Normalize after every CHS horizon and before the final OES cleanup.
 - [ ] Allow CoBRA, binsnake-cobra, Rumba, or GAMBA as optional local-subtree
   candidate generators through a documented subprocess protocol. Their answers
   remain untrusted and proof-gated. Do not copy incompatibly licensed code.
@@ -135,8 +136,10 @@ proved once, then reused for distinct operands with no additional synthesis.
 ## Milestone 6: samples and counterexample-guided refinement
 
 - [ ] Represent samples as explicit per-variable environments.
-- [ ] Add deterministic strata, beginning with the zero/all-one/one-hot tuples
-  required by XSmir affine rules, then extrema, one-hot/one-cold values, powers of two,
+- [x] Add explicit-environment evaluation and zero/all-one/every-one-hot tuples
+  for independent label sampling, as required by XSmir affine rules.
+- [ ] Extend deterministic contextual strata with extrema, one-hot/one-cold bit
+  values, powers of two,
   alternating masks, byte/word boundaries, carry boundaries, large shifts,
   divisors, and correlated variable assignments.
 - [ ] Keep independent training and validation banks.
@@ -167,10 +170,10 @@ on the 57-case CHS set and C-Full level-5.
 
 ## Milestone 8: explicit cost models
 
-- [ ] Preserve `legacy` cost for historical comparisons.
-- [ ] Add `paper_ast`, counting width conversions as AST operators.
-- [ ] Add an instruction-oriented and a readability-oriented cost model.
-- [ ] Report all stable costs while selecting with one explicit configured model.
+- [x] Preserve `legacy` cost for historical comparisons.
+- [x] Add `paper_ast`, counting width conversions as AST operators.
+- [x] Add instruction-oriented and readability-oriented cost models.
+- [x] Report all stable costs while selecting with one explicit configured model.
 - [ ] Use whole-expression extraction for alternatives rather than requiring
   every useful intermediate form to be locally cheaper.
 
