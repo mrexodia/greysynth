@@ -112,9 +112,11 @@ runs in one process have isolated metrics; reports account for every attempt.
   before falling back to a dense AND-monomial basis. NPN/ESOP tables remain a
   possible performance refinement.
 - [x] Normalize after every CHS horizon and before the final OES cleanup.
-- [ ] Allow CoBRA, binsnake-cobra, Rumba, or GAMBA as optional local-subtree
-  candidate generators through a documented subprocess protocol. Their answers
-  remain untrusted and proof-gated. Do not copy incompatibly licensed code.
+- [x] Add optional `rumba` and `cobra` CLI adapters for bounded uniform-width
+  pure-MBA subtree candidates. Variable identities are remapped safely, process
+  groups are deadline-bounded, and all answers remain untrusted/proof-gated.
+  Broader mixed-width adapters and automatic executable discovery remain out of
+  scope; no external implementation code is copied.
 
 Acceptance: property tests prove all committed rewrites; Poly, Non-Poly,
 MBA-Obfuscator, masked, and mixed-width suites improve without a regression on
