@@ -85,10 +85,11 @@ runs in one process have isolated metrics; reports account for every attempt.
   `ac_normalization`; keep direct greedy mode opt-in. `normalization_portfolio`
   now races baseline and AC branches from the same input and retains the cheaper
   locally proved result, subject to the shared total budget.
-- [ ] Add complement, mask, extraction/extension, concat, shift, and comparison
-  identities without crossing mixed-width boundaries unsafely.
-- [ ] Raise the linear-MBA atom ceiling using sparse truth tables and component
-  decomposition rather than dense enumeration alone.
+- [ ] Complete the mixed-width-safe identity set. Complement, additive inverse,
+  disjoint masks, extraction/extension, concat, and constant-shift rules are in;
+  comparison/select and additional mask compositions remain.
+- [x] Raise the configurable linear-MBA truth-table ceiling from four to six
+  atoms by default (up to ten); connected-component decomposition remains.
 - [ ] Normalize sparse modular polynomials and factor only when extraction cost
   improves.
 - [ ] Add semilinear mask reconstruction and bit-partitioned simplification.
