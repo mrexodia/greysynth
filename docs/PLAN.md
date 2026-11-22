@@ -47,15 +47,16 @@ provenance and exact commands.
 - [x] Preserve Xyntia's concatenated high/low numerator semantics exactly.
 - [x] Remove the duplicate unsound legacy Xyntia converter.
 - [x] Add conversion tests for every operator and mixed width.
-- [ ] Select `mba`, `mba_shift`, or `full` dynamically from each target's
-  operators instead of paying the full-grammar branching factor universally.
+- [x] Select `mba`, `mba_shift`, `mba_ite`, or `full` dynamically from each
+  target's operators instead of paying the full-grammar branching factor universally.
 - [x] Make Xyntia use wall-clock deadlines without clobbering `SIGALRM`.
 - [x] Align vendored arithmetic shifts and signed remainder-by-zero with the
   total bitvector semantics used by GreySynth.
-- [ ] Make cvc5's grammar include conditionals and comparisons where supported.
+- [x] Make cvc5's grammar include conditionals and comparisons.
 - [x] Add cvc5 division, remainder, and discovered constants.
-- [ ] Give every external backend a process deadline bounded by the remaining
-  global budget and classify failures instead of flattening them to `None`.
+- [x] Bound backend-requested time by the remaining global budget.
+- [ ] Enforce process-group deadlines for external tools and classify failures
+  instead of flattening them to `None`.
 
 Acceptance: no supported backend result is rejected as an unsupported AST node;
 all operator fixtures replay as equivalent; the retained 57-case CHS set has no
@@ -70,6 +71,7 @@ conversion errors.
 - [x] Populate before/after semantic-class metrics correctly.
 - [ ] Record no-result, timeout, unsupported-result, ill-formed-result,
   not-smaller, sample-refuted, SMT-refuted, and SMT-inconclusive separately.
+- [x] Memoize repeated structural nodes in cost/depth and OES traversals.
 
 Acceptance: changing a reported option changes behavior in a targeted test; two
 runs in one process have isolated metrics; reports account for every attempt.
@@ -77,7 +79,9 @@ runs in one process have isolated metrics; reports account for every attempt.
 ## Milestone 3: deterministic canonicalization and tractable proofs
 
 - [x] Add proof-gated associative/commutative flattening, ordering, balancing,
-  constant folding, duplicate elimination, and coefficient collection.
+  constant folding, duplicate elimination, and coefficient collection behind
+  `ac_normalization`; keep it opt-in until whole-expression extraction prevents
+  the measured local-greedy regressions.
 - [ ] Add complement, mask, extraction/extension, concat, shift, and comparison
   identities without crossing mixed-width boundaries unsafely.
 - [ ] Raise the linear-MBA atom ceiling using sparse truth tables and component
@@ -85,6 +89,8 @@ runs in one process have isolated metrics; reports account for every attempt.
 - [ ] Normalize sparse modular polynomials and factor only when extraction cost
   improves.
 - [ ] Add semilinear mask reconstruction and bit-partitioned simplification.
+- [x] Seed bounded zero/one/two/fill, negated, complemented, and pairwise-derived
+  constants in synthesis grammars.
 - [ ] Emit wide algebraic candidates as compositional certificates: first map
   bitwise factors to disjoint minterms with small linear proofs, then normalize
   the abstract minterm polynomial through small ring micro-steps. Do the same
@@ -182,8 +188,9 @@ claim paper-AST improvements merely because casts are free in the legacy metric.
 
 ## Milestone 9: conditionals and wider semantics
 
-- [ ] Simplify ITE conditions and branches independently before making ITE opaque.
-- [ ] Enable conditional synthesis only with branch-covering samples.
+- [x] Simplify ITE conditions and branches independently and expose typed ITEs
+  to contextual synthesis instead of making the entire node opaque.
+- [ ] Restrict conditional synthesis to branch-covering samples.
 - [ ] Add predicate extraction and proved select/min/max idioms.
 - [ ] Keep memory loads and C/binary lifting outside the pure-expression proof
   claim until their semantics are modeled independently.
