@@ -196,19 +196,23 @@ let linear_simplify ?(seed = true) (expr : Sexpr.Expr.t) =
     if !c_local_extend then seed_relational n
   in
 
+  let scanned = Sexpr.BvTbl.create 128 in
   let rec first_pass n =
-    check_timeout ();
-    let outhash = !evaluator.node_to_outhash n in
-    (match !evaluator.is_node_constant n with
-    | Some cst ->
-        (* [n] evaluates to a constant on every sample: cache the literal *)
-        add_to_cache (Sexpr.Expr.constant cst) outhash
-    | None ->
-        add_to_cache n outhash;
-        if seed then seed_vocabulary n);
-    (* A constant-looking node may fail independent validation or proof.
-       Its children must still be available when that candidate is rejected. *)
-    recurse_into_children n
+    if Sexpr.BvTbl.mem scanned n then ()
+    else (
+      Sexpr.BvTbl.add scanned n ();
+      check_timeout ();
+      let outhash = !evaluator.node_to_outhash n in
+      (match !evaluator.is_node_constant n with
+      | Some cst ->
+          (* [n] evaluates to a constant on every sample: cache the literal *)
+          add_to_cache (Sexpr.Expr.constant cst) outhash
+      | None ->
+          add_to_cache n outhash;
+          if seed then seed_vocabulary n);
+      (* A constant-looking node may fail independent validation or proof.
+         Its children must still be available when that candidate is rejected. *)
+      recurse_into_children n)
   and recurse_into_children n =
     match n with
     | Sexpr.Expr.Unary r -> first_pass r.x
@@ -230,14 +234,18 @@ let linear_simplify ?(seed = true) (expr : Sexpr.Expr.t) =
   in
 
   let nb_simplifications = ref 0 in
+  let rewritten = Sexpr.BvTbl.create 128 in
 
   let rec second_pass n =
     if !g_has_timedout then n
-    else try
-    check_timeout ();
-    let outhash = !evaluator.node_to_outhash n in
+    else match Sexpr.BvTbl.find_opt rewritten n with
+    | Some result -> result
+    | None ->
+      let result = try
+      check_timeout ();
+      let outhash = !evaluator.node_to_outhash n in
 
-    match n with
+      match n with
     | Sexpr.Expr.Cst _ -> n
     | _ -> (
         let cached_nodes =
@@ -260,9 +268,12 @@ let linear_simplify ?(seed = true) (expr : Sexpr.Expr.t) =
               let e = second_pass r.e in
               Sexpr.Expr.ite c t e
           | _ -> n)
-    with Timeout_exception ->
-      g_has_timedout := true;
-      n
+      with Timeout_exception ->
+        g_has_timedout := true;
+        n
+      in
+      Sexpr.BvTbl.add rewritten n result;
+      result
   in
   let ret = if prepared then second_pass expr else expr in
   (ret, nb_simplifications)

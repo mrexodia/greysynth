@@ -205,7 +205,8 @@ let cost_model_of_string = function
            "unknown cost model %S (expected legacy, paper_ast, instruction, or readability)"
            value)
 
-let rec cost_of_expr model e =
+let cost_of_expr model e =
+  let memo = Sexpr.BvTbl.create 128 in
   let unary_cost f =
     match model, f with
     | Legacy, (Sexpr.Expr.Restrict _ | Sexpr.Expr.Sext _ | Sexpr.Expr.Uext _) -> 0
@@ -220,24 +221,41 @@ let rec cost_of_expr model e =
                    | Sexpr.Expr.Concat) -> 3
     | _ -> 1
   in
-  match e with
-  | Sexpr.Expr.Unary r -> unary_cost r.f + cost_of_expr model r.x
-  | Sexpr.Expr.Binary r ->
-      binary_cost r.f + cost_of_expr model r.x + cost_of_expr model r.y
-  | Sexpr.Expr.Ite r ->
-      (match model with Instruction -> 3 | Readability -> 4 | _ -> 1)
-      + cost_of_expr model r.c + cost_of_expr model r.t + cost_of_expr model r.e
-  | Sexpr.Expr.Var _ | Sexpr.Expr.Load _ | Sexpr.Expr.Cst _ -> 1
+  let rec cost expression =
+    match Sexpr.BvTbl.find_opt memo expression with
+    | Some value -> value
+    | None ->
+        let value =
+          match expression with
+          | Sexpr.Expr.Unary r -> unary_cost r.f + cost r.x
+          | Sexpr.Expr.Binary r -> binary_cost r.f + cost r.x + cost r.y
+          | Sexpr.Expr.Ite r ->
+              (match model with Instruction -> 3 | Readability -> 4 | _ -> 1)
+              + cost r.c + cost r.t + cost r.e
+          | Sexpr.Expr.Var _ | Sexpr.Expr.Load _ | Sexpr.Expr.Cst _ -> 1
+        in
+        Sexpr.BvTbl.add memo expression value;
+        value
+  in
+  cost e
 
 let size_of_expr e = cost_of_expr !cost_model e
 
 let depth_of_expr expr =
+  let memo = Sexpr.BvTbl.create 128 in
   let rec aux node =
-    match node with
-    | Sexpr.Expr.Unary r -> 1 + aux r.x
-    | Sexpr.Expr.Binary r -> 1 + max (aux r.x) (aux r.y)
-    | Sexpr.Expr.Ite r -> 1 + max (aux r.c) (max (aux r.t) (aux r.e))
-    | _ -> 0
+    match Sexpr.BvTbl.find_opt memo node with
+    | Some value -> value
+    | None ->
+        let value =
+          match node with
+          | Sexpr.Expr.Unary r -> 1 + aux r.x
+          | Sexpr.Expr.Binary r -> 1 + max (aux r.x) (aux r.y)
+          | Sexpr.Expr.Ite r -> 1 + max (aux r.c) (max (aux r.t) (aux r.e))
+          | _ -> 0
+        in
+        Sexpr.BvTbl.add memo node value;
+        value
   in
   aux expr
 
