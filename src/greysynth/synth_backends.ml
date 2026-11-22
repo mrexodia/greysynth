@@ -468,6 +468,12 @@ module Cvc5_backend = struct
             else add "    (%s %s %s)\n" op (nt w) (nt w))
           grammar_ops;
         List.iter
+          (fun relation ->
+            add "    (ite (%s %s %s) %s %s)\n"
+              relation (nt w) (nt w) (nt w) (nt w))
+          [ "="; "distinct"; "bvult"; "bvule"; "bvugt"; "bvuge";
+            "bvslt"; "bvsle"; "bvsgt"; "bvsge" ];
+        List.iter
           (fun other ->
             if other < w then (
               add "    ((_ zero_extend %d) %s)\n" (w - other) (nt other);
@@ -573,6 +579,12 @@ module Cvc5_backend = struct
                 let x = term () in
                 expect ")";
                 f x
+            | "ite" ->
+                let condition = condition () in
+                let yes = term () in
+                let no = term () in
+                expect ")";
+                ite condition yes no
             | op -> (
                 match (List.assoc_opt op unops, List.assoc_opt op binops) with
                 | Some f, _ ->
@@ -592,6 +604,19 @@ module Cvc5_backend = struct
                 match input_of_positional p tok with
                 | Some i -> input_var i
                 | None -> failwith ("cvc5: unknown variable " ^ tok)))
+      and condition () =
+        expect "(";
+        let relation = next () in
+        let left = term () and right = term () in
+        expect ")";
+        let operator =
+          match relation with
+          | "=" -> Eq | "distinct" -> Diff
+          | "bvult" -> Ult | "bvule" -> Ule | "bvugt" -> Ugt | "bvuge" -> Uge
+          | "bvslt" -> Slt | "bvsle" -> Sle | "bvsgt" -> Sgt | "bvsge" -> Sge
+          | value -> failwith ("cvc5: unknown relation " ^ value)
+        in
+        binary operator left right
       in
       while next () <> "define-fun" do () done;
       ignore (next ()) (* function name *);
@@ -613,6 +638,7 @@ module Cvc5_backend = struct
 end
 
 let cvc5_sygus_problem = Cvc5_backend.sygus_problem
+let cvc5_parse_answer = Cvc5_backend.parse_answer
 
 (* ── Registry ──────────────────────────────────────────────────── *)
 

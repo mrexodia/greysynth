@@ -77,6 +77,9 @@ val xyntia_grammar_for_profile : string -> operator_profile -> string
 val cvc5_sygus_problem : problem -> string
 (** Render the cvc5 problem. Exposed for grammar-contract tests. *)
 
+val cvc5_parse_answer : problem -> string -> Sexpr.Expr.t option
+(** Parse a cvc5 SyGuS answer, including conditional relations. *)
+
 val names : string list
 (** Names of the available backends. *)
 

@@ -112,5 +112,13 @@ let () =
     (fun terminal ->
       require (contains terminal) ("cvc5 grammar is missing " ^ terminal))
     [ "#x2a"; "(bvudiv NT8 NT8)"; "(bvsdiv NT8 NT8)";
-      "(bvurem NT8 NT8)"; "(bvsrem NT8 NT8)" ];
+      "(bvurem NT8 NT8)"; "(bvsrem NT8 NT8)";
+      "(ite (bvult NT8 NT8) NT8 NT8)" ];
+  let answer =
+    "(define-fun f ((v0 (_ BitVec 8))) (_ BitVec 8) "
+    ^ "(ite (bvult v0 #x2a) #x01 #x02))"
+  in
+  (match B.cvc5_parse_answer problem answer with
+  | Some (E.Ite { c = E.Binary { f = E.Ult; size = 1; _ }; _ }) -> ()
+  | _ -> failwith "cvc5 conditional answer was parsed incorrectly");
   Printf.printf "synth_backends: Xyntia conversion and cvc5 grammar passed\n"
