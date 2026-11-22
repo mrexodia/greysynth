@@ -264,6 +264,14 @@ let () =
     let size_gt = Greysynth_utils.Utils.size_of_expr sexpr_gt in
     let expr_obf_str = Greysynth_utils.Utils.pp sexpr_obf in
     let expr_gt_str = Greysynth_utils.Utils.pp sexpr_gt in
+    let costs expression =
+      let open Greysynth_utils.Utils in
+      `Assoc
+        [ ("legacy", `Int (cost_of_expr Legacy expression));
+          ("paper_ast", `Int (cost_of_expr PaperAst expression));
+          ("instruction", `Int (cost_of_expr Instruction expression));
+          ("readability", `Int (cost_of_expr Readability expression)) ]
+    in
 
     let equiv_str, verification, time, counter_example_json, sample_fields =
       match !mode with
@@ -345,11 +353,13 @@ let () =
           ("equiv_time", `Float time);
           ( "obf",
             `Assoc
-              [ ("expression", `String expr_obf_str); ("size", `Int size_obf) ]
+              [ ("expression", `String expr_obf_str); ("size", `Int size_obf);
+                ("costs", costs sexpr_obf) ]
           );
           ( "gt",
             `Assoc
-              [ ("expression", `String expr_gt_str); ("size", `Int size_gt) ] );
+              [ ("expression", `String expr_gt_str); ("size", `Int size_gt);
+                ("costs", costs sexpr_gt) ] );
           ("counter_example", counter_example_json);
         ] @ sample_fields)
     in

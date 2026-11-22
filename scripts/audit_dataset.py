@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -210,9 +211,15 @@ def checker_step(args, original: Path, candidate: Path, width: int,
         if key in report:
             result[key] = report[key]
     for source_key, output_key in (("obf", "input_size"), ("gt", "output_size")):
-        size = report.get(source_key, {}).get("size")
+        operand = report.get(source_key, {})
+        size = operand.get("size")
         if isinstance(size, int) and not isinstance(size, bool) and size > 0:
             result[output_key] = size
+        costs = operand.get("costs")
+        if isinstance(costs, dict) and all(
+                isinstance(value, int) and not isinstance(value, bool) and value > 0
+                for value in costs.values()):
+            result[output_key.replace("size", "costs")] = costs
     return result
 
 
@@ -265,10 +272,14 @@ def combined_verdict(direct: dict, replay: dict) -> str:
     return "proved_compositional" if status == "proved_compositional" else direct["verdict"]
 
 
+def checked_dimensions(check: dict) -> dict:
+    return next((record for record in (check.get("sample", {}), check.get("smt", {}))
+                 if "input_size" in record and "output_size" in record), {})
+
+
 def classify_size(row: dict, report: dict) -> None:
     check = row.get("against_input", {})
-    sizes = next((r for r in (check.get("sample", {}), check.get("smt", {}))
-                  if "input_size" in r and "output_size" in r), {})
+    sizes = checked_dimensions(check)
     before, after = sizes.get("input_size"), sizes.get("output_size")
     source = "checker"
     if before is None or after is None:
@@ -280,6 +291,9 @@ def classify_size(row: dict, report: dict) -> None:
                        "delta": after - before,
                        "relation": "strict_decrease" if after < before else
                        "netneutral" if after == before else "expansion"}
+    input_costs, output_costs = sizes.get("input_costs"), sizes.get("output_costs")
+    if isinstance(input_costs, dict) and isinstance(output_costs, dict):
+        row["costs"] = {"input": input_costs, "output": output_costs}
 
 
 def execute_case(args, case: Case) -> dict:
@@ -333,10 +347,44 @@ def execute_case(args, case: Case) -> dict:
                 if args.check_ground_truth and truth is not None:
                     ground_truth.write_text(truth)
                     row["against_ground_truth"] = check_pair(args, ground_truth, candidate, width, tmpdir)
+                    dimensions = checked_dimensions(row["against_ground_truth"])
+                    ground_truth_costs = dimensions.get("input_costs")
+                    if isinstance(ground_truth_costs, dict):
+                        row.setdefault("costs", {})["ground_truth"] = ground_truth_costs
     except Exception as exc:
         row.update(verdict="error", error=f"{type(exc).__name__}: {exc}")
     row["wall_seconds"] = time.monotonic() - started
     return row
+
+
+def ratio_statistics(values: list[float]) -> dict:
+    if not values:
+        return {"count": 0}
+    return {
+        "count": len(values),
+        "geometric_mean": math.exp(sum(math.log(value) for value in values) / len(values)),
+        "arithmetic_mean": sum(values) / len(values),
+    }
+
+
+def cost_metrics(rows: list[dict]) -> dict:
+    metrics = {}
+    for model in ("legacy", "paper_ast", "instruction", "readability"):
+        quality, compression = [], []
+        for row in rows:
+            costs = row.get("costs", {})
+            original = costs.get("input", {}).get(model)
+            output = costs.get("output", {}).get(model)
+            truth = costs.get("ground_truth", {}).get(model)
+            if isinstance(original, int) and isinstance(output, int) and output > 0:
+                compression.append(original / output)
+            if isinstance(truth, int) and isinstance(output, int) and truth > 0:
+                quality.append(output / truth)
+        metrics[model] = {
+            "quality_output_over_ground_truth": ratio_statistics(quality),
+            "compression_input_over_output": ratio_statistics(compression),
+        }
+    return metrics
 
 
 def summarize(rows: list[dict], metadata: dict, complete: bool) -> dict:
@@ -362,6 +410,7 @@ def summarize(rows: list[dict], metadata: dict, complete: bool) -> dict:
             "direct_proved_strict_decreases": matrix["proved:strict_decrease"],
             "compositional_proved_strict_decreases": matrix["proved_compositional:strict_decrease"],
             "internal_timeouts": sum(bool(row.get("simplifier_report", {}).get("has_timed_out")) for row in rows),
+            "cost_metrics": cost_metrics(rows),
             "summed_case_seconds": sum(row["wall_seconds"] for row in rows)}
 
 

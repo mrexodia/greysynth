@@ -48,6 +48,27 @@ class ProofReporting(unittest.TestCase):
         self.assertEqual(summary["compositional_proved_strict_decreases"], 1)
         self.assertEqual(summary["verdict_counts"]["unknown"], 1)
 
+    def test_summary_reports_ground_truth_quality_and_compression(self):
+        rows = [
+            {"verdict": "proved", "size": {"relation": "strict_decrease"},
+             "synthesis_status": "ok", "wall_seconds": 0,
+             "costs": {"input": {"legacy": 20, "paper_ast": 24},
+                       "output": {"legacy": 5, "paper_ast": 6},
+                       "ground_truth": {"legacy": 4, "paper_ast": 6}}},
+            {"verdict": "proved", "size": {"relation": "strict_decrease"},
+             "synthesis_status": "ok", "wall_seconds": 0,
+             "costs": {"input": {"legacy": 9, "paper_ast": 12},
+                       "output": {"legacy": 3, "paper_ast": 4},
+                       "ground_truth": {"legacy": 3, "paper_ast": 4}}},
+        ]
+        metrics = audit.summarize(rows, {}, True)["cost_metrics"]
+        self.assertAlmostEqual(
+            metrics["legacy"]["quality_output_over_ground_truth"]["arithmetic_mean"],
+            1.125)
+        self.assertAlmostEqual(
+            metrics["legacy"]["compression_input_over_output"]["geometric_mean"],
+            (12.0) ** 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()
