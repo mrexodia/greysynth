@@ -91,8 +91,24 @@ let peepholes evaluate expression =
             else []
         | _ -> []
       in
+      let complements left right =
+        match left, right with
+        | E.Unary { f = E.Not; x; _ }, other
+        | other, E.Unary { f = E.Not; x; _ } -> same x other
+        | _ -> false
+      in
+      let negates left right =
+        match left, right with
+        | E.Unary { f = E.Minus; x; _ }, other
+        | other, E.Unary { f = E.Minus; x; _ } -> same x other
+        | _ -> false
+      in
       let identities =
         match f with
+        | E.And when complements x y -> [ zero ]
+        | E.Or | E.Xor when complements x y -> [ fill ]
+        | E.Plus when complements x y -> [ fill ]
+        | E.Plus when negates x y -> [ zero ]
         | E.Plus when merge_masked_addition () <> [] -> merge_masked_addition ()
         | E.Plus when is_number Z.zero x -> [ y ]
         | E.Plus | E.Minus | E.Or | E.Xor when is_number Z.zero y -> [ x ]

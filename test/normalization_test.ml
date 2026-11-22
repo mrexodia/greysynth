@@ -85,7 +85,11 @@ let prove_shrinks name original maximum =
 let test_peepholes () =
   let x = var 8 "x" and y = var 8 "y" in
   List.iter (fun (name, original, maximum) -> prove_shrinks name original maximum)
-    [ "low mask", band x (c 8 31), 1;
+    [ "and complement", band x (E.unary E.Not x), 1;
+      "or complement", bor x (E.unary E.Not x), 1;
+      "xor complement", bxor x (E.unary E.Not x), 1;
+      "add inverse", plus x (E.unary E.Minus x), 1;
+      "low mask", band x (c 8 31), 1;
       "logical shift", E.binary E.Lsr x (c 8 3), 1;
       "arithmetic overshift", E.binary E.Asr x (c 8 255), 1;
       "unsigned power-of-two quotient", E.binary E.Udiv x (c 8 8), 1;
@@ -219,7 +223,7 @@ let () =
     test_compositional_polynomial_identity ();
     test_normalization_portfolio ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 26 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 30 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"
