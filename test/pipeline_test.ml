@@ -25,6 +25,8 @@ let reset ?(strict = false) () =
   C.c_oes_fixedpoint := false;
   C.c_local_cache := false;
   C.c_add_constants_to_synthesis := false;
+  C.c_balanced_tree := false;
+  C.c_sampling_strategy := C.RealValues;
   C.c_current_mode_is_global := false;
   C.g_total_timeout := 0.;
   C.g_has_timedout := false;
@@ -270,6 +272,52 @@ let test_context_proof () =
       require (!(R.proved) = 1) "context rewrite was not proved"
   | None -> failwith "valid context-dependent rewrite was rejected"
 
+let test_balanced_targets () =
+  reset ();
+  let vars = List.init 8 (fun index -> E.var ("v" ^ string_of_int index) 64 ("v" ^ string_of_int index)) in
+  let skewed = List.fold_left plus (List.hd vars) (List.tl vars) in
+  C.c_balanced_tree := false;
+  let plain, plain_labels = S.truncate skewed 2 in
+  C.c_balanced_tree := true;
+  let balanced, balanced_labels = S.truncate skewed 2 in
+  require (E.compare plain balanced <> 0) "balanced_tree did not change the CHS target";
+  require (Hashtbl.length plain_labels <> Hashtbl.length balanced_labels)
+    "balanced_tree did not change the horizon cut";
+  C.c_balanced_tree := false
+
+let test_sampling_strategies () =
+  reset ();
+  C.c_nb_samples := 8;
+  C.evaluator := Sample_evaluator.make 8;
+  let label = E.var "alpha" 8 "alpha" in
+  let relations = Hashtbl.create 1 in
+  Hashtbl.add relations label (c 8 42);
+  let problem strategy =
+    C.c_sampling_strategy := strategy;
+    S.make_problem label relations 1 1
+  in
+  let real = problem C.RealValues in
+  require
+    (Array.for_all (fun (sample : Greysynth__Synth_backends.sample) ->
+         Bitvector.equal sample.args.(0) (Bitvector.of_int ~size:8 42)
+         && Bitvector.equal sample.args.(0) sample.res) real.samples)
+    "real sampling did not preserve contextual label values";
+  let labels = problem C.LabelValues in
+  require
+    (Array.exists (fun (sample : Greysynth__Synth_backends.sample) ->
+         not (Bitvector.equal sample.args.(0) (Bitvector.of_int ~size:8 42))) labels.samples)
+    "label sampling did not generate independent inputs";
+  require
+    (Array.for_all (fun (sample : Greysynth__Synth_backends.sample) ->
+         Bitvector.equal sample.args.(0) sample.res) labels.samples)
+    "label sampling did not evaluate the independent target";
+  let wrong = problem C.WrongNaive in
+  require
+    (Array.exists (fun (sample : Greysynth__Synth_backends.sample) ->
+         not (Bitvector.equal sample.args.(0) sample.res)) wrong.samples)
+    "wrong_naive no longer represents the mismatched ablation";
+  C.c_sampling_strategy := C.RealValues
+
 let () =
   test_oes_legacy_collision ();
   test_strict_oes_unknown ();
@@ -283,7 +331,9 @@ let () =
   test_ite_substitution ();
   test_synthesis_partial_timeout ();
   test_oes_partial_timeout ();
-  print_endline "pipeline_test: 15 solver-independent regressions passed";
+  test_balanced_targets ();
+  test_sampling_strategies ();
+  print_endline "pipeline_test: 17 solver-independent regressions passed";
   if solver_available then (
     test_context_proof ();
     print_endline "pipeline_test: contextual SMT proof regression passed")

@@ -86,6 +86,48 @@ class ['a] greek_oracle () =
       Hashtbl.iter (fun k v -> Printf.printf "%s → %s\n" (pprint k) v) table
   end
 
+let associative = function
+  | Plus | Mul | And | Or | Xor -> true
+  | _ -> false
+
+(* Reassociation is used only to construct a synthesis target. The concrete
+   source tree is retained and every returned candidate is still restored and
+   proved against it. This lets [balanced_tree] influence CHS horizons without
+   introducing equal-cost rewrites or rewrite cycles in the result tree. *)
+let balance_associative expr =
+  let rec normalize node =
+    match node with
+    | Unary r -> unary r.f (normalize r.x)
+    | Binary r when associative r.f ->
+        let rec flatten acc node =
+          match node with
+          | Binary child when child.f = r.f ->
+              flatten (flatten acc child.x) child.y
+          | child -> normalize child :: acc
+        in
+        let terms = flatten (flatten [] r.x) r.y |> List.sort Sexpr.Expr.compare in
+        let rec build = function
+          | [] -> assert false
+          | [ term ] -> term
+          | terms ->
+              let count = List.length terms in
+              let left_count = count / 2 in
+              let rec split n left rest =
+                if n = 0 then (List.rev left, rest)
+                else match rest with
+                  | head :: tail -> split (n - 1) (head :: left) tail
+                  | [] -> assert false
+              in
+              let left, right = split left_count [] terms in
+              binary r.f (build left) (build right)
+        in
+        build terms
+    | Binary r -> binary r.f (normalize r.x) (normalize r.y)
+    | Ite r -> ite (normalize r.c) (normalize r.t) (normalize r.e)
+    | _ -> node
+  in
+  normalize expr
+
 let truncate (expr : Sexpr.Expr.t) (depth : int) =
   let greek_counter = new greek_oracle () in
   greek_counter#init ();
@@ -130,7 +172,8 @@ let truncate (expr : Sexpr.Expr.t) (depth : int) =
       ret
     else match node with Cst _ -> node | _ -> get_label node
   in
-  let truncated_expression = aux expr depth in
+  let target = if !c_balanced_tree then balance_associative expr else expr in
+  let truncated_expression = aux target depth in
 
   (truncated_expression, new_leafs)
 
@@ -155,11 +198,21 @@ let make_problem e new_leafs synthesis_timeout synthesis_repeat :
      zero. *)
   let samples =
     Array.init !c_nb_samples (fun id ->
-        let args =
-          List.map (fun leaf -> !evaluator.eval_label leaf id new_leafs) leaves
-          |> Array.of_list
+        let contextual leaf = !evaluator.eval_label leaf id new_leafs in
+        let independent leaf = !evaluator.eval leaf id in
+        let args, res =
+          match !c_sampling_strategy with
+          | RealValues ->
+              (List.map contextual leaves, !evaluator.eval_label e id new_leafs)
+          | LabelValues ->
+              (List.map independent leaves, !evaluator.eval e id)
+          | WrongNaive ->
+              (* Historical ablation: independent label inputs paired with the
+                 contextual output. Proof gating prevents this deliberately
+                 inconsistent specification from corrupting the result. *)
+              (List.map independent leaves, !evaluator.eval_label e id new_leafs)
         in
-        { Synth_backends.args; res = !evaluator.eval_label e id new_leafs })
+        { Synth_backends.args = Array.of_list args; res })
   in
 
   let constants =
