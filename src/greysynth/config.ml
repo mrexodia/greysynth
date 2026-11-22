@@ -36,6 +36,7 @@ let string_of_sampling = function
 let c_normalization = ref true
 let c_ac_normalization = ref false
 let c_normalization_portfolio = ref false
+let c_normalization_max_atoms = ref 6
 let c_oes = ref false
 let c_oes_extended = ref false
 let c_oes_fixedpoint = ref false
@@ -99,6 +100,12 @@ let load_config_from_json json_file : unit =
        match json |> member "normalization_portfolio" with
        | `Null -> false
        | v -> to_bool v);
+    (c_normalization_max_atoms :=
+       match json |> member "normalization_max_atoms" with
+       | `Null -> 6
+       | v -> to_int v);
+    if !c_normalization_max_atoms < 1 || !c_normalization_max_atoms > 10 then
+      failwith "config: normalization_max_atoms must be between 1 and 10";
     c_oes := json |> member "oes" |> to_bool;
     (c_oes_extended :=
        match json |> member "oes_extended" with

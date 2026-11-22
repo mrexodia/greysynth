@@ -316,7 +316,7 @@ let linear_candidates cost expression =
     if E.sizeof expression <> width then raise Too_complex;
     let rec lookup index = function
       | [] ->
-          if index >= 4 then raise Too_complex;
+          if index >= !c_normalization_max_atoms then raise Too_complex;
           atoms := !atoms @ [ expression ];
           Atom index
       | previous :: rest ->

@@ -25,6 +25,7 @@ let reset ?(strict = true) () =
   U.cost_model := U.Legacy;
   C.c_ac_normalization := false;
   C.c_normalization_portfolio := false;
+  C.c_normalization_max_atoms := 6;
   C.c_reject_non_equiv_simplifications := strict;
   C.c_equiv_timeout := 5;
   C.g_total_timeout := 0.;
@@ -162,7 +163,6 @@ let test_compositional_polynomial_identity () =
 
 let test_normalization_portfolio () =
   reset ();
-  C.c_normalization_portfolio := true;
   let x = var 64 "x" and y = var 64 "y" and z = var 64 "z" in
   let w = var 64 "w" and a = var 64 "a" and b = var 64 "b" in
   let carry p q = plus (bxor p q) (mul (c 64 2) (band p q)) in
@@ -177,6 +177,10 @@ let test_normalization_portfolio () =
          w)
       a
   in
+  let direct = N.run original in
+  require (E.is_equal direct b) "six-atom linear normalization failed";
+  reset ();
+  C.c_normalization_portfolio := true;
   let result = G.run_normalization original in
   require (E.is_equal result b) "normalization portfolio did not select the best branch";
   require (!(R.proved) > 0) "normalization portfolio bypassed local proofs"

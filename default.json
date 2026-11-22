@@ -2,6 +2,7 @@
   "normalization": true,
   "ac_normalization": false,
   "normalization_portfolio": false,
+  "normalization_max_atoms": 6,
   "cost_model": "legacy",
   "oes": true,
   "oes_extended": false,
