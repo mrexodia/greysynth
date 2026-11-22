@@ -48,13 +48,13 @@ Result on the current implementation:
 |---|---:|
 | Freshly proved outputs | 1,000 |
 | Refuted / unknown / error / process timeout | 0 |
-| Strict reductions under legacy cost | 982 |
-| Unchanged | 18 |
+| Strict reductions under legacy cost (8 workers) | 984 |
+| Unchanged | 16 |
 
-Two large cases (`target_1562`, `target_1565`, both legacy size 34,918) exhausted
-the 15-second internal wall limit under twelve-way contention. A focused
-2-worker rerun reduced and compositionally proved both, recovering the previous
-984/16 complete-configuration coverage. The final historical portfolio remains
+A prior twelve-worker run produced 982/18 because two large cases
+(`target_1562`, `target_1565`, both legacy size 34,918) exhausted the 15-second
+internal wall limit under contention. The current eight-worker run reduced and
+compositionally proved both, recovering 984/16 complete-configuration coverage. The final historical portfolio remains
 985/15. This is why corpus summaries must record worker count and both internal
 and process deadlines.
 
@@ -83,7 +83,11 @@ projects; no dataset contents are committed here.
 The initial polynomial run reduced only 31/100 cases. After adding the first
 proof-decomposed disjoint-partition identity, all 100 reduce and independently
 replay: 99 require compositional proof and one also passes the short direct
-whole-expression query. This validates the review's micro-step architecture;
+whole-expression query. With `--check-ground-truth`, legacy/paper-AST geometric
+quality is **1.0602x** (arithmetic 1.1033x) and geometric compression is
+**3.0755x** (arithmetic 3.2694x). Ground-truth whole-expression checks are 70
+proved and 30 explicitly unknown; output correctness remains established
+against the original input for all 100. This validates the review's micro-step architecture;
 more polynomial shapes still need decomposition. A strict reduction is not the
 same as matching the supplied ground truth, so future runs must add ground-truth
 cost ratios after the raw-file harness exposes them directly.

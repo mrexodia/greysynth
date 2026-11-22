@@ -33,8 +33,10 @@ five. New simplification work must also cover:
 - mixed-width, division/remainder, shift/rotate, polynomial, masked semilinear,
   and sparse-conditional regression suites.
 
-Every benchmark report must separate proved, refuted, inconclusive, timeout, and
-error outcomes. Quality runs record input/output costs, wall time, synthesis
+Every benchmark report separates proved, refuted, inconclusive, timeout, and
+error outcomes and now computes geometric/arithmetic quality and compression
+under all cost models when `--check-ground-truth` is used. Quality runs record
+input/output/ground-truth costs, wall time, synthesis
 attempts, backend result classes, proof outcomes, and certificate replay.
 Dataset-derived output is not committed unless it is a compact summary with
 provenance and exact commands.
@@ -95,8 +97,9 @@ runs in one process have isolated metrics; reports account for every attempt.
 - [ ] Add semilinear mask reconstruction and bit-partitioned simplification.
 - [x] Seed bounded zero/one/two/fill, negated, complemented, and pairwise-derived
   constants in synthesis grammars.
-- [x] Add the first compositional disjoint-partition polynomial identity, with
-  ten independently replayed Boolean/ring micro-steps; it raises the audited
+- [x] Add compositional disjoint-partition polynomial identities, including
+  commuted operands/sums and common constant scaling; independently replayed
+  Boolean/ring micro-steps raise the audited
   100-case PLDI Poly sample from 31 to 100 strict reductions.
 - [ ] Generalize decomposed certificates to arbitrary minterm polynomials, AC
   cancellation, and permutation-polynomial inversion so producer and replay do
@@ -121,7 +124,9 @@ C-Full.
 - [ ] Rank representatives by extraction cost and expected proof complexity.
 - [ ] Canonicalize proof-cache keys.
 - [x] Retry inconclusive obligations only when a larger budget is available.
-- [ ] Reuse generalized proofs and solver contexts where the solver API permits.
+- [x] Reuse successful producer-side compositional endpoint proofs and honor
+  timeout/non-strict policy; independent replay deliberately remains cache-free.
+- [ ] Reuse incremental solver contexts where the solver API permits.
 - [ ] Prototype a bounded equality beam/e-graph so equal-cost canonical forms
   can expose a lower-cost parent without creating rewrite cycles.
 
@@ -137,7 +142,8 @@ on the 1,000-case corpus.
   apply them across concrete contexts without another backend call.
 - [x] Keep dependency-specific templates local when generalization is refuted or
   inconclusive.
-- [ ] Version and replay learned-rule proofs independently.
+- [ ] Persist/version generalized learned-rule proofs independently; every
+  concrete rule application is already re-proved and recorded for replay.
 - [ ] Canonicalize truncated ASTs so alpha-renaming and commutative ordering do
   not prevent reuse.
 
@@ -155,7 +161,7 @@ proved once, then reused for distinct operands with no additional synthesis.
   reproducibly seeded random/small-value tail.
   alternating masks, byte/word boundaries, carry boundaries, large shifts,
   divisors, and correlated variable assignments.
-- [ ] Keep independent training and validation banks.
+- [x] Keep independently seeded structured training and validation banks.
 - [x] On SMT refutation, retain the concrete model, turn it into contextual
   cut-label values, and retry within the configured `cegis_retries` bound.
 - [ ] Add branch-covering SMT samples for sparse conditionals and point functions.
@@ -197,7 +203,9 @@ claim paper-AST improvements merely because casts are free in the legacy metric.
 
 - [x] Simplify ITE conditions and branches independently and expose typed ITEs
   to contextual synthesis instead of making the entire node opaque.
-- [ ] Restrict conditional synthesis to branch-covering samples.
+- [ ] Restrict conditional synthesis to branch-covering samples. Mixed
+  conditional+shift/division targets now retain all operators through Xyntia's
+  `full_ite` grammar.
 - [ ] Add predicate extraction and proved select/min/max idioms.
 - [ ] Keep memory loads and C/binary lifting outside the pure-expression proof
   claim until their semantics are modeled independently.
