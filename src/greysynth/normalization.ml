@@ -236,25 +236,46 @@ let canonical_candidates expression =
         | E.Binary { f = E.Mul; x = E.Cst value; y; _ }
         | E.Binary { f = E.Mul; x = y; y = E.Cst value; _ } ->
             collect (Z.mul coefficient (Bitvector.value_of value)) y
+        | E.Binary { f = E.Lsl; x; y = E.Cst amount; _ }
+          when Z.lt (Bitvector.value_of amount) (Z.of_int width) ->
+            let scale = Z.shift_left Z.one (Z.to_int (Bitvector.value_of amount)) in
+            collect (Z.mul coefficient scale) x
         | atom -> add atom coefficient
       in
       collect Z.one expression;
-      let terms =
+      let positives, negatives =
         Nodes.fold
-          (fun atom coefficient terms ->
+          (fun atom coefficient (positives, negatives) ->
             let coefficient = normalize coefficient in
-            if Z.equal coefficient Z.zero then terms
+            if Z.equal coefficient Z.zero then (positives, negatives)
+            else if Z.equal coefficient (Z.pred modulus) then
+              (positives, atom :: negatives)
             else
               let term =
                 if Z.equal coefficient Z.one then atom
-                else if Z.equal coefficient (Z.pred modulus) then E.unary E.Minus atom
                 else E.binary E.Mul atom (const coefficient)
               in
-              term :: terms)
-          coefficients []
+              (term :: positives, negatives))
+          coefficients ([], [])
       in
-      let terms = if Z.equal !offset Z.zero then terms else const !offset :: terms in
-      [ (match sorted terms with [] -> zeros width | terms -> build_balanced E.Plus terms) ]
+      let positives =
+        if Z.equal !offset Z.zero then positives else const !offset :: positives
+      in
+      let positive =
+        match sorted positives with
+        | [] -> None
+        | terms -> Some (build_balanced E.Plus terms)
+      in
+      let negative =
+        match sorted negatives with
+        | [] -> None
+        | terms -> Some (build_balanced E.Plus terms)
+      in
+      [ (match positive, negative with
+        | None, None -> zeros width
+        | Some result, None -> result
+        | None, Some result -> E.unary E.Minus result
+        | Some positive, Some negative -> E.binary E.Minus positive negative) ]
   | E.Binary { f = E.Xor; _ } ->
       let terms = flatten E.Xor [] expression in
       let counts = Nodes.create 16 and bits = ref Z.zero in

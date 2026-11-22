@@ -147,6 +147,10 @@ let test_associative_canonicalization () =
   List.iter (fun (name, original, maximum) -> prove_ac name original maximum)
     [ "xor cancellation", bxor (bxor x y) x, 1;
       "coefficient collection", plus (plus x x) x, 3;
+      "negative term collection",
+        plus (plus x (E.unary E.Minus y)) (E.unary E.Minus x), 2;
+      "shift coefficient collection",
+        plus (E.binary E.Lsl x (c 16 2)) (E.binary E.Lsl x (c 16 2)), 3;
       "idempotent conjunction", band (band x y) x, 3 ]
 
 let test_compositional_polynomial_identity () =
@@ -233,7 +237,7 @@ let () =
     test_compositional_polynomial_identity ();
     test_normalization_portfolio ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 32 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 34 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"
