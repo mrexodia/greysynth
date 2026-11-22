@@ -91,10 +91,23 @@ whole-expression query. With `--check-ground-truth`, legacy/paper-AST geometric
 quality is **1.0602x** (arithmetic 1.1033x) and geometric compression is
 **3.0755x** (arithmetic 3.2694x). Ground-truth whole-expression checks are 70
 proved and 30 explicitly unknown; output correctness remains established
-against the original input for all 100. This validates the review's micro-step architecture;
-more polynomial shapes still need decomposition. A strict reduction is not the
-same as matching the supplied ground truth, so future runs must add ground-truth
-cost ratios after the raw-file harness exposes them directly.
+against the original input for all 100. This validates the review's micro-step
+architecture; more polynomial shapes still need decomposition.
+
+Ground-truth-aware reruns quantify why strict reduction alone is insufficient:
+
+| 100-case sample | Legacy geometric quality | Arithmetic quality | Geometric compression |
+|---|---:|---:|---:|
+| PLDI Poly | 1.0602x | 1.1033x | 3.0755x |
+| PLDI Non-Poly | 19.2494x | 39.8843x | 2.5498x |
+| MBA-Obfuscator nonlinear | 11.4734x | 11.6924x | 1.0916x |
+| QSynth EA | 1.0073x | 1.3707x | 11.4693x |
+
+All 400 outputs are proved against their inputs. Short whole-expression checks
+against supplied ground truths prove 155 and leave 245 explicitly unknown;
+these ratios compare syntax/cost and do not claim that every supplied answer is
+semantically consistent. General non-polynomial and MBA-Obfuscator algebra are
+the next dominant quality gaps.
 
 ## Representative probes
 
