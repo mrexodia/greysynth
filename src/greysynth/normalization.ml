@@ -990,6 +990,21 @@ let run expression =
           Some candidate
       | _ -> None)
   in
+  let rec oracle_visit node =
+    if !g_has_timedout then node
+    else (
+      check_timeout ();
+      if oracle_compatible node && cost node >= 11 then
+        Option.value (try_oracle node) ~default:node
+      else
+        match node with
+        | E.Unary { f; x; _ } -> E.unary f (oracle_visit x)
+        | E.Binary { f; x; y; _ } ->
+            E.binary f (oracle_visit x) (oracle_visit y)
+        | E.Ite { c; t; e; _ } ->
+            E.ite (oracle_visit c) (oracle_visit t) (oracle_visit e)
+        | _ -> node)
+  in
   let rec visit ?(allow_oracle = true) original =
     if !g_has_timedout then original
     else match Nodes.find_opt results original with
@@ -1015,12 +1030,16 @@ let run expression =
            | Some candidate -> current := visit candidate
            | None ->
                current := (match original with
-                 | E.Unary { f; x; _ } -> E.unary f (visit x)
+                 | E.Unary { f; x; _ } -> E.unary f (visit ~allow_oracle x)
                  | E.Binary { f; x; y; _ } ->
-                     let x = visit x in let y = visit y in E.binary f x y
+                     let x = visit ~allow_oracle x in
+                     let y = visit ~allow_oracle y in
+                     E.binary f x y
                  | E.Ite { c; t; e; _ } ->
-                     let c = visit c in let t = visit t in let e = visit e
-                     in E.ite c t e
+                     let c = visit ~allow_oracle c in
+                     let t = visit ~allow_oracle t in
+                     let e = visit ~allow_oracle e in
+                     E.ite c t e
                  | _ -> original));
            if Option.is_none early_minterm && not !g_has_timedout then (
              let oracle = if allow_oracle then try_oracle !current else None in
@@ -1060,12 +1079,8 @@ let run expression =
         Nodes.replace results original !current;
         !current
   in
-  let root_is_oracle_target =
-    !c_mba_oracle <> "none" && !c_mba_oracle_calls > 0
-    && cost expression >= 11 && oracle_compatible expression
+  let expression =
+    if !c_mba_oracle = "none" || !c_mba_oracle_calls = 0 then expression
+    else oracle_visit expression
   in
-  if root_is_oracle_target then
-    match try_oracle expression with
-    | Some candidate -> visit ~allow_oracle:false candidate
-    | None -> visit ~allow_oracle:false expression
-  else visit expression
+  visit ~allow_oracle:false expression

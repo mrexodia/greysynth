@@ -58,10 +58,12 @@ let test_external_oracle_adapter () =
           require (E.is_equal candidate x) "MBA oracle variable mapping changed"
       | None -> failwith "MBA oracle adapter returned no candidate");
       let square = mul x x in
-      ignore (N.run (plus (plus square square) square));
+      let large = plus (plus square square) square in
+      ignore (N.run large);
+      ignore (N.run (E.unary (E.Uext 8) large));
       let calls = In_channel.with_open_text marker In_channel.input_lines in
-      require (List.length calls = 2)
-        "MBA oracle did not prioritize the maximal root subtree")
+      require (List.length calls = 3)
+        "MBA oracle did not prioritize maximal pure subtrees under mixed roots")
 
 let test_fail_closed () =
   reset ();
