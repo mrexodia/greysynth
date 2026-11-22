@@ -143,6 +143,122 @@ let peepholes evaluate expression =
         | None -> [])
   | _ -> []
 
+let build_balanced op = function
+  | [] -> invalid_arg "normalization: empty associative expression"
+  | terms ->
+      let rec build = function
+        | [] -> assert false
+        | [ term ] -> term
+        | terms ->
+            let count = List.length terms in
+            let rec split n left rest =
+              if n = 0 then (List.rev left, rest)
+              else match rest with
+                | head :: tail -> split (n - 1) (head :: left) tail
+                | [] -> assert false
+            in
+            let left, right = split (count / 2) [] terms in
+            E.binary op (build left) (build right)
+      in
+      build terms
+
+(* Exact associative/commutative candidates. These rules do not depend on
+   finite truth tables; the shared acceptance boundary still proves every
+   size-reducing result. *)
+let canonical_candidates expression =
+  let width = E.sizeof expression in
+  let modulus = Z.shift_left Z.one width in
+  let normalize value = Z.erem value modulus |> fun value ->
+    if Z.sign value < 0 then Z.add value modulus else value
+  in
+  let const value = constant width (normalize value) in
+  let rec flatten op acc = function
+    | E.Binary { f; x; y; _ } when f = op -> flatten op (flatten op acc x) y
+    | term -> term :: acc
+  in
+  let sorted terms = List.sort E.compare terms in
+  match expression with
+  | E.Binary { f = (E.Plus | E.Minus); _ } ->
+      let coefficients = Nodes.create 16 in
+      let offset = ref Z.zero in
+      let add atom coefficient =
+        let old = Option.value (Nodes.find_opt coefficients atom) ~default:Z.zero in
+        Nodes.replace coefficients atom (normalize (Z.add old coefficient))
+      in
+      let rec collect coefficient = function
+        | E.Cst value ->
+            offset := normalize (Z.add !offset (Z.mul coefficient (Bitvector.value_of value)))
+        | E.Unary { f = E.Minus; x; _ } -> collect (Z.neg coefficient) x
+        | E.Binary { f = E.Plus; x; y; _ } -> collect coefficient x; collect coefficient y
+        | E.Binary { f = E.Minus; x; y; _ } ->
+            collect coefficient x; collect (Z.neg coefficient) y
+        | E.Binary { f = E.Mul; x = E.Cst value; y; _ }
+        | E.Binary { f = E.Mul; x = y; y = E.Cst value; _ } ->
+            collect (Z.mul coefficient (Bitvector.value_of value)) y
+        | atom -> add atom coefficient
+      in
+      collect Z.one expression;
+      let terms =
+        Nodes.fold
+          (fun atom coefficient terms ->
+            let coefficient = normalize coefficient in
+            if Z.equal coefficient Z.zero then terms
+            else
+              let term =
+                if Z.equal coefficient Z.one then atom
+                else if Z.equal coefficient (Z.pred modulus) then E.unary E.Minus atom
+                else E.binary E.Mul atom (const coefficient)
+              in
+              term :: terms)
+          coefficients []
+      in
+      let terms = if Z.equal !offset Z.zero then terms else const !offset :: terms in
+      [ (match sorted terms with [] -> zeros width | terms -> build_balanced E.Plus terms) ]
+  | E.Binary { f = E.Xor; _ } ->
+      let terms = flatten E.Xor [] expression in
+      let counts = Nodes.create 16 and bits = ref Z.zero in
+      List.iter
+        (function
+          | E.Cst value -> bits := Z.logxor !bits (Bitvector.value_of value)
+          | term ->
+              let count = Option.value (Nodes.find_opt counts term) ~default:0 in
+              Nodes.replace counts term (count lxor 1))
+        terms;
+      let terms = Nodes.fold (fun term odd acc -> if odd = 1 then term :: acc else acc) counts [] in
+      let terms = if Z.equal !bits Z.zero then terms else const !bits :: terms in
+      [ (match sorted terms with [] -> zeros width | terms -> build_balanced E.Xor terms) ]
+  | E.Binary { f = (E.And | E.Or as op); _ } ->
+      let terms = flatten op [] expression |> List.sort_uniq E.compare in
+      let zero = Z.zero and fill = Z.pred modulus in
+      let constant_value = if op = E.And then fill else zero in
+      let absorbing = if op = E.And then zero else fill in
+      let constants, terms = List.partition_map
+          (function E.Cst value -> Left (Bitvector.value_of value) | term -> Right term) terms in
+      let combined = List.fold_left
+          (if op = E.And then Z.logand else Z.logor) constant_value constants |> normalize in
+      let has_complement = List.exists (function
+          | E.Unary { f = E.Not; x; _ } -> List.exists (E.is_equal x) terms
+          | term -> List.exists (function
+              | E.Unary { f = E.Not; x; _ } -> E.is_equal x term
+              | _ -> false) terms) terms in
+      if has_complement || Z.equal combined absorbing then [ const absorbing ]
+      else
+        let terms = if Z.equal combined constant_value then terms else const combined :: terms in
+        [ (match sorted terms with [] -> const constant_value | terms -> build_balanced op terms) ]
+  | E.Binary { f = E.Mul; _ } ->
+      let terms = flatten E.Mul [] expression in
+      let coefficient, terms = List.fold_left
+          (fun (coefficient, terms) -> function
+            | E.Cst value -> (normalize (Z.mul coefficient (Bitvector.value_of value)), terms)
+            | term -> (coefficient, term :: terms))
+          (Z.one, []) terms in
+      if Z.equal coefficient Z.zero then [ zeros width ]
+      else if terms = [] then [ const coefficient ]
+      else
+        let terms = if Z.equal coefficient Z.one then terms else const coefficient :: terms in
+        [ build_balanced E.Mul (sorted terms) ]
+  | _ -> []
+
 (* Linear arithmetic combinations of bitwise functions admit a conjunction
    basis over their atoms. Nonlinear/mixed-width subtrees are opaque atoms,
    never evaluated as independent bits inside an unsupported operation. *)
@@ -343,6 +459,7 @@ let run expression =
              | _ -> original);
            if not !g_has_timedout then (
              let candidates = peepholes constants.eval !current
+                 @ canonical_candidates !current
                  @ (if cost !current >= 4 then linear_candidates cost !current else []) in
              let candidates = List.filter (fun candidate -> cost candidate < cost !current) candidates in
              let candidates = List.sort_uniq (fun a b ->

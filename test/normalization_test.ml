@@ -97,6 +97,13 @@ let test_linear_mba () =
       "complemented arithmetic", plus (plus (E.unary E.Not (plus x y)) x)
           (plus y (c 32 1)), 1 ]
 
+let test_associative_canonicalization () =
+  let x = var 16 "x" and y = var 16 "y" in
+  List.iter (fun (name, original, maximum) -> prove_shrinks name original maximum)
+    [ "xor cancellation", bxor (bxor x y) x, 1;
+      "coefficient collection", plus (plus x x) x, 3;
+      "idempotent conjunction", band (band x y) x, 3 ]
+
 let test_nonlinear_is_opaque () =
   reset ();
   let x = var 8 "x" and y = var 8 "y" in
@@ -126,8 +133,9 @@ let () =
   if solver_available then (
     test_peepholes ();
     test_linear_mba ();
+    test_associative_canonicalization ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 18 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 21 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"
