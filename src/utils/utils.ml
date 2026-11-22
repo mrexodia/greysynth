@@ -205,22 +205,30 @@ let cost_model_of_string = function
            "unknown cost model %S (expected legacy, paper_ast, instruction, or readability)"
            value)
 
+let unary_cost model f =
+  match model, f with
+  | Legacy, (Sexpr.Expr.Restrict _ | Sexpr.Expr.Sext _ | Sexpr.Expr.Uext _) -> 0
+  | Readability, (Sexpr.Expr.Restrict _ | Sexpr.Expr.Sext _ | Sexpr.Expr.Uext _) -> 2
+  | _ -> 1
+
+let binary_cost model f =
+  match model, f with
+  | Instruction, (Sexpr.Expr.Udiv | Sexpr.Expr.Sdiv | Sexpr.Expr.Umod | Sexpr.Expr.Smod) -> 8
+  | Instruction, Sexpr.Expr.Mul -> 2
+  | Readability, (Sexpr.Expr.Udiv | Sexpr.Expr.Sdiv | Sexpr.Expr.Umod | Sexpr.Expr.Smod
+                 | Sexpr.Expr.Concat) -> 3
+  | _ -> 1
+
+let conditional_cost = function
+  | Instruction -> 3
+  | Readability -> 4
+  | _ -> 1
+
 let cost_of_expr model e =
   let memo = Sexpr.BvTbl.create 128 in
-  let unary_cost f =
-    match model, f with
-    | Legacy, (Sexpr.Expr.Restrict _ | Sexpr.Expr.Sext _ | Sexpr.Expr.Uext _) -> 0
-    | Readability, (Sexpr.Expr.Restrict _ | Sexpr.Expr.Sext _ | Sexpr.Expr.Uext _) -> 2
-    | _ -> 1
-  in
-  let binary_cost f =
-    match model, f with
-    | Instruction, (Sexpr.Expr.Udiv | Sexpr.Expr.Sdiv | Sexpr.Expr.Umod | Sexpr.Expr.Smod) -> 8
-    | Instruction, Sexpr.Expr.Mul -> 2
-    | Readability, (Sexpr.Expr.Udiv | Sexpr.Expr.Sdiv | Sexpr.Expr.Umod | Sexpr.Expr.Smod
-                   | Sexpr.Expr.Concat) -> 3
-    | _ -> 1
-  in
+  let unary_cost f = unary_cost model f in
+  let binary_cost f = binary_cost model f in
+  let conditional_cost = conditional_cost model in
   let rec cost expression =
     match Sexpr.BvTbl.find_opt memo expression with
     | Some value -> value
@@ -230,14 +238,14 @@ let cost_of_expr model e =
           | Sexpr.Expr.Unary r -> unary_cost r.f + cost r.x
           | Sexpr.Expr.Binary r -> binary_cost r.f + cost r.x + cost r.y
           | Sexpr.Expr.Ite r ->
-              (match model with Instruction -> 3 | Readability -> 4 | _ -> 1)
-              + cost r.c + cost r.t + cost r.e
+              conditional_cost + cost r.c + cost r.t + cost r.e
           | Sexpr.Expr.Var _ | Sexpr.Expr.Load _ | Sexpr.Expr.Cst _ -> 1
         in
         Sexpr.BvTbl.add memo expression value;
         value
   in
   cost e
+
 
 let size_of_expr e = cost_of_expr !cost_model e
 

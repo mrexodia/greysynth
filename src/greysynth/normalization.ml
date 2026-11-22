@@ -672,26 +672,10 @@ let run expression =
         let open Greysynth_utils.Utils in
         let value =
           match expression with
-          | E.Unary { f; x; _ } ->
-              let weight =
-                match !cost_model, f with
-                | Legacy, (E.Uext _ | E.Sext _ | E.Restrict _) -> 0
-                | Readability, (E.Uext _ | E.Sext _ | E.Restrict _) -> 2
-                | _ -> 1
-              in
-              weight + cost x
-          | E.Binary { f; x; y; _ } ->
-              let weight =
-                match !cost_model, f with
-                | Instruction, (E.Udiv | E.Sdiv | E.Umod | E.Smod) -> 8
-                | Instruction, E.Mul -> 2
-                | Readability, (E.Udiv | E.Sdiv | E.Umod | E.Smod | E.Concat) -> 3
-                | _ -> 1
-              in
-              weight + cost x + cost y
+          | E.Unary { f; x; _ } -> unary_cost !cost_model f + cost x
+          | E.Binary { f; x; y; _ } -> binary_cost !cost_model f + cost x + cost y
           | E.Ite { c; t; e; _ } ->
-              (match !cost_model with Instruction -> 3 | Readability -> 4 | _ -> 1)
-              + cost c + cost t + cost e
+              conditional_cost !cost_model + cost c + cost t + cost e
           | _ -> 1
         in
         Nodes.add sizes expression value;
