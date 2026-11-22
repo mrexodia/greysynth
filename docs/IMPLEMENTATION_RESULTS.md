@@ -74,16 +74,19 @@ projects; no dataset contents are committed here.
 
 | Dataset | Cases | Proved | Strictly smaller | Unchanged |
 |---|---:|---:|---:|---:|
-| ProMBA/MBA-Solver `pldi_poly` | 100 | 100 | 31 | 69 |
+| ProMBA/MBA-Solver `pldi_poly` | 100 | 100 | 100 | 0 |
 | ProMBA/MBA-Solver `pldi_nonpoly` | 100 | 100 | 99 | 1 |
 | MBA-Obfuscator/GAMBA `mba_obf_nonlinear` | 100 | 100 | 100 | 0 |
 | QSynth EA | 100 | 100 | 100 | 0 |
-| **Total** | **400** | **400** | **330** | **70** |
+| **Total** | **400** | **400** | **399** | **1** |
 
-These results confirm that polynomial MBA remains the largest quality gap. A
-strict reduction is not the same as matching the supplied ground truth, so
-future runs must add ground-truth cost ratios after the raw-file harness exposes
-them directly.
+The initial polynomial run reduced only 31/100 cases. After adding the first
+proof-decomposed disjoint-partition identity, all 100 reduce and independently
+replay: 99 require compositional proof and one also passes the short direct
+whole-expression query. This validates the review's micro-step architecture;
+more polynomial shapes still need decomposition. A strict reduction is not the
+same as matching the supplied ground truth, so future runs must add ground-truth
+cost ratios after the raw-file harness exposes them directly.
 
 ## Representative probes
 
@@ -104,3 +107,15 @@ The two-value Boolean recovery added during this work now handles the review's
 
 Before that pass, the expression remained at size 24 after ten failed CHS
 queries.
+
+The 64-bit polynomial identity whose direct five-second SMT query is
+inconclusive now reduces in about 6 ms through ten independently replayed local
+obligations:
+
+```text
+(x&y)*(x|y) + (x&~y)*(~x&y)
+17 -> 3: x*y
+```
+
+`mba_proof` reports all ten equalities proved and derives the endpoints by
+congruence and transitivity.

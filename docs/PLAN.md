@@ -92,11 +92,12 @@ runs in one process have isolated metrics; reports account for every attempt.
 - [ ] Add semilinear mask reconstruction and bit-partitioned simplification.
 - [x] Seed bounded zero/one/two/fill, negated, complemented, and pairwise-derived
   constants in synthesis grammars.
-- [ ] Emit wide algebraic candidates as compositional certificates: first map
-  bitwise factors to disjoint minterms with small linear proofs, then normalize
-  the abstract minterm polynomial through small ring micro-steps. Do the same
-  for AC cancellation and permutation-polynomial inversion so producer and
-  replay do not depend on one monolithic bit-blasted query.
+- [x] Add the first compositional disjoint-partition polynomial identity, with
+  ten independently replayed Boolean/ring micro-steps; it raises the audited
+  100-case PLDI Poly sample from 31 to 100 strict reductions.
+- [ ] Generalize decomposed certificates to arbitrary minterm polynomials, AC
+  cancellation, and permutation-polynomial inversion so producer and replay do
+  not depend on monolithic bit-blasted queries.
 - [x] Add two-value affine-Boolean extraction with compact DNF/CNF/ANF recovery
   before falling back to a dense AND-monomial basis. NPN/ESOP tables remain a
   possible performance refinement.
