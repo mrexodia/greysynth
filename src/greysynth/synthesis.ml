@@ -375,6 +375,14 @@ let prepare_candidates synth_expr new_leafs =
 
 let synthesize ~original e new_leafs synthesis_timeout synthesis_repeat =
   check_timeout ();
+  let synthesis_timeout =
+    if !g_total_timeout <= 0. then synthesis_timeout
+    else
+      let remaining = !g_total_timeout -. (Unix.gettimeofday () -. !g_start_time) in
+      let seconds = int_of_float (floor remaining) in
+      if seconds <= 0 then raise Timeout_exception;
+      min synthesis_timeout seconds
+  in
   let problem = make_problem e new_leafs synthesis_timeout synthesis_repeat in
   match run_backend problem with
   | None, time ->

@@ -410,6 +410,20 @@ let test_legacy_simplifier_edges () =
   let reassociated = U.binsec_simplify (plus a (plus b d)) in
   require (E.sizeof reassociated = 8) "legacy reassociation changed the result width"
 
+let test_backend_budget_is_bounded () =
+  reset ();
+  C.g_total_timeout := 3.;
+  C.g_start_time := Unix.gettimeofday () -. 1.1;
+  let seen = ref 0 in
+  C.c_synthesizer := (fun (problem : Greysynth__Synth_backends.problem) ->
+      seen := problem.timeout;
+      None);
+  let original = plus x y in
+  let template, labels = S.truncate original 2 in
+  ignore (S.synthesize ~original template labels 5 1);
+  require (!seen = 1) "backend timeout exceeds the remaining global budget";
+  C.g_total_timeout := 0.
+
 let test_derived_constant_seeding () =
   reset ();
   C.c_add_constants_to_synthesis := true;
@@ -453,9 +467,10 @@ let () =
   test_sampling_strategies ();
   test_oes_proof_fallback ();
   test_legacy_simplifier_edges ();
+  test_backend_budget_is_bounded ();
   test_derived_constant_seeding ();
   test_logging_reset ();
-  print_endline "pipeline_test: 21 solver-independent regressions passed";
+  print_endline "pipeline_test: 22 solver-independent regressions passed";
   if solver_available then (
     test_context_proof ();
     test_larger_proof_budget_retries ();
