@@ -55,8 +55,8 @@ provenance and exact commands.
 - [x] Make cvc5's grammar include conditionals and comparisons.
 - [x] Add cvc5 division, remainder, and discovered constants.
 - [x] Bound backend-requested time by the remaining global budget.
-- [ ] Enforce process-group deadlines for external tools and classify failures
-  instead of flattening them to `None`.
+- [x] Enforce process-group deadlines for external tools and classify no-result,
+  hard-timeout, process-error, ill-formed, and rejected outcomes separately.
 
 Acceptance: no supported backend result is rejected as an unsupported AST node;
 all operator fixtures replay as equivalent; the retained 57-case CHS set has no
@@ -69,8 +69,10 @@ conversion errors.
 - [ ] Include normalization and the selected cost model in the pipeline summary.
 - [x] Reset all metric state for each library/API invocation.
 - [x] Populate before/after semantic-class metrics correctly.
-- [ ] Record no-result, timeout, unsupported-result, ill-formed-result,
-  not-smaller, sample-refuted, SMT-refuted, and SMT-inconclusive separately.
+- [x] Record backend no-result, timeout, process error, ill-formed result, and
+  post-validation rejection separately.
+- [ ] Split post-validation rejection into not-smaller, sample-refuted,
+  SMT-refuted, and SMT-inconclusive outcomes.
 - [x] Memoize repeated structural nodes in cost/depth and OES traversals.
 
 Acceptance: changing a reported option changes behavior in a targeted test; two
@@ -143,16 +145,18 @@ proved once, then reused for distinct operands with no additional synthesis.
 
 ## Milestone 6: samples and counterexample-guided refinement
 
-- [ ] Represent samples as explicit per-variable environments.
+- [x] Represent retained SMT counterexamples and synthesized retry samples as
+  explicit per-variable environments.
 - [x] Add explicit-environment evaluation and zero/all-one/every-one-hot tuples
   for independent label sampling, as required by XSmir affine rules.
-- [ ] Extend deterministic contextual strata with extrema, one-hot/one-cold bit
-  values, powers of two,
+- [x] Extend contextual banks with deterministic variable tuples, extrema,
+  one-hot/one-cold bit values, powers of two, low masks, alternating bits, and a
+  reproducibly seeded random/small-value tail.
   alternating masks, byte/word boundaries, carry boundaries, large shifts,
   divisors, and correlated variable assignments.
 - [ ] Keep independent training and validation banks.
-- [ ] On SMT refutation, add the model to the synthesis bank and retry within a
-  bounded CEGIS loop.
+- [x] On SMT refutation, retain the concrete model, turn it into contextual
+  cut-label values, and retry within the configured `cegis_retries` bound.
 - [ ] Add branch-covering SMT samples for sparse conditionals and point functions.
 
 Acceptance: known sparse-mask and large-shift candidates are rejected by the
@@ -161,8 +165,8 @@ from a recorded seed and explicit sample manifest.
 
 ## Milestone 7: adaptive synthesis scheduling
 
-- [ ] Bound each backend call by the remaining global deadline. Xyntia now uses
-  wall time internally; the caller still needs to pass the smaller remaining budget.
+- [x] Bound each backend call by the remaining global deadline; Xyntia uses wall
+  time internally and external tools run under a hard process-group deadline.
 - [ ] Start with short probes and escalate promising node/horizon pairs.
 - [ ] Rank work by possible cost reduction, cut-label count, repeated semantic
   classes, constants, operator family, and adjacent-horizon history.
