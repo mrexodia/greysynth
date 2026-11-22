@@ -34,4 +34,4 @@ install:
 	dune install
 	
 clean:
-	rm -rf ./_build
+	dune clean
