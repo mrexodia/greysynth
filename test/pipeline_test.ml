@@ -204,7 +204,14 @@ let test_ite_substitution () =
   Hashtbl.add labels rhs y;
   let result = S.replace_greek_vars (E.ite cond lhs rhs) labels in
   require (E.compare result (E.ite condition x y) = 0)
-    "cut labels remain inside a conditional"
+    "cut labels remain inside a conditional";
+  reset ();
+  let template, cut = S.truncate (E.ite condition (plus x zero) (plus y zero)) 1 in
+  (match template with
+  | E.Ite { c; _ } -> require (E.sizeof c = 1) "truncated ITE condition changed width"
+  | _ -> failwith "CHS made the entire conditional opaque");
+  let problem = S.make_problem template cut 1 1 in
+  require problem.operators.conditional "conditional grammar was not selected"
 
 let test_synthesis_partial_timeout () =
   let run global =

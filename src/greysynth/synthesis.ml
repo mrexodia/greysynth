@@ -166,7 +166,8 @@ let truncate (expr : Sexpr.Expr.t) (depth : int) =
             Sexpr.Expr.binary r.f (aux r.x (n - 1)) (aux r.y (n - 1))
         | Var _ -> get_label node
         | Cst _ -> node
-        | Sexpr.Expr.Ite _ -> get_label node (* opaque input to the synthesizer *)
+        | Sexpr.Expr.Ite r ->
+            Sexpr.Expr.ite (aux r.c (n - 1)) (aux r.t (n - 1)) (aux r.e (n - 1))
         | _ -> failwith "Not implemented (extract_tree)"
       in
       ret
