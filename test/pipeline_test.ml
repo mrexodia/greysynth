@@ -391,7 +391,20 @@ let test_larger_proof_budget_retries () =
   require
     (R.accepts_compositional ~pass:"cached-compositional"
        ~equalities:[ original, x ] original x)
-    "larger budget did not retry a compositional proof"
+    "larger budget did not retry a compositional proof";
+  reset ~strict:true ();
+  R.start_recording original;
+  let builder = Option.get !(R.journal) in
+  P.record builder ~pass:"prior-proof" original x;
+  Hashtbl.replace R.proofs (R.proof_key original x) U.Yes;
+  require
+    (R.accepts_compositional ~pass:"cached-endpoint"
+       ~equalities:[] ~ring_equalities:[ x, plus x (c 64 1) ] original x)
+    "cached proved endpoint was not reused";
+  let report = P.verify ~timeouts:[ 2. ] ~original ~candidate:x (P.finish builder x) in
+  require
+    (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+    "cached endpoint attached unchecked compositional obligations"
 
 let test_chs_horizon_restart () =
   reset ~strict:true ();

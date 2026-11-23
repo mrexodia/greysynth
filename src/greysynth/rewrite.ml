@@ -135,9 +135,11 @@ let accepts_compositional ?(ring_equalities = []) ~pass ~equalities original can
           ~default:0.
       in
       if cached = Some Yes then (
+        (* The earlier successful acceptance already recorded its derivation.
+           Never attach a new, unchecked set of obligations merely because the
+           endpoint equality is cached. *)
         last_rejection := "none";
         incr proved;
-        record_equalities ();
         true)
       else if Option.is_some cached && not (Hashtbl.mem proof_budgets key) then (
         last_rejection := "smt_inconclusive";

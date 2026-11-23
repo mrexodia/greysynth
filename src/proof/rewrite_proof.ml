@@ -550,7 +550,12 @@ let verify ?(timeouts = [1.]) ~original ~candidate certificate =
             else if method_ = "ring_mod2w" then incr ring
             else incr direct;
             established := edge :: !established
-        | U.No -> fail "a local equality was refuted; this does not refute the final output"
+        | U.No ->
+            fail
+              (Printf.sprintf
+                 "a local %s equality was refuted: %s != %s; this does not refute the final output"
+                 (match edge.rule with Smt -> "smt" | Ring_mod2w -> "ring_mod2w")
+                 (U.pp (node g edge.left).expr) (U.pp (node g edge.right).expr))
         | U.Timeout -> incr timed_out
         | U.Unknown | U.Disabled ->
             incr unknown;
