@@ -476,6 +476,28 @@ let test_egraph_extraction () =
     (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
     "e-graph extracted result did not replay minimally"
 
+let test_egraph_legacy_cast_cycle () =
+  reset ();
+  C.c_egraph_extraction := true;
+  C.c_egraph_max_enodes := 64;
+  C.c_egraph_max_iters := 4;
+  U.cost_model := U.Legacy;
+  let x = var 8 "cast_cycle_x" in
+  let widened = E.unary (E.Uext 8) x in
+  let original = E.unary (E.Restrict { lo = 0; hi = 7 }) widened in
+  R.start_recording original;
+  let started = Unix.gettimeofday () in
+  let result = EG.optimize original in
+  let elapsed = Unix.gettimeofday () -. started in
+  require (elapsed < 1.)
+    (Printf.sprintf "legacy zero-cost cast cycle took %.3fs" elapsed);
+  require (E.is_equal result x) "legacy cast-cycle extraction missed the smaller AST";
+  let certificate = P.finish (Option.get !(R.journal)) result in
+  let report = P.verify ~timeouts:[ 1.; 5. ] ~original ~candidate:result certificate in
+  require
+    (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+    "legacy cast-cycle certificate did not replay"
+
 let test_egraph_child_replay () =
   let check label original maximum =
     reset ();
@@ -562,6 +584,7 @@ let () =
     test_sparse_ring_normalization ();
     test_compositional_polynomial_identity ();
     test_egraph_extraction ();
+    test_egraph_legacy_cast_cycle ();
     test_egraph_child_replay ();
     test_preprocessing_portfolio ();
     test_nonlinear_is_opaque ();

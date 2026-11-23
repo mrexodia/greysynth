@@ -1382,7 +1382,8 @@ type local_candidate = {
   allow_equal_cost : bool;
 }
 
-let local_candidates ~cost ~(constants : Sample_evaluator.t) ~ac expression =
+let local_candidates ~cost ~(constants : Sample_evaluator.t)
+    ?(heavy_additive = true) ~ac expression =
   let direct pass ?(allow_equal_cost = false) candidate =
     { expr = candidate; pass; equalities = [ expression, candidate ];
       ring_equalities = []; allow_equal_cost }
@@ -1392,7 +1393,9 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t) ~ac expression =
       ring_equalities = [ expression, candidate ]; allow_equal_cost }
   in
   let candidates = ref [] in
-  let bitsliced_fast = bitsliced_candidate cost expression in
+  let bitsliced_fast =
+    if heavy_additive then bitsliced_candidate cost expression else None
+  in
   Option.iter
     (fun candidate ->
       let equalities, ring_equalities =
@@ -1405,6 +1408,7 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t) ~ac expression =
   if Option.is_none bitsliced_fast then (
   List.iter (fun candidate -> candidates := direct "peephole" candidate :: !candidates)
     (peepholes constants.eval expression);
+  if heavy_additive then (
   if ac then
     List.iter
       (fun candidate ->
@@ -1464,6 +1468,7 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t) ~ac expression =
           { expr = candidate; pass = "linear-mba"; equalities; ring_equalities;
             allow_equal_cost = false } :: !candidates)
       (linear_candidates cost expression));
+  );
   let seen = Nodes.create 32 in
   List.rev !candidates
   |> List.filter (fun candidate ->

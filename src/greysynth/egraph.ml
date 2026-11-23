@@ -177,9 +177,52 @@ let cheapest graph ids =
     None ids
   |> Option.get
 
-let verify_local ~local_deadline candidate lhs rhs =
+let verify_local ~local_deadline (candidate : Normalization.local_candidate) lhs rhs =
   if not (Rewrite.samples_agree lhs rhs) then false
   else
+    let timeout =
+      let local_remaining = local_deadline -. Unix.gettimeofday () in
+      let global_remaining =
+        if !g_total_timeout <= 0. then infinity
+        else !g_total_timeout -. (Unix.gettimeofday () -. !g_start_time)
+      in
+      min 0.5 (min (float_of_int !c_equiv_timeout)
+                 (min local_remaining global_remaining))
+    in
+    let direct =
+      match candidate.ring_equalities, candidate.equalities with
+      | [], [ (left, right) ] ->
+          (E.is_equal left lhs && E.is_equal right rhs)
+          || (E.is_equal left rhs && E.is_equal right lhs)
+      | _ -> false
+    in
+    if timeout <= 0. then false
+    else if direct then
+      let key = Rewrite.proof_key lhs rhs in
+      let cached =
+        match Hashtbl.find_opt Rewrite.proofs key with
+        | Some (Yes | No as verdict) -> Some verdict
+        | Some (Unknown | Timeout | Disabled as verdict) ->
+            let attempted =
+              Option.value (Hashtbl.find_opt Rewrite.proof_budgets key)
+                ~default:Float.infinity
+            in
+            if attempted >= timeout then Some verdict else None
+        | None -> None
+      in
+      let verdict =
+        match cached with
+        | Some verdict -> verdict
+        | None ->
+            let verdict, _, _ =
+              Rewrite_proof.prove_equality_with_model ~timeout lhs rhs
+            in
+            Hashtbl.replace Rewrite.proofs key verdict;
+            Hashtbl.replace Rewrite.proof_budgets key timeout;
+            verdict
+      in
+      verdict = Yes
+    else
     let builder = Rewrite_proof.create lhs in
     List.iter
       (fun (left, right) ->
@@ -192,17 +235,6 @@ let verify_local ~local_deadline candidate lhs rhs =
     if candidate.equalities = [] && candidate.ring_equalities = [] then
       Rewrite_proof.record builder ~pass:candidate.pass lhs rhs;
     let certificate = Rewrite_proof.finish builder rhs in
-    let timeout =
-      let local_remaining = local_deadline -. Unix.gettimeofday () in
-      let global_remaining =
-        if !g_total_timeout <= 0. then infinity
-        else !g_total_timeout -. (Unix.gettimeofday () -. !g_start_time)
-      in
-      min 0.5 (min (float_of_int !c_equiv_timeout)
-                 (min local_remaining global_remaining))
-    in
-    if timeout <= 0. then false
-    else
       let report =
         Rewrite_proof.verify ~timeouts:[ timeout ]
           ~original:lhs ~candidate:rhs certificate
@@ -277,9 +309,10 @@ let semantic_merge ~local_deadline graph =
   !changed
 
 let compute_best graph =
-  let best : (int * E.t) option array = Array.make graph.limit None in
-  let changed = ref true in
-  while !changed do
+  let best : (int * int * E.t) option array = Array.make graph.limit None in
+  let changed = ref true and rounds = ref 0 in
+  while !changed && !rounds <= graph.count do
+    incr rounds;
     changed := false;
     let child id = best.(find graph id) in
     representatives graph
@@ -289,36 +322,41 @@ let compute_best graph =
                let enode = node graph id in
                let candidate =
                  match enode.shape with
-                 | Var _ | Cst _ -> Some (1, enode.expr)
+                 | Var _ | Cst _ -> Some (1, 1, enode.expr)
                  | Unary (op, x) ->
                      Option.map
-                       (fun (cost, expression) ->
-                         (unary_cost !cost_model op + cost, E.unary op expression))
+                       (fun (cost, nodes, expression) ->
+                         (unary_cost !cost_model op + cost, nodes + 1,
+                          E.unary op expression))
                        (child x)
                  | Binary (op, x, y) ->
-                     Option.bind (child x) (fun (left_cost, left) ->
+                     Option.bind (child x) (fun (left_cost, left_nodes, left) ->
                          Option.map
-                           (fun (right_cost, right) ->
+                           (fun (right_cost, right_nodes, right) ->
                              (binary_cost !cost_model op + left_cost + right_cost,
+                              left_nodes + right_nodes + 1,
                               E.binary op left right))
                            (child y))
                  | Ite (c, t, e) ->
-                     Option.bind (child c) (fun (condition_cost, condition) ->
-                         Option.bind (child t) (fun (yes_cost, yes) ->
+                     Option.bind (child c) (fun (condition_cost, condition_nodes, condition) ->
+                         Option.bind (child t) (fun (yes_cost, yes_nodes, yes) ->
                              Option.map
-                               (fun (no_cost, no) ->
+                               (fun (no_cost, no_nodes, no) ->
                                  (conditional_cost !cost_model + condition_cost
                                   + yes_cost + no_cost,
+                                  condition_nodes + yes_nodes + no_nodes + 1,
                                   E.ite condition yes no))
                                (child e)))
                in
                Option.iter
-                 (fun ((cost, expression) as value) ->
+                 (fun ((cost, nodes, expression) as value) ->
                    match best.(root) with
                    | None -> best.(root) <- Some value; changed := true
-                   | Some (previous_cost, previous) ->
+                   | Some (previous_cost, previous_nodes, previous) ->
                        if cost < previous_cost
-                          || (cost = previous_cost && E.compare expression previous < 0)
+                          || (cost = previous_cost && nodes < previous_nodes)
+                          || (cost = previous_cost && nodes = previous_nodes
+                              && E.compare expression previous < 0)
                        then (best.(root) <- Some value; changed := true))
                  candidate)
              ids)
@@ -328,8 +366,79 @@ let compute_best graph =
 let extract graph root =
   let best = compute_best graph in
   match best.(find graph root) with
-  | Some (_, expression) -> expression
+  | Some (_, _, expression) -> expression
   | None -> (node graph root).expr
+
+let rec additive_terms = function
+  | E.Unary { f = E.Minus; x; _ } -> additive_terms x
+  | E.Binary { f = (E.Plus | E.Minus); x; y; _ } ->
+      additive_terms x + additive_terms y
+  | _ -> 1
+
+let is_additive_expression = function
+  | E.Unary { f = E.Minus; _ }
+  | E.Binary { f = (E.Plus | E.Minus); _ } -> true
+  | _ -> false
+
+let interior_additive_classes graph best graph_root =
+  let referenced = Array.make graph.limit false
+  and additive_only = Array.make graph.limit true in
+  for id = 0 to graph.count - 1 do
+    let enode = node graph id in
+    List.iteri
+      (fun index child ->
+        let spine_parent =
+          match enode.shape with
+          | Unary (E.Minus, _) -> true
+          | Binary ((E.Plus | E.Minus), _, _) -> index = 0
+          | _ -> false
+        in
+        let child_root = find graph child in
+        referenced.(child_root) <- true;
+        if not spine_parent then additive_only.(child_root) <- false)
+      enode.raw_children
+  done;
+  let representatives = representatives graph in
+  let long_spine = Array.make graph.limit false in
+  List.iter
+    (fun (root, _) ->
+      let expression =
+        match best.(root) with
+        | Some (_, _, expression) -> expression
+        | None -> (node graph root).expr
+      in
+      long_spine.(root) <-
+        is_additive_expression expression && additive_terms expression >= 8)
+    representatives;
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    for id = 0 to graph.count - 1 do
+      let enode = node graph id in
+      if long_spine.(find graph id) then
+        match enode.shape with
+        | Unary (E.Minus, child) ->
+            let child = find graph child in
+            if not long_spine.(child) then (long_spine.(child) <- true; changed := true)
+        | Binary ((E.Plus | E.Minus), left, _) ->
+            let left = find graph left in
+            if not long_spine.(left) then (long_spine.(left) <- true; changed := true)
+        | _ -> ()
+    done
+  done;
+  let interior = Array.make graph.limit false in
+  List.iter
+    (fun (root, _) ->
+      let expression =
+        match best.(root) with
+        | Some (_, _, expression) -> expression
+        | None -> (node graph root).expr
+      in
+      interior.(root) <-
+        root <> graph_root && referenced.(root) && additive_only.(root)
+        && long_spine.(root) && is_additive_expression expression)
+    representatives;
+  interior
 
 let emit_minimal_proofs graph original target =
   let visited = Hashtbl.create 64 and emitted = Hashtbl.create 64 in
@@ -414,7 +523,7 @@ let optimize expression =
         let root_class = find graph root in
         let root_fast = ref false in
         (match best.(root_class) with
-        | Some (_, root_expression) when size_of_expr root_expression <= 512 ->
+        | Some (_, _, root_expression) when size_of_expr root_expression <= 512 ->
             (match Normalization.bitsliced_candidate size_of_expr root_expression with
             | Some candidate ->
                 let proposal : Normalization.local_candidate =
@@ -440,16 +549,21 @@ let optimize expression =
             | None -> ())
         | _ -> ());
         if not !root_fast then (
+        let interior_additive = interior_additive_classes graph best root_class in
         representatives graph
         |> List.sort (fun (left_root, _) (right_root, _) ->
-               let left_cost = Option.fold ~none:max_int ~some:fst best.(left_root)
-               and right_cost = Option.fold ~none:max_int ~some:fst best.(right_root) in
-               Int.compare left_cost right_cost)
+               let cost = function
+                 | Some (value, _, _) -> value
+                 | None -> max_int
+               in
+               Int.compare (cost best.(left_root)) (cost best.(right_root)))
         |> List.iter (fun (class_root, ids) ->
                if Unix.gettimeofday () > local_deadline then raise Egraph_budget;
                let fallback_id, fallback = cheapest graph ids in
                let representative =
-                 Option.fold ~none:fallback ~some:snd best.(class_root)
+                 match best.(class_root) with
+                 | Some (_, _, expression) -> expression
+                 | None -> fallback
                in
                let id =
                  if E.is_equal representative fallback then fallback_id
@@ -460,6 +574,7 @@ let optimize expression =
                  Nodes.add visited representative ();
                  let candidates =
                    Normalization.local_candidates ~cost:size_of_expr ~constants
+                     ~heavy_additive:(not interior_additive.(class_root))
                      ~ac:!c_ac_normalization representative
                    |> List.sort (fun (left : Normalization.local_candidate) right ->
                           let order = Int.compare (size_of_expr left.expr) (size_of_expr right.expr) in
@@ -503,7 +618,9 @@ let optimize expression =
         if !root_fast then continue := false;
         let root_class = find graph root in
         let root_best =
-          Option.fold ~none:(node graph root).expr ~some:snd (compute_best graph).(root_class)
+          match (compute_best graph).(root_class) with
+          | Some (_, _, expression) -> expression
+          | None -> (node graph root).expr
         in
         if not !changed || size_of_expr root_best <= 1 then continue := false
       done
