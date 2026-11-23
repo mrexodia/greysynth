@@ -195,10 +195,14 @@ reductions and 16 unchanged.
   congruence rebuild, journal-free proof justifications, bounded local-candidate
   saturation, and global bottom-up configured-cost extraction. The 2048-enode /
   4-iteration limits are enforced and large/stalled inputs fall back safely.
-  All five smoke suites and C-Full replay completely; C-Full remains 984/16 with
-  20 smaller / 974 equal / 6 larger outputs. Complete shortest-path/minimal
-  proof-forest emission and eliminate the final six C-Full cross-run differences
-  before enabling it by default.
+  Raw-child-aware congruence nodes, recursive BFS proof-path emission, rebuild
+  correctness, incremental extraction, materialized parent representatives, and
+  semantic-failure memoization are implemented; the two child-class replay
+  reproducers now pass. Corpus acceptance is still open: broad 2048/4 saturation
+  overruns the shared budget (latest C-Full: 984 established, 16 process
+  timeouts, 965 strict reductions). Make every local candidate generator poll
+  the graph-local deadline and complete resource-isolated fallback before
+  enabling the mode.
 
 Acceptance: a targeted test demonstrates fallback from an unprovable smallest
 representative to a proved runner-up and non-monotonic expansion->cancellation

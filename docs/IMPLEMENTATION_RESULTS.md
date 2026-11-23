@@ -266,8 +266,22 @@ and emits only the selected root component's proof forest. Bounds are honest
 (`egraph_max_enodes=2048`, `egraph_max_iters=4`), and large/stalled roots fall
 back to baseline preprocessing.
 
-C-Full remains 1,000/1,000 established and 984/16, with 20 smaller / 974 equal /
-6 larger outputs versus the paired baseline. PLDI Non-Poly is also slightly
-higher than baseline (0.9409x vs. 0.9394x). The graph therefore remains disabled
-by default until proof emission is reduced from the selected component forest
-to shortest required paths and the final cross-run differences are eliminated.
+Round 11 adds raw-child-aware congruence nodes, recursive BFS proof-path
+emission, stale-hashcons repair, fixed-point incremental extraction, materialized
+parent representatives, semantic-failure memoization, and local deadline
+clamping. The exact `child_mba_inside_mul` and `child_ac_expose_parent`
+certificates now independently replay instead of failing `incomplete_derivation`.
+
+The true per-eclass mode is nevertheless not ready for promotion. At the full
+2048-enode/4-iteration setting, broad saturation exhausts the shared budget on
+large corpora. The latest C-Full run establishes 984 outputs, times out 16
+processes, and yields 965 strict reductions / 19 unchanged / 16 unknown. Smoke
+quality also remains above baseline on PLDI Non-Poly, QSynth EA, and msimba when
+the graph saturates broadly. A two-second graph-local rollback and baseline
+fallback is implemented, but several candidate generators do not yet poll that
+local deadline frequently enough to prevent process-level overruns.
+
+`egraph_extraction` therefore remains disabled by default. Baseline results
+remain the authoritative 1,000/1,000 established, 984/16 C-Full result and the
+five sub-1.00x MBA quality measurements. Milestone 4A remains open for
+incremental/interruptible local-candidate scheduling and corpus acceptance.
