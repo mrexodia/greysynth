@@ -64,15 +64,19 @@ let run_normalization expression =
           | _ -> ()
         in
         let initial = Option.map Rewrite_proof.checkpoint proof in
+        let initial_cache = Rewrite.checkpoint_caches () in
         c_ac_normalization := false;
         let baseline = Normalization.run expression in
         let baseline_proof = Option.map Rewrite_proof.checkpoint proof in
+        let baseline_cache = Rewrite.checkpoint_caches () in
         if !g_has_timedout then baseline
         else (
           restore initial;
+          Rewrite.restore_caches initial_cache;
           c_ac_normalization := true;
           let alternative = Normalization.run expression in
           let alternative_proof = Option.map Rewrite_proof.checkpoint proof in
+          let alternative_cache = Rewrite.checkpoint_caches () in
           let baseline_cost = size_of_expr baseline
           and alternative_cost = size_of_expr alternative in
           let choose_alternative =
@@ -84,6 +88,8 @@ let run_normalization expression =
             if choose_alternative then alternative_proof else baseline_proof
           in
           restore selected_proof;
+          Rewrite.restore_caches
+            (if choose_alternative then alternative_cache else baseline_cache);
           if choose_alternative then alternative else baseline))
 
 (* One OES pass, without the logging and stats of [oes_with_logs]. *)
@@ -184,6 +190,7 @@ let run_preprocessing_portfolio gt input =
     let configured_oracle = !c_mba_oracle in
     let proof = !(Rewrite.journal) in
     let proof_initial = Option.map Rewrite_proof.checkpoint proof in
+    let cache_initial = Rewrite.checkpoint_caches () in
     let log_initial = snapshot_preprocessing_log () in
     let restore_proof = function
       | Some checkpoint -> Option.iter (fun builder -> Rewrite_proof.restore builder checkpoint) proof
@@ -201,16 +208,19 @@ let run_preprocessing_portfolio gt input =
         let baseline = run_preprocessing gt input in
         let baseline_log = snapshot_preprocessing_log () in
         let baseline_proof = Option.map Rewrite_proof.checkpoint proof in
+        let baseline_cache = Rewrite.checkpoint_caches () in
         if !g_has_timedout then baseline
         else (
           restore_preprocessing_log log_initial;
           restore_proof proof_initial;
+          Rewrite.restore_caches cache_initial;
           c_ac_normalization := configured_ac;
           c_normalization_portfolio := configured_normalization_portfolio;
           c_mba_oracle := configured_oracle;
           let experimental = run_preprocessing gt input in
           let experimental_log = snapshot_preprocessing_log () in
           let experimental_proof = Option.map Rewrite_proof.checkpoint proof in
+          let experimental_cache = Rewrite.checkpoint_caches () in
           let choose_experimental =
             size_of_expr experimental < size_of_expr baseline
             || (size_of_expr experimental = size_of_expr baseline
@@ -220,6 +230,8 @@ let run_preprocessing_portfolio gt input =
             (if choose_experimental then experimental_log else baseline_log);
           restore_proof
             (if choose_experimental then experimental_proof else baseline_proof);
+          Rewrite.restore_caches
+            (if choose_experimental then experimental_cache else baseline_cache);
           if choose_experimental then experimental else baseline))
 
 (* Run preprocessing, then the enabled synthesis passes. Traversals retain

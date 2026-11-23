@@ -67,6 +67,28 @@ let proof_budgets : (Sexpr.Expr.t * Sexpr.Expr.t, float) Hashtbl.t =
 let compositional_budgets : (Sexpr.Expr.t * Sexpr.Expr.t * string, float) Hashtbl.t =
   Hashtbl.create 128
 
+type cache_checkpoint = {
+  cached_proofs : (Sexpr.Expr.t * Sexpr.Expr.t, equiv_t) Hashtbl.t;
+  cached_budgets : (Sexpr.Expr.t * Sexpr.Expr.t, float) Hashtbl.t;
+  cached_compositional : (Sexpr.Expr.t * Sexpr.Expr.t * string, float) Hashtbl.t;
+}
+
+let checkpoint_caches () =
+  {
+    cached_proofs = Hashtbl.copy proofs;
+    cached_budgets = Hashtbl.copy proof_budgets;
+    cached_compositional = Hashtbl.copy compositional_budgets;
+  }
+
+let restore_table target source =
+  Hashtbl.clear target;
+  Hashtbl.iter (Hashtbl.replace target) source
+
+let restore_caches checkpoint =
+  restore_table proofs checkpoint.cached_proofs;
+  restore_table proof_budgets checkpoint.cached_budgets;
+  restore_table compositional_budgets checkpoint.cached_compositional
+
 let reset ?original () =
   List.iter (fun counter -> counter := 0)
     [ checked; proved; sample_rejections; disproved; inconclusive ];

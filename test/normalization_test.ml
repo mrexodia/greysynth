@@ -370,8 +370,14 @@ let test_normalization_portfolio () =
          w)
       a
   in
+  R.start_recording original;
   let direct = N.run original in
   require (E.is_equal direct b) "six-atom linear normalization failed";
+  let baseline_certificate = P.finish (Option.get !(R.journal)) direct in
+  let baseline_edges =
+    Yojson.Basic.Util.member "equalities" baseline_certificate
+    |> Yojson.Basic.Util.to_list |> List.length
+  in
   reset ();
   C.c_ac_normalization := true;
   R.start_recording original;
@@ -392,7 +398,11 @@ let test_normalization_portfolio () =
     Yojson.Basic.Util.member "equalities" certificate
     |> Yojson.Basic.Util.to_list |> List.length
   in
-  require (portfolio_edges = ac_edges)
+  let selected_edges =
+    if E.is_equal result ac_result && not (E.is_equal result direct) then ac_edges
+    else baseline_edges
+  in
+  require (portfolio_edges = selected_edges)
     "normalization portfolio retained discarded-branch obligations"
 
 let test_preprocessing_portfolio () =
