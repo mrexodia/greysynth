@@ -60,6 +60,10 @@ let c_synthesis_timeout = ref 1
 let c_synthesis_repeat = ref 1
 let c_cegis_retries = ref 1
 let c_learn_synthesis_rules = ref true
+let c_learned_rules_file = ref ""
+let c_chs_adaptive_schedule = ref false
+let c_chs_probe_timeout = ref 1
+let c_synthesizer_portfolio = ref ""
 let c_balanced_tree = ref false
 let c_sampling_strategy = ref RealValues
 let c_branch_covering_samples = ref true
@@ -76,6 +80,8 @@ let c_synthesis_constant_limit = ref 12
 let c_synthesizer_name = ref "xyntia"
 let c_xyntia_grammar = ref "auto"
 let c_synthesizer : Synth_backends.synthesizer ref = ref (fun _ -> None)
+let c_synthesizer_portfolio_backends :
+    (string * Synth_backends.synthesizer) list ref = ref []
 
 (* ── Runtime state ─────────────────────────────────────────────── *)
 let g_total_timeout = ref 0.
@@ -157,6 +163,13 @@ let config_specs =
     int_spec ~report:"cegis_retries" ~validate:((<=) 0) ~message:"must be nonnegative"
       "cegis_retries" 1 c_cegis_retries;
     bool_spec ~report:"learn_synthesis_rules" "learn_synthesis_rules" true c_learn_synthesis_rules;
+    string_spec ~report:"learned_rules_file" "learned_rules_file" "" c_learned_rules_file;
+    bool_spec ~report:"chs_adaptive_schedule" "chs_adaptive_schedule" false
+      c_chs_adaptive_schedule;
+    int_spec ~report:"chs_probe_timeout" ~validate:((<) 0) ~message:"must be positive"
+      "chs_probe_timeout" 1 c_chs_probe_timeout;
+    string_spec ~report:"synthesizer_portfolio" "synthesizer_portfolio" ""
+      c_synthesizer_portfolio;
     bool_spec ~report:"balanced_tree" "balanced_tree" true c_balanced_tree;
     bool_spec "reject_non_equiv_simplifications" true c_reject_non_equiv_simplifications;
     int_spec ~validate:((<) 0) ~message:"must be positive" "equiv_timeout" 1 c_equiv_timeout;
@@ -217,7 +230,14 @@ let apply_config_specs json =
       spec.validate ())
     config_specs;
   if !c_mba_oracle <> "none" && !c_mba_oracle_command = "" then
-    failwith "config: mba_oracle_command is required when an MBA oracle is enabled"
+    failwith "config: mba_oracle_command is required when an MBA oracle is enabled";
+  if !c_synthesizer_portfolio <> "" then
+    String.split_on_char ',' !c_synthesizer_portfolio
+    |> List.map String.trim
+    |> List.iter (fun name ->
+           if name = "" || not (List.mem name Synth_backends.names) then
+             failwith
+               (Printf.sprintf "config: unknown synthesizer_portfolio backend %S" name))
 
 let check_timeout () =
   if !g_total_timeout > 0. then
@@ -233,6 +253,12 @@ let load_config_from_json json_file : unit =
     let json = Yojson.Basic.from_file json_file in
     apply_config_specs json;
     c_synthesizer := Synth_backends.select !c_synthesizer_name json;
+    c_synthesizer_portfolio_backends :=
+      (if !c_synthesizer_portfolio = "" then []
+       else
+         String.split_on_char ',' !c_synthesizer_portfolio
+         |> List.map String.trim
+         |> List.map (fun name -> name, Synth_backends.select name json));
 
     (* Print configuration summary *)
     let pipeline =

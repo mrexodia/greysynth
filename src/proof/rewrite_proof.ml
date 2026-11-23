@@ -496,7 +496,7 @@ let is_connected builder candidate =
   let candidate = of_expr builder.graph candidate in
   congruent builder.graph builder.edges builder.original candidate
 
-let verify ?(timeouts = [1.]) ~original ~candidate certificate =
+let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
   let started = Unix.gettimeofday () in
   let checked = ref 0 and proved = ref 0 and unknown = ref 0 and timed_out = ref 0 in
   let abstract = ref 0 and direct = ref 0 and ring = ref 0 in
@@ -570,3 +570,9 @@ let verify ?(timeouts = [1.]) ~original ~candidate certificate =
       else if !timed_out > 0 && !unknown = 0 then result "timeout" "unresolved_equalities"
       else result "unknown" "unresolved_equalities")
   with exn -> result "error" (Printexc.to_string exn)
+
+let verify ?(timeouts = [1.]) ~original ~candidate certificate =
+  U.reset_solver_session ();
+  Fun.protect
+    ~finally:U.reset_solver_session
+    (fun () -> verify_impl ~timeouts ~original ~candidate certificate)

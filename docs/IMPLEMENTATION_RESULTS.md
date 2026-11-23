@@ -397,3 +397,37 @@ write a certificate.
 The exact-current five 100-case smoke rerun is unchanged from Round 14: 500/500
 established, with geometric quality 0.9290x / 0.7595x / 0.8789x / 0.8443x /
 0.9966409x for Non-Poly, nonlinear, Poly, QSynth EA, and msimba respectively.
+
+## Round-16 proof reuse, persisted rules, and adaptive CHS
+
+OES frontiers now rank equal-cost representatives by a deterministic proof
+complexity estimate after configured extraction cost. Bitwise/additive forms
+precede casts/comparisons, nonlinear products, and division/remainder forms;
+proved runner-up fallback remains unchanged.
+
+Equality checks use a managed incremental `check_sat_assuming` session with a
+shared variable cache. Sessions are discarded after 256 queries and immediately
+on unknown, timeout, or exception. Independent certificate replay and pipeline
+invocations reset the session at their boundaries. Mixed Yes / No-with-model /
+Timeout / Yes tests confirm model extraction and isolation.
+
+Generalized CHS rules can be saved atomically as
+`greysynth.learned-rules.v1`. Every loaded certificate is treated as untrusted
+and independently replayed before insertion; malformed and endpoint-tampered
+entries are rejected. Concrete applications still cross the ordinary rewrite
+proof boundary.
+
+Adaptive CHS is opt-in through `chs_adaptive_schedule`, `chs_probe_timeout`, and
+`synthesizer_portfolio`. It performs cost-aware lower-bound skips, ranks sibling
+work by gain, semantic frequency, cut-leaf count, proof complexity, and adjacent
+horizon history, probes briefly before deterministic escalation, and falls
+through configured backends while recording each attempt. Focused mocks cover
+all four behaviors. On an eight-case Xyntia B2 comparison, adaptive scheduling
+preserved the exact output sizes and accepted reduction while reducing aggregate
+wall time from 31.53s to 20.96s; probes increased total recorded backend calls
+from 34 to 58, of which escalation restores the baseline random state.
+
+The exact Round-16 MBA rerun establishes 500/500 outputs with geometric quality
+0.9290x / 0.7595x / 0.8789x / 0.8315x / 0.9966409x. Four suites are unchanged;
+QSynth EA improves from 0.8443x to 0.8315x. No audit verdict is unknown, errored,
+or timed out.

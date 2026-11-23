@@ -419,6 +419,7 @@ let rec contains_load = function
   | _ -> false
 
 let run ?proof_output obf config gt =
+  Greysynth_utils.Utils.reset_solver_session ();
   Logging.reset ();
   load_config_from_json config;
   let outside_proof_semantics = contains_load obf in
@@ -431,6 +432,7 @@ let run ?proof_output obf config gt =
   g_has_timedout := false;
   Rewrite.reset ~original:obf ();
   Synthesis.reset_rule_cache ();
+  Synthesis.load_learned_rules !c_learned_rules_file;
   if outside_proof_semantics then
     Logging._log_warn "proof" "memory loads are outside the pure-expression proof semantics";
   if not outside_proof_semantics then
@@ -472,4 +474,5 @@ let run ?proof_output obf config gt =
   print_summary ~initial_size ~total_time gt result;
   Format.printf "%s\n"
     (Yojson.Basic.pretty_to_string
-       (report_json ~initial_size ~total_time ?proof ~outside_proof_semantics gt result))
+       (report_json ~initial_size ~total_time ?proof ~outside_proof_semantics gt result));
+  Greysynth_utils.Utils.reset_solver_session ()

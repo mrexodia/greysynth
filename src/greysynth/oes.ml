@@ -145,11 +145,39 @@ let iter_relational_pairs (reps : Sexpr.Expr.t array) emit : unit =
     done
   done
 
+let rec proof_complexity = function
+  | Sexpr.Expr.Var _ | Sexpr.Expr.Cst _ -> 0
+  | Sexpr.Expr.Load _ -> 20
+  | Sexpr.Expr.Unary { f; x; _ } ->
+      (match f with
+      | Not | Minus -> 1
+      | Uext _ | Sext _ | Restrict _ -> 2)
+      + proof_complexity x
+  | Sexpr.Expr.Binary { f; x; y; _ } ->
+      let local =
+        match f with
+        | And | Or | Xor | Plus | Minus -> 1
+        | Lsl | Lsr | Asr | Rol | Ror | Concat -> 2
+        | Eq | Diff | Ule | Ult | Uge | Ugt | Sle | Slt | Sge | Sgt -> 3
+        | Mul ->
+            (match x, y with
+            | Sexpr.Expr.Cst _, _ | _, Sexpr.Expr.Cst _ -> 3
+            | _ -> 8)
+        | Udiv | Sdiv | Umod | Smod -> 10
+      in
+      local + proof_complexity x + proof_complexity y
+  | Sexpr.Expr.Ite { c; t; e; _ } ->
+      3 + proof_complexity c + proof_complexity t + proof_complexity e
+
 let linear_simplify ?(seed = true) (expr : Sexpr.Expr.t) =
   let cache = Hashtbl.create 100 in
   let size = Greysynth_utils.Utils.size_of_expr in
   let compare_candidate left right =
     let order = Int.compare (size left) (size right) in
+    let order =
+      if order <> 0 then order
+      else Int.compare (proof_complexity left) (proof_complexity right)
+    in
     if order = 0 then Sexpr.Expr.compare left right else order
   in
   let rec take count = function

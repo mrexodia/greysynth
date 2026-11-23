@@ -279,7 +279,7 @@ let depth_of_expr expr =
     non-equivalence. *)
 exception Equivalence_timeout
 
-let are_equivalent_seconds ?(show_counter_example = false) (expr1 : Sexpr.Expr.t)
+let are_equivalent_seconds_fresh ?(show_counter_example = false) (expr1 : Sexpr.Expr.t)
     (expr2 : Sexpr.Expr.t) (timeout : float option) :
     equiv_t * float * (string * Z.t) list option =
   let started = Unix.gettimeofday () in
@@ -432,6 +432,145 @@ let are_equivalent_seconds ?(show_counter_example = false) (expr1 : Sexpr.Expr.t
                   | Equivalence_timeout -> finish Timeout None
                   | _ -> finish Unknown None))
         with _ -> finish Unknown None)
+
+type solver_session = {
+  query : show_model:bool -> timeout:float option -> Sexpr.Expr.t -> Sexpr.Expr.t ->
+    Libsolver.status * (string * Z.t) list option;
+  close : unit -> unit;
+  mutable query_count : int;
+}
+
+let solver_session : solver_session option ref = ref None
+
+let reset_solver_session () =
+  Option.iter (fun session -> try session.close () with _ -> ()) !solver_session;
+  solver_session := None
+
+let create_solver_session () =
+  let factory =
+    match Libsolver.bitwuzla_cxx with
+    | Some _ as factory -> factory
+    | None -> (match Libsolver.bitwuzla_c with Some _ as factory -> factory | None -> Libsolver.z3)
+  in
+  Option.map
+    (fun factory ->
+      let module Factory = (val factory : Libsolver.F) in
+      let module Solver = Factory () in
+      let variables : (string * int, Solver.Bv.t) Hashtbl.t = Hashtbl.create 32 in
+      let variable_list = ref [] and active_variables = ref [] in
+      let rec translate = function
+        | Sexpr.Expr.Cst value ->
+            Solver.Bv.value (Bitvector.size_of value) (Bitvector.value_of value)
+        | Sexpr.Expr.Var variable ->
+            let key = variable.name, variable.size in
+            if not (List.mem key !active_variables) then
+              active_variables := key :: !active_variables;
+            (match Hashtbl.find_opt variables key with
+            | Some value -> value
+            | None ->
+                let value =
+                  Solver.Bv.const variable.size
+                    (Printf.sprintf "q%d" (Hashtbl.length variables))
+                in
+                Hashtbl.add variables key value;
+                variable_list := key :: !variable_list;
+                value)
+        | Sexpr.Expr.Unary { f; x; _ } ->
+            let x = translate x in
+            (match f with
+            | Sexpr.Expr.Not -> Solver.Bv.lognot x
+            | Sexpr.Expr.Minus -> Solver.Bv.neg x
+            | Sexpr.Expr.Uext count -> Solver.Bv.uext count x
+            | Sexpr.Expr.Sext count -> Solver.Bv.sext count x
+            | Sexpr.Expr.Restrict { lo; hi } -> Solver.Bv.extract ~hi ~lo x)
+        | Sexpr.Expr.Binary { f; x; y; _ } ->
+            let x = translate x and y = translate y in
+            (match f with
+            | Sexpr.Expr.Plus -> Solver.Bv.add x y
+            | Sexpr.Expr.Minus -> Solver.Bv.sub x y
+            | Sexpr.Expr.Mul -> Solver.Bv.mul x y
+            | Sexpr.Expr.Udiv -> Solver.Bv.udiv x y
+            | Sexpr.Expr.Sdiv -> Solver.Bv.sdiv x y
+            | Sexpr.Expr.Umod -> Solver.Bv.urem x y
+            | Sexpr.Expr.Smod -> Solver.Bv.srem x y
+            | Sexpr.Expr.And -> Solver.Bv.logand x y
+            | Sexpr.Expr.Or -> Solver.Bv.logor x y
+            | Sexpr.Expr.Xor -> Solver.Bv.logxor x y
+            | Sexpr.Expr.Lsl -> Solver.Bv.shift_left x y
+            | Sexpr.Expr.Lsr -> Solver.Bv.shift_right x y
+            | Sexpr.Expr.Asr -> Solver.Bv.shift_right_signed x y
+            | Sexpr.Expr.Ror -> Solver.Bv.rotate_right x y
+            | Sexpr.Expr.Rol -> Solver.Bv.rotate_left x y
+            | Sexpr.Expr.Concat -> Solver.Bv.append x y
+            | Sexpr.Expr.Eq -> Solver.Bl.to_bv (Solver.Bv.equal x y)
+            | Sexpr.Expr.Diff -> Solver.Bl.to_bv (Solver.Bv.diff x y)
+            | Sexpr.Expr.Ule -> Solver.Bl.to_bv (Solver.Bv.ule x y)
+            | Sexpr.Expr.Ult -> Solver.Bl.to_bv (Solver.Bv.ult x y)
+            | Sexpr.Expr.Uge -> Solver.Bl.to_bv (Solver.Bv.uge x y)
+            | Sexpr.Expr.Ugt -> Solver.Bl.to_bv (Solver.Bv.ugt x y)
+            | Sexpr.Expr.Sle -> Solver.Bl.to_bv (Solver.Bv.sle x y)
+            | Sexpr.Expr.Slt -> Solver.Bl.to_bv (Solver.Bv.slt x y)
+            | Sexpr.Expr.Sge -> Solver.Bl.to_bv (Solver.Bv.sge x y)
+            | Sexpr.Expr.Sgt -> Solver.Bl.to_bv (Solver.Bv.sgt x y))
+        | Sexpr.Expr.Ite { c; t; e; _ } ->
+            Solver.Bv.ite (Solver.Bv.to_bl (translate c)) (translate t) (translate e)
+        | Sexpr.Expr.Load _ -> failwith "Equivalence checking does not model memory loads"
+      in
+      let query ~show_model ~timeout left right =
+        active_variables := [];
+        let left = translate left and right = translate right in
+        let status = Solver.check_sat_assuming ?timeout (Solver.Bv.diff left right) in
+        let model =
+          match status with
+          | Libsolver.Sat when show_model ->
+              Some
+                (List.map
+                   (fun ((name, size) as key) ->
+                     let label =
+                       if List.exists (fun (other, width) -> other = name && width <> size)
+                            !variable_list
+                       then Printf.sprintf "%s<%d>" name size else name
+                     in
+                     label, Solver.get_bv_value (Hashtbl.find variables key))
+                   !active_variables)
+          | _ -> None
+        in
+        status, model
+      in
+      { query; close = Solver.close; query_count = 0 })
+    factory
+
+let are_equivalent_seconds ?(show_counter_example = false) expr1 expr2 timeout =
+  let started = Unix.gettimeofday () in
+  let finish verdict model = verdict, Unix.gettimeofday () -. started, model in
+  if Sexpr.Expr.sizeof expr1 <> Sexpr.Expr.sizeof expr2 then finish No None
+  else if Option.fold ~none:false
+      ~some:(fun value -> value <= 0. || not (Float.is_finite value)) timeout
+  then (reset_solver_session (); finish Timeout None)
+  else
+    try
+      let session =
+        match !solver_session with
+        | Some session -> session
+        | None ->
+            (match create_solver_session () with
+            | Some session -> solver_session := Some session; session
+            | None -> raise Not_found)
+      in
+      session.query_count <- session.query_count + 1;
+      let status, model = session.query ~show_model:show_counter_example ~timeout expr1 expr2 in
+      let verdict =
+        match status with
+        | Libsolver.Unsat -> Yes
+        | Libsolver.Sat -> No
+        | Libsolver.Unknown -> Unknown
+      in
+      if verdict = Unknown || session.query_count >= 256 then reset_solver_session ();
+      finish verdict model
+    with
+    | Not_found -> finish Unknown None
+    | Equivalence_timeout -> reset_solver_session (); finish Timeout None
+    | _ -> reset_solver_session (); finish Unknown None
 
 (* Preserve the public integer-timeout API while allowing proof replay to
    share one fractional budget between abstraction and concrete fallback. *)

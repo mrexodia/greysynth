@@ -37,6 +37,18 @@ let () =
     with Failure message -> String.length message > 0
   in
   require load_rejected "memory load entered the pure-expression proof graph";
+  U.reset_solver_session ();
+  let yes, _, _ = U.are_equivalent_seconds x x (Some 1.) in
+  let no, _, model =
+    U.are_equivalent_seconds ~show_counter_example:true x
+      (E.binary E.Plus x (c 8 1)) (Some 1.)
+  in
+  let timeout, _, _ = U.are_equivalent_seconds x x (Some 0.) in
+  let yes_after_reset, _, _ = U.are_equivalent_seconds x x (Some 1.) in
+  require (yes = U.Yes && no = U.No && Option.is_some model
+           && timeout = U.Timeout && yes_after_reset = U.Yes)
+    "incremental solver session leaked state across mixed verdicts";
+  U.reset_solver_session ();
   let identity = certificate x x [] in
   expect "proved_compositional" (P.verify ~original:x ~candidate:x identity);
   expect "error" (P.verify ~original:y ~candidate:x identity);

@@ -22,6 +22,11 @@ let reset ?(strict = false) () =
   C.c_nb_samples := 100;
   C.c_cegis_retries := 1;
   C.c_learn_synthesis_rules := true;
+  C.c_learned_rules_file := "";
+  C.c_chs_adaptive_schedule := false;
+  C.c_chs_probe_timeout := 1;
+  C.c_synthesizer_portfolio := "";
+  C.c_synthesizer_portfolio_backends := [];
   U.cost_model := U.Legacy;
   C.c_reject_non_equiv_simplifications := strict;
   C.c_equiv_timeout := 5;
@@ -626,6 +631,88 @@ let test_logging_reset () =
     "fast simplification equivalence metric survived reset";
   require (!(L.log_final_is_equiv) = U.Disabled) "equivalence metrics survived reset"
 
+let test_oes_proof_ranking () =
+  let easy = plus x y in
+  let nonlinear = E.binary E.Mul x y in
+  let division = E.binary E.Udiv x y in
+  require (O.proof_complexity easy < O.proof_complexity nonlinear
+           && O.proof_complexity nonlinear < O.proof_complexity division)
+    "OES proof-complexity ranking does not prefer easy representatives"
+
+let test_learned_rule_persistence () =
+  reset ();
+  let filename = Filename.temp_file "greysynth-rules" ".json" in
+  Sys.remove filename;
+  let lhs = plus (E.binary E.Or x y) (E.binary E.And x y) in
+  let rhs = plus x y in
+  Sexpr.BvTbl.replace S.universal_rules lhs rhs;
+  S.save_learned_rules filename;
+  S.reset_rule_cache ();
+  S.load_learned_rules filename;
+  require (S.universal_rule_count () = 1)
+    "persisted learned rule did not independently reload";
+  let open Yojson.Basic.Util in
+  let document = Yojson.Basic.from_file filename in
+  let tampered_rules =
+    member "rules" document |> to_list
+    |> List.map (function
+         | `Assoc fields ->
+             `Assoc (("rhs", `String (U.pp zero)) :: List.remove_assoc "rhs" fields)
+         | rule -> rule)
+  in
+  let tampered =
+    match document with
+    | `Assoc fields -> `Assoc (("rules", `List tampered_rules) :: List.remove_assoc "rules" fields)
+    | _ -> assert false
+  in
+  Yojson.Basic.to_file filename tampered;
+  S.reset_rule_cache ();
+  S.load_learned_rules filename;
+  Sys.remove filename;
+  require (S.universal_rule_count () = 0)
+    "tampered learned rule was accepted"
+
+let test_adaptive_chs () =
+  reset ();
+  C.c_chs_adaptive_schedule := true;
+  let calls = ref 0 in
+  C.c_synthesizer := (fun _ -> incr calls; None);
+  let unary = E.unary E.Not x in
+  ignore (S.simplify_with_horizon 1 3 2 unary);
+  require (!calls = 0) "adaptive lower-bound skip called the backend";
+  require
+    (List.exists
+       (fun (attempt : L.synthesis_attempt) -> attempt.status = "skipped_lower_bound")
+       !(L.log_chs_synthesis_attempts))
+    "adaptive lower-bound skip was not reported";
+  reset ();
+  C.c_chs_adaptive_schedule := true;
+  C.c_chs_probe_timeout := 1;
+  let calls = ref 0 in
+  C.c_synthesizer :=
+    (fun (problem : Greysynth__Synth_backends.problem) ->
+      incr calls;
+      if !calls = 1 then None
+      else
+        let input = problem.inputs.(0) in
+        Some (E.var input.name input.size input.name));
+  let result = S.simplify_with_horizon 1 3 2 (plus x zero) in
+  require (!calls = 2 && E.is_equal result x)
+    "adaptive short probe did not escalate to a proved full attempt";
+  reset ();
+  C.c_chs_adaptive_schedule := true;
+  let portfolio_calls = ref [] in
+  let fail _ = portfolio_calls := "primary" :: !portfolio_calls; None in
+  let succeed (problem : Greysynth__Synth_backends.problem) =
+    portfolio_calls := "secondary" :: !portfolio_calls;
+    let input = problem.inputs.(0) in
+    Some (E.var input.name input.size input.name)
+  in
+  C.c_synthesizer_portfolio_backends := [ "primary", fail; "secondary", succeed ];
+  let result = S.simplify_with_horizon 1 1 1 (plus x zero) in
+  require (E.is_equal result x && List.rev !portfolio_calls = [ "primary"; "secondary" ])
+    "adaptive backend portfolio did not prove the fallback result"
+
 let test_load_boundary () =
   let load = E.load 1 Machine.LittleEndian x Libterm.Sexpr.Memory.root in
   let config = Filename.temp_file "greysynth-load" ".json" in
@@ -661,6 +748,9 @@ let test_config_reporting () =
 
 let () =
   test_config_reporting ();
+  test_oes_proof_ranking ();
+  test_learned_rule_persistence ();
+  test_adaptive_chs ();
   test_load_boundary ();
   test_oes_legacy_collision ();
   test_strict_oes_unknown ();

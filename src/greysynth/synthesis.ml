@@ -33,8 +33,72 @@ open Sexpr.Expr
 open Sample_evaluator
 
 let universal_rules : Sexpr.Expr.t Sexpr.BvTbl.t = Sexpr.BvTbl.create 128
-let reset_rule_cache () = Sexpr.BvTbl.clear universal_rules
+let chs_success_history : (outhash, int) Hashtbl.t = Hashtbl.create 64
+let reset_rule_cache () =
+  Sexpr.BvTbl.clear universal_rules;
+  Hashtbl.clear chs_success_history
 let universal_rule_count () = Sexpr.BvTbl.length universal_rules
+
+let learned_rules_format = "greysynth.learned-rules.v1"
+let learned_rules_semantics = "smtlib-fixed-bitvectors-srem-v1"
+
+let rule_certificate lhs rhs =
+  let builder = Rewrite_proof.create lhs in
+  Rewrite_proof.record builder ~pass:"persisted learned rule" lhs rhs;
+  Rewrite_proof.finish builder rhs
+
+let save_learned_rules path =
+  if path <> "" then
+    let rules =
+      Sexpr.BvTbl.fold
+        (fun lhs rhs result ->
+          `Assoc
+            [ "width", `Int (Sexpr.Expr.sizeof lhs);
+              "lhs", `String (Greysynth_utils.Utils.pp lhs);
+              "rhs", `String (Greysynth_utils.Utils.pp rhs);
+              "certificate", rule_certificate lhs rhs ] :: result)
+        universal_rules []
+    in
+    let document =
+      `Assoc
+        [ "format", `String learned_rules_format;
+          "semantics", `String learned_rules_semantics;
+          "rules", `List rules ]
+    in
+    let temporary =
+      Printf.sprintf "%s.tmp.%d" path (Unix.getpid ())
+    in
+    Fun.protect
+      ~finally:(fun () -> if Sys.file_exists temporary then Sys.remove temporary)
+      (fun () -> Yojson.Basic.to_file temporary document; Unix.rename temporary path)
+
+let load_learned_rules filename =
+  if filename <> "" && Sys.file_exists filename then
+    try
+      let open Yojson.Basic.Util in
+      let document = Yojson.Basic.from_file filename in
+      if member "format" document <> `String learned_rules_format
+         || member "semantics" document <> `String learned_rules_semantics
+      then failwith "unsupported learned-rule format or semantics";
+      member "rules" document |> to_list
+      |> List.iter (fun rule ->
+             try
+               let lhs = member "lhs" rule |> to_string |> String_to_sexpr.parse
+               and rhs = member "rhs" rule |> to_string |> String_to_sexpr.parse in
+               if Sexpr.Expr.sizeof lhs <> (member "width" rule |> to_int) then
+                 failwith "learned-rule width mismatch";
+               let report =
+                 Rewrite_proof.verify ~timeouts:[ float_of_int !c_equiv_timeout ]
+                   ~original:lhs ~candidate:rhs (member "certificate" rule)
+               in
+               if member "verification" report = `String "proved_compositional" then
+                 Sexpr.BvTbl.replace universal_rules lhs rhs
+               else _log_warn "rules" "discarding an unverified persisted rule"
+             with exn ->
+               _log_warn "rules" "discarding a malformed persisted rule: %s"
+                 (Printexc.to_string exn))
+    with exn ->
+      _log_warn "rules" "failed to load %s: %s" filename (Printexc.to_string exn)
 
 class ['a] greek_oracle () =
   object (_)
@@ -477,27 +541,28 @@ let status_of_outcome = function
   | Backend_failed -> "backend_error"
   | Ill_formed -> "ill_formed"
 
-let run_backend (problem : Synth_backends.problem) : backend_outcome * float =
+let run_backend ?(name = !c_synthesizer_name) ?(backend = !c_synthesizer)
+    (problem : Synth_backends.problem) : backend_outcome * float =
   let t0 = Unix.gettimeofday () in
   let outcome =
     try
-      match !c_synthesizer problem with
+      match backend problem with
       | None -> No_result
       | Some result when Synth_backends.well_formed problem result -> Returned result
       | Some result ->
-          _log_warn !c_synthesizer_name "discarding ill-formed result: %s"
+          _log_warn name "discarding ill-formed result: %s"
             (Greysynth_utils.Utils.pp result);
           Ill_formed
     with
     | Timeout_exception -> raise Timeout_exception
     | Synth_backends.Backend_timeout command ->
-        _log_warn !c_synthesizer_name "hard timeout: %s" command;
+        _log_warn name "hard timeout: %s" command;
         Backend_timed_out
     | Synth_backends.Backend_failure message ->
-        _log_warn !c_synthesizer_name "failed: %s" message;
+        _log_warn name "failed: %s" message;
         Backend_failed
     | exn ->
-        _log_warn !c_synthesizer_name "failed: %s" (Printexc.to_string exn);
+        _log_warn name "failed: %s" (Printexc.to_string exn);
         Backend_failed
   in
   (outcome, Unix.gettimeofday () -. t0)
@@ -587,7 +652,24 @@ let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
       Some (template, candidate, 0.)
   | None ->
   let problem = make_problem e new_leafs synthesis_timeout synthesis_repeat in
-  match run_backend problem with
+  let backend_result =
+    if not !c_chs_adaptive_schedule || !c_synthesizer_portfolio_backends = [] then
+      run_backend problem
+    else
+      let rec attempt total = function
+        | [] -> No_result, total
+        | (name, backend) :: remaining ->
+            let outcome, elapsed = run_backend ~name ~backend problem in
+            record (name ^ ":" ^ status_of_outcome outcome) elapsed false;
+            (match outcome with
+            | Returned _ -> outcome, total +. elapsed
+            | No_result | Backend_timed_out when remaining <> [] ->
+                attempt (total +. elapsed) remaining
+            | _ -> outcome, total +. elapsed)
+      in
+      attempt 0. !c_synthesizer_portfolio_backends
+  in
+  match backend_result with
   | (No_result | Backend_timed_out | Backend_failed | Ill_formed as outcome), time ->
       record (status_of_outcome outcome) time false;
       None
@@ -627,7 +709,8 @@ let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
         check_timeout ();
         if !c_learn_synthesis_rules && generic_verdict = Yes then (
           let key, result, _ = canonical_rule_pair e (Some synth_expr) in
-          Sexpr.BvTbl.replace universal_rules key (Option.get result));
+          Sexpr.BvTbl.replace universal_rules key (Option.get result);
+          save_learned_rules !c_learned_rules_file);
         let synth_size = Greysynth_utils.Utils.size_of_expr candidate in
         if !c_current_mode_is_global then
           log_global_number_simplifications :=
@@ -654,28 +737,81 @@ let simplify_with_horizon (horizon : int) synthesis_timeout synthesis_repeat
   _log_dim "CHS" "horizon %d  (size=%d)" horizon
     (Greysynth_utils.Utils.size_of_expr expr);
 
+  let frequencies = Hashtbl.create 64 in
+  let rec count node =
+    Greysynth_utils.Utils.increment_counter frequencies (!evaluator.node_to_outhash node);
+    match node with
+    | Unary { x; _ } -> count x
+    | Binary { x; y; _ } -> count x; count y
+    | Ite { c; t; e; _ } -> count c; count t; count e
+    | _ -> ()
+  in
+  count expr;
+  let priority node =
+    let _, leaves = truncate node horizon in
+    let frequency =
+      Option.value (Hashtbl.find_opt frequencies (!evaluator.node_to_outhash node))
+        ~default:1
+    in
+    let history_bonus =
+      match Hashtbl.find_opt chs_success_history (!evaluator.node_to_outhash node) with
+      | Some previous when abs (previous - horizon) <= 1 -> 4
+      | _ -> 0
+    in
+    (frequency * Greysynth_utils.Utils.size_of_expr node + history_bonus,
+     - Hashtbl.length leaves, - Oes.proof_complexity node)
+  in
+
+  let record_skip node status =
+    let attempt : Logging.synthesis_attempt =
+      { input_size = Greysynth_utils.Utils.size_of_expr node; status; time = 0.;
+        is_simplification = false }
+    in
+    log_chs_synthesis_attempts := attempt :: !log_chs_synthesis_attempts
+  in
   let process node =
     Greysynth_utils.Utils.increment_counter log_chs_process_per_horizon horizon;
     let n', new_leafs = truncate node horizon in
-
+    let node_cost = Greysynth_utils.Utils.size_of_expr node in
+    let agrees_with_leaf =
+      let signature = !evaluator.node_to_outhash node in
+      Hashtbl.fold
+        (fun leaf _ agrees -> agrees || !evaluator.node_to_outhash leaf = signature)
+        new_leafs false
+    in
+    let lower_bound =
+      !c_chs_adaptive_schedule
+      && (node_cost <= 1
+          || (node_cost <= 2 && !evaluator.is_node_constant node = None
+              && not agrees_with_leaf))
+    in
     let synthesized_expression =
-      if !c_chs_max_inputs > 0 && Hashtbl.length new_leafs > !c_chs_max_inputs then (
-        let attempt : Logging.synthesis_attempt =
-          {
-            input_size = Greysynth_utils.Utils.size_of_expr node;
-            status = "skipped_input_limit";
-            time = 0.;
-            is_simplification = false;
-          }
-        in
-        log_chs_synthesis_attempts := attempt :: !log_chs_synthesis_attempts;
+      if lower_bound then (record_skip node "skipped_lower_bound"; None)
+      else if !c_chs_max_inputs > 0 && Hashtbl.length new_leafs > !c_chs_max_inputs then (
+        record_skip node "skipped_input_limit";
         None)
+      else if !c_chs_adaptive_schedule then
+        let probe_timeout = min synthesis_timeout !c_chs_probe_timeout in
+        let random_state = Random.get_state () in
+        match synthesize ~original:node n' new_leafs probe_timeout 1 with
+        | Some _ as result -> result
+        | None
+          when (synthesis_timeout > probe_timeout || synthesis_repeat > 1)
+               && (Hashtbl.length new_leafs <= 4 || node_cost <= 5)
+               && (Hashtbl.length new_leafs <= 1 || node_cost >= 5
+                   || Option.value
+                        (Hashtbl.find_opt frequencies (!evaluator.node_to_outhash node))
+                        ~default:1 > 1) ->
+            Random.set_state random_state;
+            synthesize ~original:node n' new_leafs synthesis_timeout synthesis_repeat
+        | None -> None
       else synthesize ~original:node n' new_leafs synthesis_timeout synthesis_repeat
     in
 
     let ret =
       match synthesized_expression with
       | Some (expr, candidate, time) ->
+          Hashtbl.replace chs_success_history (!evaluator.node_to_outhash node) horizon;
           if !c_current_mode_is_global then
             Hashtbl.replace log_global_rules_found (n', expr)
               (match Hashtbl.find_opt log_global_rules_found (n', expr) with
@@ -716,8 +852,17 @@ let simplify_with_horizon (horizon : int) synthesis_timeout synthesis_repeat
             match processed_node with
             | Sexpr.Expr.Unary r -> Sexpr.Expr.unary r.f (aux r.x)
             | Sexpr.Expr.Binary r ->
-                let x = aux r.x in
-                let y = aux r.y in
+                let x, y =
+                  if !c_chs_adaptive_schedule && Stdlib.compare (priority r.y) (priority r.x) > 0
+                  then
+                    let y = aux r.y in
+                    let x = aux r.x in
+                    x, y
+                  else
+                    let x = aux r.x in
+                    let y = aux r.y in
+                    x, y
+                in
                 Sexpr.Expr.binary r.f x y
             | Sexpr.Expr.Ite r ->
                 let c = aux r.c in

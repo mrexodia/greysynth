@@ -177,8 +177,9 @@ reductions and 16 unchanged.
 - [x] Keep a bounded Pareto frontier per sampled semantic class instead of only
   the single smallest representative, retaining speculative constants alongside
   real AST representatives.
-- [ ] Rank representatives by extraction cost and expected proof complexity.
-  Frontier growth remains opt-in after measured timeout regressions.
+- [x] Rank representatives by extraction cost and expected proof complexity.
+  Equal-cost OES frontier entries prefer bitwise/additive proofs over nonlinear,
+  conditional, and division-heavy candidates.
 - [x] Canonicalize proof-cache keys symmetrically across equality direction.
 - [x] Retry inconclusive obligations only when a larger budget is available.
 - [x] Reuse successful and budget-tagged inconclusive producer-side
@@ -187,7 +188,9 @@ reductions and 16 unchanged.
 - [x] Strengthen proof abstraction to replace maximal cost-2/3 subterms and
   nontrivial constants shared across both sides, while retaining concrete
   fallback when the stronger abstraction is satisfiable.
-- [ ] Reuse incremental solver contexts where the solver API permits.
+- [x] Reuse incremental solver contexts where the solver API permits. Managed
+  `check_sat_assuming` sessions reset on inconclusive/error outcomes, after 256
+  queries, and at independent replay and pipeline boundaries.
 - [x] Add baseline-vs-AC whole-normalizer portfolio extraction and retain only
   the winning branch's proof obligations (measured 217 improved / 218 regressed
   under shared wall budget; superseded by Milestone 4A e-graph unification).
@@ -225,8 +228,9 @@ AC enabled and zero destructive phase-ordering regressions.
   apply them across concrete contexts without another backend call.
 - [x] Keep dependency-specific templates local when generalization is refuted or
   inconclusive.
-- [ ] Persist/version generalized learned-rule proofs independently; every
-  concrete rule application is already re-proved and recorded for replay.
+- [x] Persist/version generalized learned-rule proofs independently; every
+  loaded `greysynth.learned-rules.v1` certificate is independently re-verified,
+  and every concrete application remains re-proved and recorded for replay.
 - [x] Canonicalize learned templates across alpha-renaming, commutative order,
   and associative balancing; mixed operator profiles use bounded generic proofs.
   Persisted cross-run rule libraries remain future work.
@@ -260,12 +264,12 @@ from a recorded seed and explicit sample manifest.
 
 - [x] Bound each backend call by the remaining global deadline; Xyntia uses wall
   time internally and external tools run under a hard process-group deadline.
-- [ ] Start with short probes and escalate promising node/horizon pairs.
-- [ ] Rank work by possible cost reduction, cut-label count, repeated semantic
+- [x] Start with short probes and escalate promising node/horizon pairs.
+- [x] Rank work by possible cost reduction, cut-label count, repeated semantic
   classes, constants, operator family, and adjacent-horizon history.
-- [ ] Skip targets whose lower bound cannot beat the incumbent.
+- [x] Skip targets whose lower bound cannot beat the incumbent.
 - [x] Add optional label and horizon caps with explicit skip reporting.
-- [ ] Permit an adaptive backend portfolio for hard targets.
+- [x] Permit an adaptive backend portfolio for hard targets.
 - [x] Preserve completed proved rewrites across every timeout boundary.
 - [x] Restart small CHS horizons after child reductions expose a shallower rule.
 - [x] Avoid caching partial-timeout CHS results and bound relational inversion
