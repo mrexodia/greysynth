@@ -18,6 +18,14 @@ let rec constant_value = function
           try Some (Term.Bv.unary f value) with _ -> None)
   | _ -> None
 
+let canonical_bitwise_atom expression =
+  match constant_value expression with
+  | Some value when not (Bitvector.is_zeros value || Bitvector.is_fill value) ->
+      let complement = Bitvector.lognot value in
+      if Bitvector.compare value complement <= 0 then (E.constant value, false)
+      else (E.constant complement, true)
+  | _ -> (expression, false)
+
 let is_number number expression =
   match constant_value expression with
   | Some value -> Z.equal (Bitvector.value_of value) number
@@ -91,6 +99,47 @@ let peepholes evaluate expression =
             else []
         | _ -> []
       in
+      let merge_scaled_masks () =
+        let masked_term = function
+          | E.Binary { f = E.And; x = base; y = E.Cst mask; _ }
+          | E.Binary { f = E.And; x = E.Cst mask; y = base; _ } -> Some (base, mask)
+          | E.Unary {
+              f = E.Uext _;
+              x = E.Unary { f = E.Restrict { lo = 0; hi }; x = base; _ };
+              size;
+              _;
+            } ->
+              Some (base, Bitvector.create (Z.pred (Z.shift_left Z.one (hi + 1))) size)
+          | _ -> None
+        in
+        let scaled_masked = function
+          | E.Binary { f = E.Mul; x; y; _ } ->
+              (match constant_value x, constant_value y with
+              | Some coefficient, _ ->
+                  Option.map (fun (base, mask) -> (coefficient, base, mask))
+                    (masked_term y)
+              | _, Some coefficient ->
+                  Option.map (fun (base, mask) -> (coefficient, base, mask))
+                    (masked_term x)
+              | _ -> None)
+          | _ -> None
+        in
+        match scaled_masked x, scaled_masked y with
+        | Some (left_coefficient, left, left_mask),
+          Some (right_coefficient, right, right_mask)
+          when Bitvector.equal left_coefficient right_coefficient && same left right ->
+            let left_bits = Bitvector.value_of left_mask
+            and right_bits = Bitvector.value_of right_mask in
+            if Z.equal (Z.logand left_bits right_bits) Z.zero then
+              let combined = Bitvector.logor left_mask right_mask in
+              let merged =
+                if Bitvector.is_fill combined then left
+                else E.binary E.And left (E.constant combined)
+              in
+              [ E.binary E.Mul (E.constant left_coefficient) merged ]
+            else []
+        | _ -> []
+      in
       let complements left right =
         match left, right with
         | E.Unary { f = E.Not; x; _ }, other
@@ -133,6 +182,7 @@ let peepholes evaluate expression =
         | E.Or | E.Xor when complements x y -> [ fill ]
         | E.Plus when complements x y -> [ fill ]
         | E.Plus when negates x y -> [ zero ]
+        | E.Plus when merge_scaled_masks () <> [] -> merge_scaled_masks ()
         | E.Plus when merge_masked_addition () <> [] -> merge_masked_addition ()
         | E.Plus when is_number Z.zero x -> [ y ]
         | E.Plus | E.Minus | E.Or | E.Xor when is_number Z.zero y -> [ x ]
@@ -378,6 +428,7 @@ let minterm_ring_expansion original candidate =
     let atom_table = Sexpr.BvTbl.create 16 in
     let valid = ref true in
     let add_atom expression =
+      let expression, _ = canonical_bitwise_atom expression in
       if E.sizeof expression = width then Sexpr.BvTbl.replace atom_table expression ()
     in
     let rec collect_boolean = function
@@ -420,16 +471,19 @@ let minterm_ring_expansion original candidate =
     else
       let count = Array.length atoms in
       let atom_index expression =
+        let expression, complemented = canonical_bitwise_atom expression in
         let rec find index =
           if index = count then None
-          else if E.is_equal atoms.(index) expression then Some index
+          else if E.is_equal atoms.(index) expression then Some (index, complemented)
           else find (index + 1)
         in
         find 0
       in
       let rec boolean_value assignment expression =
         match atom_index expression with
-        | Some index -> Some (assignment land (1 lsl index) <> 0)
+        | Some (index, complemented) ->
+            let value = assignment land (1 lsl index) <> 0 in
+            Some (if complemented then not value else value)
         | None ->
             match expression with
             | E.Cst value when Bitvector.is_zeros value -> Some false
@@ -637,6 +691,7 @@ let linear_candidates cost expression =
   in
   let atom expression =
     if E.sizeof expression <> width then raise Too_complex;
+    let expression, complemented = canonical_bitwise_atom expression in
     let rec lookup index = function
       | [] ->
           if index >= !c_normalization_max_atoms then raise Too_complex;
@@ -646,7 +701,8 @@ let linear_candidates cost expression =
           if E.is_equal previous expression then Atom index
           else lookup (index + 1) rest
     in
-    lookup 0 !atoms
+    let result = lookup 0 !atoms in
+    if complemented then Not result else result
   in
   let rec linear expression =
     tick ();
@@ -846,22 +902,25 @@ let linear_candidates cost expression =
    certificate checker derives the endpoints through congruence/transitivity. *)
 module RingMonomial = struct
   type t = E.t list
-  let compare = Stdlib.compare
+  let compare = List.compare E.compare
 end
 
 module RingPolynomial = Map.Make (RingMonomial)
 
 exception Ring_candidate_too_complex
 
-let ring_polynomial_candidate expression =
+let ring_polynomial_candidate cost expression =
   let width = E.sizeof expression in
   let modulus = Z.shift_left Z.one width in
   let normalize value =
     let value = Z.erem value modulus in
     if Z.sign value < 0 then Z.add value modulus else value
   in
+  let operations = ref 0 in
   let add_term monomial coefficient polynomial =
-    if List.length monomial > 8 then raise Ring_candidate_too_complex;
+    incr operations;
+    if !operations > 50_000 || List.length monomial > 8 then
+      raise Ring_candidate_too_complex;
     let old = Option.value (RingPolynomial.find_opt monomial polynomial) ~default:Z.zero in
     let value = normalize (Z.add old coefficient) in
     let result =
@@ -889,7 +948,12 @@ let ring_polynomial_candidate expression =
       left RingPolynomial.empty
   in
   let saw_ring = ref false in
-  let rec parse = function
+  let memo = Nodes.create 128 in
+  let rec parse expression =
+    match Nodes.find_opt memo expression with
+    | Some polynomial -> polynomial
+    | None ->
+      let polynomial = match expression with
     | E.Cst value ->
         add_term [] (Bitvector.value_of value) RingPolynomial.empty
     | E.Unary { f = E.Minus; x; _ } -> saw_ring := true; neg (parse x)
@@ -898,6 +962,9 @@ let ring_polynomial_candidate expression =
         saw_ring := true; add (parse x) (neg (parse y))
     | E.Binary { f = E.Mul; x; y; _ } -> saw_ring := true; mul (parse x) (parse y)
     | opaque -> add_term [ opaque ] Z.one RingPolynomial.empty
+      in
+      Nodes.add memo expression polynomial;
+      polynomial
   in
   try
     let polynomial = parse expression in
@@ -934,18 +1001,14 @@ let ring_polynomial_candidate expression =
         | None, Some value -> E.unary E.Minus value
         | Some positive, Some negative -> E.binary E.Minus positive negative
       in
-      if Greysynth_utils.Utils.size_of_expr candidate
-         < Greysynth_utils.Utils.size_of_expr expression
-      then Some candidate else None
+      if cost candidate < cost expression then Some candidate else None
   with Ring_candidate_too_complex -> None
 
-let minterm_polynomial_candidate expression =
+let minterm_polynomial_candidate cost expression =
   Option.bind (minterm_ring_expansion expression expression)
     (fun (equalities, ring_equalities, expanded, _) ->
-      Option.bind (ring_polynomial_candidate expanded) (fun candidate ->
-          if Greysynth_utils.Utils.size_of_expr candidate
-             >= Greysynth_utils.Utils.size_of_expr expression
-          then None
+      Option.bind (ring_polynomial_candidate cost expanded) (fun candidate ->
+          if cost candidate >= cost expression then None
           else Some (candidate, equalities, (expanded, candidate) :: ring_equalities)))
 
 let factor_group_candidate cost expression =
@@ -987,19 +1050,21 @@ let factor_group_candidate cost expression =
     terms;
   let selected =
     Sexpr.BvTbl.fold
-      (fun factor frequency best ->
-        if frequency < 2 then best
-        else match best with
-          | None -> Some (factor, frequency)
-          | Some (previous, previous_frequency) ->
-              if frequency > previous_frequency
-                 || (frequency = previous_frequency && E.compare factor previous < 0)
-              then Some (factor, frequency) else best)
-      frequencies None
+      (fun factor frequency result ->
+        if frequency < 2 then result else (factor, frequency) :: result)
+      frequencies []
+    |> List.sort (fun (left, left_frequency) (right, right_frequency) ->
+           let order = Int.compare right_frequency left_frequency in
+           if order = 0 then E.compare left right else order)
+    |> (fun factors ->
+         let rec take count = function
+           | _ when count = 0 -> []
+           | [] -> []
+           | head :: tail -> head :: take (count - 1) tail
+         in
+         take 6 factors)
   in
-  match selected with
-  | None -> None
-  | Some (factor, _) ->
+  List.find_map (fun (factor, _) ->
       let remove_factor factors =
         let rec remove prefix = function
           | [] -> None
@@ -1039,7 +1104,7 @@ let factor_group_candidate cost expression =
           Sample_evaluator.variables_of_expr cofactor
           |> List.map (fun (name, size) -> E.var name size name)
         in
-        let ring = Option.to_list (ring_polynomial_candidate cofactor) in
+        let ring = Option.to_list (ring_polynomial_candidate cost cofactor) in
         variables @ ring @ linear_candidates cost cofactor
         |> List.filter (fun candidate -> cost candidate < cost cofactor)
         |> List.sort_uniq (fun left right ->
@@ -1057,11 +1122,36 @@ let factor_group_candidate cost expression =
       in
       Option.bind simplification (fun (simplified, (equalities, cofactor_ring)) ->
           let factored = E.binary E.Mul factor cofactor in
-          let simplified_factored = E.binary E.Mul factor simplified in
-          let raw = E.binary E.Plus factored remainder_expression in
-          let candidate = E.binary E.Plus simplified_factored remainder_expression in
+          let raw_simplified = E.binary E.Mul factor simplified in
+          let simplified_factored =
+            if is_number Z.zero simplified then zeros width
+            else if is_number Z.one simplified then factor
+            else if is_number (Z.pred modulus) simplified then E.unary E.Minus factor
+            else raw_simplified
+          in
+          let raw =
+            if is_number Z.zero remainder_expression then factored
+            else E.binary E.Plus factored remainder_expression
+          in
+          let candidate =
+            if is_number Z.zero simplified_factored then remainder_expression
+            else if is_number Z.zero remainder_expression then simplified_factored
+            else E.binary E.Plus simplified_factored remainder_expression
+          in
           if cost candidate >= cost expression then None
-          else Some (candidate, equalities, (expression, raw) :: cofactor_ring))
+          else
+            let post =
+              if is_number Z.zero remainder_expression then raw_simplified
+              else E.binary E.Plus raw_simplified remainder_expression
+            in
+            let cleanup =
+              (if E.is_equal raw_simplified simplified_factored then cofactor_ring
+               else (raw_simplified, simplified_factored) :: cofactor_ring)
+              |> fun edges ->
+              if E.is_equal post candidate then edges else (post, candidate) :: edges
+            in
+            Some (candidate, equalities, (expression, raw) :: cleanup)))
+    selected
 
 let rec product_partition_candidate expression =
   let same = E.is_equal in
@@ -1164,6 +1254,108 @@ let rec product_partition_candidate expression =
                        :: (canonical_expression, factored) :: equalities))
                     (product_partition_candidate inner)
               | _ -> None))
+  | _ -> None
+
+let bitsliced_candidate cost expression =
+  let width = E.sizeof expression in
+  let variables = Sample_evaluator.variables_of_expr expression in
+  match variables with
+  | [ name, variable_width ] when variable_width = width && width <= 128 ->
+      let variable = E.var name width name in
+      let evaluate value =
+        let bindings = Hashtbl.create 1 in
+        Hashtbl.add bindings variable (Bitvector.create value width);
+        Sample_evaluator.eval_with_bindings bindings expression
+      in
+      (try
+         let modulus = Z.shift_left Z.one width in
+         let normalize value =
+           let value = Z.erem value modulus in
+           if Z.sign value < 0 then Z.add value modulus else value
+         in
+         let eval_candidate candidate value =
+           let bindings = Hashtbl.create 1 in
+           Hashtbl.add bindings variable (Bitvector.create value width);
+           Sample_evaluator.eval_with_bindings bindings candidate
+         in
+         let test_inputs =
+           Z.zero :: Z.pred modulus
+           :: List.init width (fun bit -> Z.shift_left Z.one bit)
+         in
+         let agrees candidate =
+           List.for_all
+             (fun input -> Bitvector.equal (evaluate input) (eval_candidate candidate input))
+             test_inputs
+         in
+         let base = evaluate Z.zero in
+         let mask = ref Z.zero and valid = ref true in
+         for bit = 0 to width - 1 do
+           let input = Z.shift_left Z.one bit in
+           let difference =
+             Bitvector.logxor (evaluate input) base |> Bitvector.value_of
+           in
+           if Z.equal difference Z.zero then ()
+           else if Z.equal difference input then mask := Z.logor !mask input
+           else valid := false
+         done;
+         let candidates = ref [] in
+         if !valid then (
+           let masked =
+             let full = Z.pred modulus in
+             if Z.equal !mask full then variable
+             else E.binary E.And variable (constant width !mask)
+           in
+           let candidate =
+             if Bitvector.is_zeros base then masked
+             else E.binary E.Xor masked (E.constant base)
+           in
+           candidates := candidate :: !candidates);
+         let bitwise_constants = ref [] in
+         let rec collect = function
+           | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+               (match constant_value x, constant_value y with
+               | Some value, _ -> bitwise_constants := value :: !bitwise_constants
+               | _, Some value -> bitwise_constants := value :: !bitwise_constants
+               | _ -> ());
+               collect x; collect y
+           | E.Unary { x; _ } -> collect x
+           | E.Binary { x; y; _ } -> collect x; collect y
+           | E.Ite { c; t; e; _ } -> collect c; collect t; collect e
+           | _ -> ()
+         in
+         collect expression;
+         List.sort_uniq Bitvector.compare !bitwise_constants
+         |> List.iter (fun xor_constant ->
+                let constant_value = Bitvector.value_of xor_constant in
+                let toggled = Z.logxor constant_value Z.one |> normalize in
+                let delta = normalize (Z.sub toggled constant_value) in
+                if Z.testbit delta 0 then (
+                  let output_delta =
+                    normalize
+                      (Z.sub (Bitvector.value_of (evaluate Z.one))
+                         (Bitvector.value_of base))
+                  in
+                  let coefficient = normalize (Z.mul output_delta (Z.invert delta modulus)) in
+                  let offset =
+                    normalize
+                      (Z.sub (Bitvector.value_of base)
+                         (Z.mul coefficient constant_value))
+                  in
+                  let xor = E.binary E.Xor variable (E.constant xor_constant) in
+                  let scaled =
+                    if Z.equal coefficient Z.one then xor
+                    else E.binary E.Mul (constant width coefficient) xor
+                  in
+                  let candidate =
+                    if Z.equal offset Z.zero then scaled
+                    else E.binary E.Plus scaled (constant width offset)
+                  in
+                  candidates := candidate :: !candidates));
+         !candidates
+         |> List.filter (fun candidate -> cost candidate < cost expression && agrees candidate)
+         |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+         |> function head :: _ -> Some head | [] -> None
+       with _ -> None)
   | _ -> None
 
 let oracle_compatible expression =
@@ -1338,20 +1530,32 @@ let run expression =
         let current = ref original in
         (try
            check_timeout ();
-           let early_minterm =
+           let accept_minterm pass candidate =
+             if not (Rewrite.samples_agree original candidate) then false
+             else
+               match minterm_ring_proof original candidate with
+               | Some (equalities, ring_equalities) ->
+                   Rewrite.accepts_compositional ~pass
+                     ~equalities ~ring_equalities original candidate
+               | None -> Rewrite.accepts ~pass original candidate
+           in
+           let early_bitsliced =
              if cost original < 11 then None
              else
-               Sample_evaluator.variables_of_expr original
-               |> List.map (fun (name, width) -> E.var name width name)
-               |> List.filter (fun candidate -> cost candidate < cost original)
-               |> List.find_opt (fun candidate ->
-                      if not (Rewrite.samples_agree original candidate) then false
-                      else
-                        match minterm_ring_proof original candidate with
-                        | Some (equalities, ring_equalities) ->
-                            Rewrite.accepts_compositional ~pass:"minterm-ring-mba"
-                              ~equalities ~ring_equalities original candidate
-                        | None -> false)
+               match bitsliced_candidate cost original with
+               | Some candidate when accept_minterm "bitsliced-root" candidate ->
+                   Some candidate
+               | _ -> None
+           in
+           let early_minterm =
+             match early_bitsliced with
+             | Some candidate -> Some candidate
+             | None when cost original < 11 -> None
+             | None ->
+                 Sample_evaluator.variables_of_expr original
+                 |> List.map (fun (name, width) -> E.var name width name)
+                 |> List.filter (fun candidate -> cost candidate < cost original)
+                 |> List.find_opt (accept_minterm "minterm-ring-mba")
            in
            (match early_minterm with
            | Some candidate -> current := visit candidate
@@ -1373,18 +1577,36 @@ let run expression =
              match oracle with
              | Some candidate -> current := candidate; current := visit ~allow_oracle:false candidate
              | None ->
-             let minterm_polynomial =
-               match minterm_polynomial_candidate !current with
-               | Some (candidate, equalities, ring_equalities)
-                 when Rewrite.samples_agree !current candidate
-                      && Rewrite.accepts_compositional ~pass:"minterm-polynomial"
-                           ~equalities ~ring_equalities !current candidate ->
-                   Some candidate
+             let bitsliced =
+               match if cost !current >= 11 then bitsliced_candidate cost !current else None with
+               | Some candidate when Rewrite.samples_agree !current candidate ->
+                   (match minterm_ring_proof !current candidate with
+                   | Some (equalities, ring_equalities)
+                     when Rewrite.accepts_compositional ~pass:"bitsliced"
+                            ~equalities ~ring_equalities !current candidate ->
+                       Some candidate
+                   | _ ->
+                       if Rewrite.accepts ~pass:"bitsliced" !current candidate
+                       then Some candidate else None)
                | _ -> None
+             in
+             let minterm_polynomial =
+               match bitsliced with
+               | Some candidate -> Some (candidate, [], [])
+               | None when cost !current < 11 -> None
+               | None ->
+                   (match minterm_polynomial_candidate cost !current with
+                   | Some (candidate, equalities, ring_equalities)
+                     when Rewrite.samples_agree !current candidate
+                          && Rewrite.accepts_compositional ~pass:"minterm-polynomial"
+                               ~equalities ~ring_equalities !current candidate ->
+                       Some (candidate, equalities, ring_equalities)
+                   | _ -> None)
              in
              let factor_grouped =
                match minterm_polynomial with
-               | Some candidate -> Some candidate
+               | Some (candidate, _, _) -> Some candidate
+               | None when cost !current < 11 -> None
                | None ->
                    (match factor_group_candidate cost !current with
                    | Some (candidate, equalities, ring_equalities)
@@ -1396,8 +1618,9 @@ let run expression =
              let ring_normalized =
                match factor_grouped with
                | Some candidate -> Some candidate
+               | None when cost !current < 11 -> None
                | None ->
-                   (match ring_polynomial_candidate !current with
+                   (match ring_polynomial_candidate cost !current with
                    | Some candidate
                      when Rewrite.samples_agree !current candidate
                           && Rewrite.accepts_compositional ~pass:"ring-polynomial"

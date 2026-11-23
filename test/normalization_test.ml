@@ -209,7 +209,13 @@ let test_semilinear_masks () =
     (plus (band x16 (c 16 0xff)) (band x16 (c 16 0xff00))) 1;
   let x32 = var 32 "mask32" in
   prove_shrinks "disjoint partial masks"
-    (plus (band x32 (c 32 0x00ff)) (band x32 (c 32 0xff00))) 3
+    (plus (band x32 (c 32 0x00ff)) (band x32 (c 32 0xff00))) 3;
+  prove_shrinks "scaled complementary masks"
+    (plus (mul (c 16 3) (band x16 (c 16 0x00ff)))
+       (mul (c 16 3) (band x16 (c 16 0xff00)))) 3;
+  let xor_mask = bxor (band x32 (c 32 0xfffffffc)) (c 32 0x12345678) in
+  prove_shrinks "one-variable bit-sliced recovery"
+    (plus xor_mask (bxor x32 x32)) 5
 
 let test_associative_canonicalization () =
   let prove_ac name original maximum =
@@ -464,7 +470,7 @@ let () =
     test_normalization_portfolio ();
     test_preprocessing_portfolio ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 58 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 60 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"
