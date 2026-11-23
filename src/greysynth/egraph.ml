@@ -10,7 +10,13 @@ type shape =
   | Binary of Term.binary E.op * int * int
   | Ite of int * int * int
 
-type enode = { id : int; width : int; shape : shape; expr : E.t }
+type enode = {
+  id : int;
+  width : int;
+  shape : shape;
+  raw_children : int list;
+  expr : E.t;
+}
 
 type proof = {
   lhs : E.t;
@@ -32,6 +38,7 @@ type graph = {
   hashcons : ((int * shape), int) Hashtbl.t;
   expressions : int Nodes.t;
   proof_adj : (int, (int * justification) list) Hashtbl.t;
+  semantic_failures : (int * int, unit) Hashtbl.t;
 }
 
 let last_enodes = ref 0
@@ -51,6 +58,7 @@ let graph limit =
     hashcons = Hashtbl.create 256;
     expressions = Nodes.create 256;
     proof_adj = Hashtbl.create 128;
+    semantic_failures = Hashtbl.create 128;
   }
 
 let rec find graph id =
@@ -97,7 +105,26 @@ let union graph left right justification =
 
 exception Full
 
+let raw_children = function
+  | Var _ | Cst _ -> []
+  | Unary (_, child) -> [ child ]
+  | Binary (_, left, right) -> [ left; right ]
+  | Ite (condition, yes, no) -> [ condition; yes; no ]
+
 let add_expr graph expression =
+  let allocate expression shape children =
+    if graph.count >= graph.limit then raise Full;
+    let id = graph.count in
+    graph.count <- graph.count + 1;
+    let enode =
+      { id; width = E.sizeof expression; shape; raw_children = children; expr = expression }
+    in
+    graph.enodes.(id) <- Some enode;
+    graph.parent.(id) <- id;
+    Hashtbl.add graph.classes id [ id ];
+    Nodes.replace graph.expressions expression id;
+    id
+  in
   let rec add expression =
     match Nodes.find_opt graph.expressions expression with
     | Some id -> id
@@ -111,22 +138,20 @@ let add_expr graph expression =
           | E.Ite { c; t; e; _ } -> Ite (add c, add t, add e)
           | E.Load _ -> raise Full
         in
+        let children = raw_children shape in
         let shape = canonical_shape graph shape in
         let key = E.sizeof expression, shape in
         match Hashtbl.find_opt graph.hashcons key with
-        | Some id ->
-            Nodes.add graph.expressions expression id;
+        | Some existing when E.is_equal (node graph existing).expr expression ->
+            Nodes.replace graph.expressions expression existing;
+            existing
+        | Some existing ->
+            let id = allocate expression shape children in
+            ignore (union graph id existing Congruence);
             id
         | None ->
-            if graph.count >= graph.limit then raise Full;
-            let id = graph.count in
-            graph.count <- graph.count + 1;
-            let enode = { id; width = E.sizeof expression; shape; expr = expression } in
-            graph.enodes.(id) <- Some enode;
-            graph.parent.(id) <- id;
-            Hashtbl.add graph.classes id [ id ];
+            let id = allocate expression shape children in
             Hashtbl.add graph.hashcons key id;
-            Nodes.add graph.expressions expression id;
             id
   in
   add expression
@@ -166,11 +191,20 @@ let verify_local candidate lhs rhs =
     if candidate.equalities = [] && candidate.ring_equalities = [] then
       Rewrite_proof.record builder ~pass:candidate.pass lhs rhs;
     let certificate = Rewrite_proof.finish builder rhs in
-    let report =
-      Rewrite_proof.verify ~timeouts:[ float_of_int !c_equiv_timeout ]
-        ~original:lhs ~candidate:rhs certificate
+    let timeout =
+      if !g_total_timeout <= 0. then float_of_int !c_equiv_timeout
+      else
+        min (float_of_int !c_equiv_timeout)
+          (!g_total_timeout -. (Unix.gettimeofday () -. !g_start_time))
     in
-    Yojson.Basic.Util.member "verification" report = `String "proved_compositional"
+    if timeout <= 0. then false
+    else
+      let report =
+        Rewrite_proof.verify ~timeouts:[ timeout ]
+          ~original:lhs ~candidate:rhs certificate
+      in
+      Yojson.Basic.Util.member "verification" report
+      = `String "proved_compositional"
 
 let rebuild graph =
   let changed = ref false in
@@ -188,8 +222,10 @@ let rebuild graph =
             merged := true;
             changed := true)
     done;
-    if !merged then round () else graph.hashcons |> Hashtbl.clear;
-    Hashtbl.iter (fun key id -> Hashtbl.replace graph.hashcons key id) index
+    if !merged then round ()
+    else (
+      Hashtbl.clear graph.hashcons;
+      Hashtbl.iter (fun key id -> Hashtbl.replace graph.hashcons key id) index)
   in
   round ();
   !changed
@@ -205,44 +241,42 @@ let semantic_merge graph =
          | None -> Hashtbl.add buckets signature (root, id, expression)
          | Some (other_root, other_id, other_expression) ->
              if find graph root <> find graph other_root then
-               let candidate : Normalization.local_candidate =
-                 {
-                   expr = expression;
-                   pass = "egraph-oes";
-                   equalities = [ other_expression, expression ];
-                   ring_equalities = [];
-                   allow_equal_cost = true;
-                 }
-               in
-               if verify_local candidate other_expression expression
-                  && union graph other_id id
-                       (Proof
-                          {
-                            lhs = other_expression;
-                            rhs = expression;
-                            smt_edges = candidate.equalities;
-                            ring_edges = [];
-                            pass = candidate.pass;
-                          })
-               then changed := true);
+               let failure_key = min root other_root, max root other_root in
+               if not (Hashtbl.mem graph.semantic_failures failure_key) then (
+                 let equalities, ring_equalities =
+                   Option.value
+                     (Normalization.minterm_ring_proof other_expression expression)
+                     ~default:([ other_expression, expression ], [])
+                 in
+                 let candidate : Normalization.local_candidate =
+                   {
+                     expr = expression;
+                     pass = "egraph-oes";
+                     equalities;
+                     ring_equalities;
+                     allow_equal_cost = true;
+                   }
+                 in
+                 if verify_local candidate other_expression expression
+                    && union graph other_id id
+                         (Proof
+                            {
+                              lhs = other_expression;
+                              rhs = expression;
+                              smt_edges = equalities;
+                              ring_edges = ring_equalities;
+                              pass = candidate.pass;
+                            })
+                 then changed := true
+                 else Hashtbl.replace graph.semantic_failures failure_key ()));
   !changed
 
-let extract graph root =
+let compute_best graph =
   let best : (int * E.t) option array = Array.make graph.limit None in
-  let build shape =
-    let child id =
-      match best.(find graph id) with Some (_, expression) -> Some expression | None -> None
-    in
-    match shape with
-    | Var _ | Cst _ -> None
-    | Unary (op, x) -> Option.map (E.unary op) (child x)
-    | Binary (op, x, y) ->
-        Option.bind (child x) (fun x -> Option.map (fun y -> E.binary op x y) (child y))
-    | Ite (c, t, e) ->
-        Option.bind (child c) (fun c ->
-            Option.bind (child t) (fun t -> Option.map (fun e -> E.ite c t e) (child e)))
-  in
-  for _ = 0 to graph.count do
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    let child id = best.(find graph id) in
     representatives graph
     |> List.iter (fun (root, ids) ->
            List.iter
@@ -250,48 +284,100 @@ let extract graph root =
                let enode = node graph id in
                let candidate =
                  match enode.shape with
-                 | Var _ | Cst _ -> Some enode.expr
-                 | shape -> build shape
+                 | Var _ | Cst _ -> Some (1, enode.expr)
+                 | Unary (op, x) ->
+                     Option.map
+                       (fun (cost, expression) ->
+                         (unary_cost !cost_model op + cost, E.unary op expression))
+                       (child x)
+                 | Binary (op, x, y) ->
+                     Option.bind (child x) (fun (left_cost, left) ->
+                         Option.map
+                           (fun (right_cost, right) ->
+                             (binary_cost !cost_model op + left_cost + right_cost,
+                              E.binary op left right))
+                           (child y))
+                 | Ite (c, t, e) ->
+                     Option.bind (child c) (fun (condition_cost, condition) ->
+                         Option.bind (child t) (fun (yes_cost, yes) ->
+                             Option.map
+                               (fun (no_cost, no) ->
+                                 (conditional_cost !cost_model + condition_cost
+                                  + yes_cost + no_cost,
+                                  E.ite condition yes no))
+                               (child e)))
                in
                Option.iter
-                 (fun expression ->
-                   let cost = size_of_expr expression in
+                 (fun ((cost, expression) as value) ->
                    match best.(root) with
-                   | None -> best.(root) <- Some (cost, expression)
+                   | None -> best.(root) <- Some value; changed := true
                    | Some (previous_cost, previous) ->
                        if cost < previous_cost
                           || (cost = previous_cost && E.compare expression previous < 0)
-                       then best.(root) <- Some (cost, expression))
+                       then (best.(root) <- Some value; changed := true))
                  candidate)
              ids)
   done;
-  match best.(find graph root) with Some (_, expression) -> expression | None -> (node graph root).expr
+  best
 
-let emit_component_proofs graph root =
-  let root = find graph root in
-  let emitted = Hashtbl.create 64 in
-  for id = 0 to graph.count - 1 do
-    if find graph id = root then
-      Option.value (Hashtbl.find_opt graph.proof_adj id) ~default:[]
-      |> List.iter (fun (other, justification) ->
-             let key = min id other, max id other in
-             if not (Hashtbl.mem emitted key) then (
-               Hashtbl.add emitted key ();
-               match justification with
-               | Congruence -> ()
-               | Proof proof ->
+let extract graph root =
+  let best = compute_best graph in
+  match best.(find graph root) with
+  | Some (_, expression) -> expression
+  | None -> (node graph root).expr
+
+let emit_minimal_proofs graph original target =
+  let visited = Hashtbl.create 64 and emitted = Hashtbl.create 64 in
+  let rec emit_equiv source destination =
+    let pair = min source destination, max source destination in
+    if source = destination || Hashtbl.mem visited pair then ()
+    else (
+      Hashtbl.add visited pair ();
+      let queue = Queue.create () in
+      let previous = Hashtbl.create 32 in
+      Queue.add source queue;
+      Hashtbl.add previous source None;
+      while not (Queue.is_empty queue) && not (Hashtbl.mem previous destination) do
+        let current = Queue.take queue in
+        Option.value (Hashtbl.find_opt graph.proof_adj current) ~default:[]
+        |> List.iter (fun (next, justification) ->
+               if not (Hashtbl.mem previous next) then (
+                 Hashtbl.add previous next (Some (current, justification));
+                 Queue.add next queue))
+      done;
+      let rec path current result =
+        if current = source then result
+        else
+          match Hashtbl.find_opt previous current with
+          | Some (Some (parent, justification)) ->
+              path parent ((parent, current, justification) :: result)
+          | _ -> []
+      in
+      path destination []
+      |> List.iter (fun (left, right, justification) ->
+             match justification with
+             | Proof proof ->
+                 let edge_key = min left right, max left right in
+                 if not (Hashtbl.mem emitted edge_key) then (
+                   Hashtbl.add emitted edge_key ();
                    Option.iter
                      (fun journal ->
                        List.iter
-                         (fun (left, right) ->
-                           Rewrite_proof.record journal ~pass:proof.pass left right)
+                         (fun (lhs, rhs) ->
+                           Rewrite_proof.record journal ~pass:proof.pass lhs rhs)
                          proof.smt_edges;
                        List.iter
-                         (fun (left, right) ->
-                           Rewrite_proof.record_ring journal ~pass:proof.pass left right)
+                         (fun (lhs, rhs) ->
+                           Rewrite_proof.record_ring journal ~pass:proof.pass lhs rhs)
                          proof.ring_edges)
-                     !(Rewrite.journal)))
-  done
+                     !(Rewrite.journal))
+             | Congruence ->
+                 let left_children = (node graph left).raw_children
+                 and right_children = (node graph right).raw_children in
+                 if List.length left_children = List.length right_children then
+                   List.iter2 emit_equiv left_children right_children))
+  in
+  emit_equiv original target
 
 let optimize expression =
   last_enodes := 0;
@@ -302,27 +388,38 @@ let optimize expression =
     expression)
   else
     try
+      let initial_proof = Option.map Rewrite_proof.checkpoint !(Rewrite.journal) in
+      let initial_cache = Rewrite.checkpoint_caches () in
       let graph = graph !c_egraph_max_enodes in
       let root = add_expr graph expression in
       let constants = Sample_evaluator.make 8 in
       let visited = Nodes.create 256 in
       let iteration = ref 0 and continue = ref true in
+      (try
       while !continue && !iteration < !c_egraph_max_iters
             && graph.count < graph.limit && not !g_has_timedout do
         incr iteration;
         check_timeout ();
         let changed = ref false in
+        let best = compute_best graph in
         representatives graph
-        |> List.sort (fun (left_root, left_ids) (right_root, right_ids) ->
+        |> List.sort (fun (left_root, _) (right_root, _) ->
                let root_class = find graph root in
                if left_root = root_class then -1
                else if right_root = root_class then 1
                else
-                 let _, left = cheapest graph left_ids
-                 and _, right = cheapest graph right_ids in
-                 Int.compare (size_of_expr right) (size_of_expr left))
-        |> List.iter (fun (_root, ids) ->
-               let id, representative = cheapest graph ids in
+                 let left_cost = Option.fold ~none:max_int ~some:fst best.(left_root)
+                 and right_cost = Option.fold ~none:max_int ~some:fst best.(right_root) in
+                 Int.compare right_cost left_cost)
+        |> List.iter (fun (class_root, ids) ->
+               let fallback_id, fallback = cheapest graph ids in
+               let representative =
+                 Option.fold ~none:fallback ~some:snd best.(class_root)
+               in
+               let id =
+                 if E.is_equal representative fallback then fallback_id
+                 else add_expr graph representative
+               in
                if not (Nodes.mem visited representative) then (
                  Nodes.add visited representative ();
                  Normalization.local_candidates ~cost:size_of_expr ~constants
@@ -346,20 +443,39 @@ let optimize expression =
                           then changed := true)));
         if semantic_merge graph then changed := true;
         if rebuild graph then changed := true;
-        let _, root_best =
-          let root_class = find graph root in
-          cheapest graph (Option.value (Hashtbl.find_opt graph.classes root_class) ~default:[ root ])
+        let root_class = find graph root in
+        let root_best =
+          Option.fold ~none:(node graph root).expr ~some:snd (compute_best graph).(root_class)
         in
-        if not !changed || size_of_expr root_best <= 5 then continue := false
-      done;
+        if not !changed || size_of_expr root_best <= 1 then continue := false
+      done
+      with Timeout_exception -> g_has_timedout := true);
       last_enodes := graph.count;
       last_iterations := !iteration;
       let result = extract graph root in
       let result_id = add_expr graph result in
       ignore (rebuild graph);
-      emit_component_proofs graph root;
-      ignore result_id;
-      result
+      emit_minimal_proofs graph root result_id;
+      let replayable =
+        match !(Rewrite.journal) with
+        | None -> true
+        | Some builder ->
+            let certificate = Rewrite_proof.finish builder result in
+            let report =
+              Rewrite_proof.verify ~timeouts:[ float_of_int !c_equiv_timeout ]
+                ~original:expression ~candidate:result certificate
+            in
+            Yojson.Basic.Util.member "verification" report
+            = `String "proved_compositional"
+      in
+      if replayable then result
+      else (
+        (match !(Rewrite.journal), initial_proof with
+        | Some builder, Some checkpoint -> Rewrite_proof.restore builder checkpoint
+        | _ -> ());
+        Rewrite.restore_caches initial_cache;
+        last_fallback := true;
+        expression)
     with Full ->
       last_fallback := true;
       expression

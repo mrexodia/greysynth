@@ -476,6 +476,34 @@ let test_egraph_extraction () =
     (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
     "e-graph extracted result did not replay minimally"
 
+let test_egraph_child_replay () =
+  let check label original maximum =
+    reset ();
+    C.c_egraph_extraction := true;
+    C.c_ac_normalization := true;
+    C.c_egraph_max_enodes := 2048;
+    C.c_egraph_max_iters := 4;
+    R.start_recording original;
+    let result = EG.optimize original in
+    require (U.size_of_expr result <= maximum)
+      (Printf.sprintf "%s: expected cost <= %d, got %d" label maximum
+         (U.size_of_expr result));
+    let certificate = P.finish (Option.get !(R.journal)) result in
+    let report = P.verify ~timeouts:[ 1.; 5. ] ~original ~candidate:result certificate in
+    require
+      (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+      (label ^ ": e-graph child proof did not replay: " ^ Yojson.Basic.to_string report)
+  in
+  let a = var 64 "child_a" and b = var 64 "child_b" in
+  check "child AC exposes parent"
+    (bxor (plus b a) (plus a b)) 1;
+  let inner =
+    String_to_sexpr.parse
+      "-1*(a&b)+10*(a&~b)+2*a+11*~(a|b)-11*~b"
+  in
+  let z = var 64 "z" and y = var 64 "y" in
+  check "child MBA inside multiplication" (mul z (plus inner y)) 5
+
 let test_preprocessing_portfolio () =
   let x = var 32 "portfolio_x" and y = var 32 "portfolio_y" in
   let original = plus (plus (bxor x y) (mul (c 32 2) (band x y))) (c 32 0) in
@@ -534,9 +562,10 @@ let () =
     test_sparse_ring_normalization ();
     test_compositional_polynomial_identity ();
     test_egraph_extraction ();
+    test_egraph_child_replay ();
     test_preprocessing_portfolio ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 62 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 64 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"
