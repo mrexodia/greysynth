@@ -64,6 +64,8 @@ let proofs : (Sexpr.Expr.t * Sexpr.Expr.t, equiv_t) Hashtbl.t =
    users without a budget remain authoritative. *)
 let proof_budgets : (Sexpr.Expr.t * Sexpr.Expr.t, float) Hashtbl.t =
   Hashtbl.create 128
+let compositional_budgets : (Sexpr.Expr.t * Sexpr.Expr.t * string, float) Hashtbl.t =
+  Hashtbl.create 128
 
 let reset ?original () =
   List.iter (fun counter -> counter := 0)
@@ -77,6 +79,7 @@ let reset ?original () =
           ~seed:1 32);
   Hashtbl.clear proofs;
   Hashtbl.clear proof_budgets;
+  Hashtbl.clear compositional_budgets;
   counterexamples := [];
   journal := None
 
@@ -123,16 +126,25 @@ let accepts_compositional ?(ring_equalities = []) ~pass ~equalities original can
       let key = proof_key original candidate in
       let budget = float_of_int !c_equiv_timeout in
       let cached = Hashtbl.find_opt proofs key in
+      let compositional_key =
+        let left, right = key in
+        (left, right, pass)
+      in
       let attempted =
-        Option.value (Hashtbl.find_opt proof_budgets key) ~default:Float.infinity
+        Option.value (Hashtbl.find_opt compositional_budgets compositional_key)
+          ~default:0.
       in
       if cached = Some Yes then (
         last_rejection := "none";
         incr proved;
         record_equalities ();
         true)
-      else if attempted >= budget
-              && (match cached with Some verdict -> verdict <> Yes | None -> false) then (
+      else if Option.is_some cached && not (Hashtbl.mem proof_budgets key) then (
+        last_rejection := "smt_inconclusive";
+        incr inconclusive;
+        false)
+      else if Hashtbl.mem compositional_budgets compositional_key
+              && attempted >= budget then (
         last_rejection := "smt_inconclusive";
         incr inconclusive;
         false)
@@ -165,8 +177,7 @@ let accepts_compositional ?(ring_equalities = []) ~pass ~equalities original can
           | _ ->
               incr inconclusive;
               last_rejection := "smt_inconclusive");
-          Hashtbl.replace proofs key Unknown;
-          Hashtbl.replace proof_budgets key budget;
+          Hashtbl.replace compositional_budgets compositional_key budget;
           false)
 
 let accepts ~pass original candidate =

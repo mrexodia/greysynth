@@ -380,8 +380,8 @@ let test_larger_proof_budget_retries () =
   require (!(R.proved) = 1) "retried proof was not recorded";
   reset ~strict:true ();
   let key = R.proof_key original x in
-  Hashtbl.replace R.proofs key U.Unknown;
-  Hashtbl.replace R.proof_budgets key 5.;
+  let left, right = key in
+  Hashtbl.replace R.compositional_budgets (left, right, "cached-compositional") 5.;
   C.c_equiv_timeout := 5;
   require
     (not (R.accepts_compositional ~pass:"cached-compositional"
@@ -389,7 +389,7 @@ let test_larger_proof_budget_retries () =
     "compositional proof ignored an equal-budget inconclusive cache";
   C.c_equiv_timeout := 6;
   require
-    (R.accepts_compositional ~pass:"retried-compositional"
+    (R.accepts_compositional ~pass:"cached-compositional"
        ~equalities:[ original, x ] original x)
     "larger budget did not retry a compositional proof"
 
