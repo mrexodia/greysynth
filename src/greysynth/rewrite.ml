@@ -236,6 +236,7 @@ let accepts ~pass original candidate =
             if attempted >= budget then Some verdict else None
         | None -> None
       in
+      let cached_success = cached = Some Yes in
       let verdict, model =
         match cached with
         | Some verdict -> (verdict, None)
@@ -252,7 +253,7 @@ let accepts ~pass original candidate =
       | Yes ->
           incr proved;
           last_rejection := "none";
-          record ~pass original candidate;
+          if not cached_success then record ~pass original candidate;
           true
       | No ->
           incr disproved;

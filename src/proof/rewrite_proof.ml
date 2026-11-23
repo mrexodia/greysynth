@@ -571,8 +571,22 @@ let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
       else result "unknown" "unresolved_equalities")
   with exn -> result "error" (Printexc.to_string exn)
 
-let verify ?(timeouts = [1.]) ~original ~candidate certificate =
+let verify ?(timeouts = [1.]) ?(incremental = true)
+    ~original ~candidate certificate =
   U.reset_solver_session ();
+  let configured = !(U.incremental_solver_reuse) in
+  let run reuse =
+    U.reset_solver_session ();
+    U.incremental_solver_reuse := reuse;
+    verify_impl ~timeouts ~original ~candidate certificate
+  in
   Fun.protect
-    ~finally:U.reset_solver_session
-    (fun () -> verify_impl ~timeouts ~original ~candidate certificate)
+    ~finally:(fun () ->
+      U.reset_solver_session ();
+      U.incremental_solver_reuse := configured)
+    (fun () ->
+      let report = run incremental in
+      if incremental
+         && Yojson.Basic.Util.member "verification" report
+            <> `String "proved_compositional"
+      then run false else report)

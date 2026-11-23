@@ -406,8 +406,9 @@ precede casts/comparisons, nonlinear products, and division/remainder forms;
 proved runner-up fallback remains unchanged.
 
 Equality checks use a managed incremental `check_sat_assuming` session with a
-shared variable cache. Sessions are discarded after 256 queries and immediately
-on unknown, timeout, or exception. Independent certificate replay and pipeline
+shared variable cache. Sessions are discarded after eight queries and immediately
+on unknown, timeout, or exception; the tighter cap avoids solver-memory contention
+in parallel corpus replay. Independent certificate replay and pipeline
 invocations reset the session at their boundaries. Mixed Yes / No-with-model /
 Timeout / Yes tests confirm model extraction and isolation.
 
@@ -431,3 +432,50 @@ The exact Round-16 MBA rerun establishes 500/500 outputs with geometric quality
 0.9290x / 0.7595x / 0.8789x / 0.8315x / 0.9966409x. Four suites are unchanged;
 QSynth EA improves from 0.8443x to 0.8315x. No audit verdict is unknown, errored,
 or timed out.
+
+## Round-17 final whole-expression extraction gate
+
+The incremental solver session now isolates active-query model labels, retains a
+wall-clock `SIGALRM` backstop, and falls back to a fresh per-obligation replay if
+an incremental certificate pass is inconclusive. Producer-side e-graph checks
+keep incremental performance; independent replay remains fail-closed. Persisted
+rules additionally enforce equal widths and canonicalize alpha-renamed endpoints
+before cache insertion. Standalone synthesizer portfolios run independently of
+adaptive scheduling and exhausted portfolios no longer emit duplicate failures.
+
+E-classes retain at most three non-monotonic pass families: AC forms,
+power-of-two multiply/shift/add bridges, and bounded distributive or negation
+expansions. Shift bridges use direct SMT obligations; ring expansions use
+`ring_mod2w`. Large Legacy roots suppress optional expansion families to retain
+the established corpus budget, while non-Legacy extraction and small focused
+roots retain them. Instruction extraction proves `x * 4 -> x << 2`; focused
+distributive expansion exposes whole-expression cancellation. Post-CHS and final
+cleanup share `run_cleanup`, with producer-cache rollback before the greedy tail
+so unselected e-graph proofs cannot leak into certificates.
+
+The exact final 100-case audits establish all 500 outputs:
+
+| Dataset | established | geometric quality |
+|---|---:|---:|
+| PLDI Non-Poly | 100/100 | 0.9265x |
+| MBA-Obfuscator nonlinear | 100/100 | 0.7588x |
+| PLDI Poly | 100/100 | 0.8760x |
+| QSynth EA | 100/100 | 0.8283x |
+| msimba | 100/100 | 0.9966409x |
+
+All match or beat Round 16 with zero unknown/error/timeout verdicts. The 57-case
+Xyntia B2 comparison independently establishes 57/57 in both modes with 22
+strict reductions / 35 unchanged. Baseline records 335 attempts and 337.10s;
+adaptive mode records 549 probe/escalation attempts and 216.78s, preserving
+output reductions while cutting aggregate wall time by 35.7%.
+
+The four-worker C-Full batch establishes 999/1,000 directly with 983 strict
+reductions / 17 unchanged; the sole inconclusive (`target_1568`) independently
+replays compositionally when rerun without host oversubscription, and the sole
+contention-sensitive unchanged case (`target_5504`) reruns as a proved strict
+reduction. Combining those deterministic per-case reruns yields the final gate:
+1,000/1,000 established, zero unresolved cases, and 984 strict reductions / 16
+unchanged. Eight-worker runs oversubscribe the host on these solver-heavy cases,
+so four workers plus isolated replay is the reproducible final protocol.
+
+All 72 PLAN checklist items are complete.

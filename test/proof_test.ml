@@ -49,6 +49,19 @@ let () =
            && timeout = U.Timeout && yes_after_reset = U.Yes)
     "incremental solver session leaked state across mixed verdicts";
   U.reset_solver_session ();
+  let x32 = var "x" 32 and x64 = var "x" 64 in
+  ignore (U.are_equivalent_seconds x32 x32 (Some 1.));
+  let width_verdict, _, width_model =
+    U.are_equivalent_seconds ~show_counter_example:true x64
+      (E.binary E.Plus x64 (c 64 1)) (Some 1.)
+  in
+  require
+    (width_verdict = U.No
+     && Option.fold ~none:false
+          ~some:(fun model -> List.mem_assoc "x" model && not (List.mem_assoc "x<64>" model))
+          width_model)
+    "incremental model labels leaked widths from an earlier query";
+  U.reset_solver_session ();
   let identity = certificate x x [] in
   expect "proved_compositional" (P.verify ~original:x ~candidate:x identity);
   expect "error" (P.verify ~original:y ~candidate:x identity);

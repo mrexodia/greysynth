@@ -1956,6 +1956,47 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
             allow_equal_cost = false } :: !candidates)
       (linear_candidates cost expression));
   );
+  let offer_nonmonotonic ?(ring_rule = true) pass candidate =
+    let proposal =
+      if ring_rule then ring pass ~allow_equal_cost:true candidate
+      else direct pass ~allow_equal_cost:true candidate
+    in
+    candidates := proposal :: !candidates
+  in
+  (match expression with
+  | E.Binary { f = E.Mul; x = term; y = E.Cst scale; _ }
+  | E.Binary { f = E.Mul; x = E.Cst scale; y = term; _ } ->
+      let value = Bitvector.value_of scale in
+      if Z.sign value > 0 && Z.popcount value = 1 then
+        let amount = Z.trailing_zeros value in
+        if amount >= 1 && amount < E.sizeof term then (
+          offer_nonmonotonic ~ring_rule:false "bridge-shift"
+            (E.binary E.Lsl term (integer (E.sizeof term) amount));
+          if amount = 1 then
+            offer_nonmonotonic "bridge-add" (E.binary E.Plus term term))
+  | E.Binary { f = E.Lsl; x = term; y = E.Cst amount; _ } ->
+      let amount = bounded_count (E.sizeof term) amount in
+      if amount >= 1 && amount < E.sizeof term then
+        offer_nonmonotonic ~ring_rule:false "bridge-mul"
+          (E.binary E.Mul term (constant (E.sizeof term) (Z.shift_left Z.one amount)))
+  | _ -> ());
+  if cost expression <= 9 then
+    (match expression with
+    | E.Binary { f = E.Mul; x = factor;
+                 y = E.Binary { f = (E.Plus | E.Minus as op); x; y; _ }; _ } ->
+        offer_nonmonotonic "expand-distribute"
+          (E.binary op (E.binary E.Mul factor x) (E.binary E.Mul factor y))
+    | E.Binary { f = E.Mul;
+                 x = E.Binary { f = (E.Plus | E.Minus as op); x; y; _ };
+                 y = factor; _ } ->
+        offer_nonmonotonic "expand-distribute"
+          (E.binary op (E.binary E.Mul x factor) (E.binary E.Mul y factor))
+    | E.Unary { f = E.Minus; x = E.Binary { f = E.Plus; x; y; _ }; _ } ->
+        offer_nonmonotonic "expand-negation"
+          (E.binary E.Minus (E.unary E.Minus x) y)
+    | E.Unary { f = E.Minus; x = E.Binary { f = E.Minus; x; y; _ }; _ } ->
+        offer_nonmonotonic "expand-negation" (E.binary E.Minus y x)
+    | _ -> ());
   let seen = Nodes.create 32 in
   List.rev !candidates
   |> List.filter (fun candidate ->

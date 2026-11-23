@@ -95,6 +95,21 @@ let run_normalization expression =
 (* One OES pass, without the logging and stats of [oes_with_logs]. *)
 let oes_quiet e = fst (linear_simplify e)
 
+let run_cleanup ?(whole = true) expression =
+  let standard expression =
+    let expression =
+      if !c_normalization && not !g_has_timedout then run_normalization expression
+      else expression
+    in
+    if !c_oes && not !g_has_timedout then oes_quiet expression else expression
+  in
+  if whole && !c_egraph_extraction && not !g_has_timedout then
+    let producer_cache = Rewrite.checkpoint_caches () in
+    let result = Egraph.optimize expression in
+    Rewrite.restore_caches producer_cache;
+    standard (if Egraph.fell_back () then expression else result)
+  else standard expression
+
 (* Synthesis at increasing horizons (2 .. depth), with an OES pass after
    each horizon when OES is enabled. Updates [best] after every horizon, so a
    timeout keeps validated rewrites from the current partial horizon too. *)
@@ -111,8 +126,7 @@ let chs gt best =
       check_timeout ();
       let before = size_of_expr !best in
       best := simplify_with_horizon !horizon !c_synthesis_timeout !c_synthesis_repeat !best;
-      if !c_normalization && not !g_has_timedout then best := run_normalization !best;
-      if !c_oes && not !g_has_timedout then best := oes_quiet !best;
+      if not !g_has_timedout then best := run_cleanup !best;
       if size_of_expr !best < before then horizon := 2 else incr horizon
     with Timeout_exception -> g_has_timedout := true
   done;
@@ -449,16 +463,12 @@ let run ?proof_output obf config gt =
   let reference = Some (Option.value gt ~default:obf) in
   let result = if outside_proof_semantics then obf else run_passes reference obf in
   let result =
-    if not outside_proof_semantics && !c_normalization && not !g_has_timedout then
-      try run_normalization result with Timeout_exception ->
-        g_has_timedout := true;
-        result
-    else result
-  in
-  (* final OES clean-up, skipped once out of time *)
-  let result =
-    if not outside_proof_semantics && !c_oes && not !g_has_timedout then
-      try oes_quiet result with Timeout_exception ->
+    if not outside_proof_semantics && not !g_has_timedout then
+      try
+        run_cleanup
+          ~whole:(!c_global_synthesis || !c_chs || size_of_expr obf <= 2048)
+          result
+      with Timeout_exception ->
         g_has_timedout := true;
         result
     else result

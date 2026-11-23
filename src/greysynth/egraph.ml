@@ -578,13 +578,20 @@ let optimize expression =
                    Normalization.local_candidates ~cost:size_of_expr ~constants
                      ~heavy_additive:(not interior_additive.(class_root))
                      ~ac:!c_ac_normalization representative
+                   |> List.filter (fun (candidate : Normalization.local_candidate) ->
+                          !cost_model <> Legacy || size_of_expr expression <= 20
+                          || not
+                               (List.mem candidate.pass
+                                  [ "bridge-shift"; "bridge-add"; "bridge-mul";
+                                    "expand-distribute"; "expand-negation" ]))
                    |> List.sort (fun (left : Normalization.local_candidate) right ->
                           let order = Int.compare (size_of_expr left.expr) (size_of_expr right.expr) in
                           if order <> 0 then order
                           else Bool.compare left.allow_equal_cost right.allow_equal_cost)
                  in
                  let accepted_passes = Hashtbl.create 8 in
-                 let rec process equal_found = function
+                 let accepted_nonmono_passes = Hashtbl.create 3 in
+                 let rec process = function
                    | [] -> ()
                    | (candidate : Normalization.local_candidate) :: rest ->
                        if Unix.gettimeofday () > local_deadline then raise Egraph_budget;
@@ -592,8 +599,10 @@ let optimize expression =
                          size_of_expr candidate.expr < size_of_expr representative
                        in
                        if (strictly_cheaper && Hashtbl.mem accepted_passes candidate.pass)
-                          || (candidate.allow_equal_cost && equal_found)
-                       then process equal_found rest
+                          || (candidate.allow_equal_cost
+                              && (Hashtbl.mem accepted_nonmono_passes candidate.pass
+                                  || Hashtbl.length accepted_nonmono_passes >= 3))
+                       then process rest
                        else if graph.count < graph.limit
                                && (candidate.allow_equal_cost || strictly_cheaper)
                                && verify_local ~local_deadline candidate representative candidate.expr
@@ -612,10 +621,12 @@ let optimize expression =
                          in
                          if merged then changed := true;
                          if strictly_cheaper then Hashtbl.replace accepted_passes candidate.pass ();
-                         process (equal_found || candidate.allow_equal_cost) rest)
-                       else process equal_found rest
+                         if candidate.allow_equal_cost then
+                           Hashtbl.replace accepted_nonmono_passes candidate.pass ();
+                         process rest)
+                       else process rest
                  in
-                 process false candidates));
+                 process candidates));
         if semantic_merge ~local_deadline graph then changed := true;
         if rebuild graph then changed := true);
         if !root_fast then continue := false;
@@ -641,7 +652,9 @@ let optimize expression =
         | None -> true
         | Some builder -> Rewrite_proof.is_connected builder result
       in
-      if replayable then result
+      if replayable then (
+        Rewrite.restore_caches initial_cache;
+        result)
       else (
         (match !(Rewrite.journal), initial_proof with
         | Some builder, Some checkpoint -> Rewrite_proof.restore builder checkpoint

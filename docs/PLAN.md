@@ -189,8 +189,8 @@ reductions and 16 unchanged.
   nontrivial constants shared across both sides, while retaining concrete
   fallback when the stronger abstraction is satisfiable.
 - [x] Reuse incremental solver contexts where the solver API permits. Managed
-  `check_sat_assuming` sessions reset on inconclusive/error outcomes, after 256
-  queries, and at independent replay and pipeline boundaries.
+  `check_sat_assuming` sessions reset on inconclusive/error outcomes, after a
+  bounded eight-query window, and at independent replay and pipeline boundaries.
 - [x] Add baseline-vs-AC whole-normalizer portfolio extraction and retain only
   the winning branch's proof obligations (measured 217 improved / 218 regressed
   under shared wall budget; superseded by Milestone 4A e-graph unification).
@@ -284,8 +284,11 @@ on the 57-case CHS set and C-Full level-5.
 - [x] Add `paper_ast`, counting width conversions as AST operators.
 - [x] Add instruction-oriented and readability-oriented cost models.
 - [x] Report all stable costs while selecting with one explicit configured model.
-- [ ] Use whole-expression extraction for alternatives rather than requiring
-  every useful intermediate form to be locally cheaper.
+- [x] Use whole-expression extraction for alternatives rather than requiring
+  every useful intermediate form to be locally cheaper. Bounded AC,
+  multiply/shift/add bridges, and small distributive/negation expansions are
+  retained per e-class and selected only when they reduce configured
+  whole-expression cost; post-CHS cleanup uses the same proof-bearing e-graph.
 
 Acceptance: reports identify the selection metric; cast-heavy outputs cannot
 claim paper-AST improvements merely because casts are free in the legacy metric.

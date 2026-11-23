@@ -32,7 +32,7 @@ val prove_equality : timeout:float -> Sexpr.Expr.t -> Sexpr.Expr.t ->
     then the original obligation using the remaining budget. SAT on the
     abstraction is never reported as a concrete counterexample. *)
 
-val verify : ?timeouts:float list -> original:Sexpr.Expr.t ->
+val verify : ?timeouts:float list -> ?incremental:bool -> original:Sexpr.Expr.t ->
   candidate:Sexpr.Expr.t -> Yojson.Basic.t -> Yojson.Basic.t
 (** Validate and bind the typed DAG to [original]/[candidate], freshly prove
     the provided equalities, and compute congruence closure. An incomplete

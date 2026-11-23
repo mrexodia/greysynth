@@ -6,6 +6,7 @@ module R = Greysynth__Rewrite
 module O = Greysynth__Oes
 module S = Greysynth__Synthesis
 module G = Greysynth
+module EG = Greysynth__Egraph
 module P = Rewrite_proof
 module L = Greysynth__Logging
 
@@ -700,7 +701,7 @@ let test_adaptive_chs () =
   require (!calls = 2 && E.is_equal result x)
     "adaptive short probe did not escalate to a proved full attempt";
   reset ();
-  C.c_chs_adaptive_schedule := true;
+  C.c_chs_adaptive_schedule := false;
   let portfolio_calls = ref [] in
   let fail _ = portfolio_calls := "primary" :: !portfolio_calls; None in
   let succeed (problem : Greysynth__Synth_backends.problem) =
@@ -711,7 +712,69 @@ let test_adaptive_chs () =
   C.c_synthesizer_portfolio_backends := [ "primary", fail; "secondary", succeed ];
   let result = S.simplify_with_horizon 1 1 1 (plus x zero) in
   require (E.is_equal result x && List.rev !portfolio_calls = [ "primary"; "secondary" ])
-    "adaptive backend portfolio did not prove the fallback result"
+    "standalone backend portfolio did not prove the fallback result";
+  reset ();
+  L.log_chs_synthesis_attempts := [];
+  let fail _ = None in
+  C.c_synthesizer_portfolio_backends := [ "first", fail; "second", fail ];
+  let original = plus x zero in
+  let template, leaves = S.truncate original 1 in
+  ignore (S.synthesize ~original template leaves 1 1);
+  let statuses =
+    List.map (fun (attempt : L.synthesis_attempt) -> attempt.status)
+      !(L.log_chs_synthesis_attempts)
+  in
+  require (List.length statuses = 2
+           && List.for_all (fun status -> String.contains status ':') statuses)
+    "exhausted portfolio recorded a duplicate summary failure"
+
+let test_whole_expression_extraction () =
+  let replay label original result =
+    let certificate = P.finish (Option.get !(R.journal)) result in
+    let report = P.verify ~timeouts:[ 1.; 5. ] ~original ~candidate:result certificate in
+    require
+      (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+      (label ^ ": extracted certificate did not replay")
+  in
+  reset ~strict:true ();
+  C.c_egraph_extraction := true;
+  C.c_egraph_max_enodes := 2048;
+  C.c_egraph_max_iters := 4;
+  let a = E.var "wa" 64 "wa" and b = E.var "wb" 64 "wb"
+  and d = E.var "wd" 64 "wd" in
+  let original =
+    E.binary E.Minus
+      (E.binary E.Mul a (plus b d)) (E.binary E.Mul a b)
+  in
+  R.start_recording original;
+  let result = EG.optimize original in
+  require (U.size_of_expr result <= 3)
+    "non-monotonic distributive expansion did not expose cancellation";
+  replay "non-monotonic cancellation" original result;
+  reset ~strict:true ();
+  C.c_egraph_extraction := true;
+  U.cost_model := U.Instruction;
+  let original = E.binary E.Mul x (c 64 4) in
+  R.start_recording original;
+  let result = EG.optimize original in
+  require
+    (U.cost_of_expr U.Instruction result < U.cost_of_expr U.Instruction original)
+    "Instruction extraction did not prefer the shift bridge";
+  replay "Instruction shift bridge" original result;
+  let casted = E.unary (E.Uext 8) (E.unary (E.Restrict { lo = 0; hi = 55 }) x) in
+  require
+    (U.cost_of_expr U.Legacy casted < U.cost_of_expr U.PaperAst casted
+     && U.cost_of_expr U.PaperAst casted < U.cost_of_expr U.Readability casted)
+    "paper/readability cost models still treat cast chains as free";
+  reset ~strict:true ();
+  C.c_egraph_extraction := true;
+  let original = E.binary E.Minus
+      (E.binary E.Mul a (plus b d)) (E.binary E.Mul a b) in
+  R.start_recording original;
+  let result = G.run_cleanup original in
+  require (U.size_of_expr result <= 3)
+    "whole-pipeline egraph cleanup missed post-synthesis cancellation";
+  replay "whole-pipeline cleanup" original result
 
 let test_load_boundary () =
   let load = E.load 1 Machine.LittleEndian x Libterm.Sexpr.Memory.root in
@@ -751,6 +814,7 @@ let () =
   test_oes_proof_ranking ();
   test_learned_rule_persistence ();
   test_adaptive_chs ();
+  test_whole_expression_extraction ();
   test_load_boundary ();
   test_oes_legacy_collision ();
   test_strict_oes_unknown ();

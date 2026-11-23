@@ -38,6 +38,7 @@ let reset_rule_cache () =
   Sexpr.BvTbl.clear universal_rules;
   Hashtbl.clear chs_success_history
 let universal_rule_count () = Sexpr.BvTbl.length universal_rules
+let canonicalize_reloaded_rule = ref (fun lhs rhs -> lhs, rhs)
 
 let learned_rules_format = "greysynth.learned-rules.v1"
 let learned_rules_semantics = "smtlib-fixed-bitvectors-srem-v1"
@@ -85,14 +86,16 @@ let load_learned_rules filename =
              try
                let lhs = member "lhs" rule |> to_string |> String_to_sexpr.parse
                and rhs = member "rhs" rule |> to_string |> String_to_sexpr.parse in
-               if Sexpr.Expr.sizeof lhs <> (member "width" rule |> to_int) then
-                 failwith "learned-rule width mismatch";
+               if Sexpr.Expr.sizeof lhs <> Sexpr.Expr.sizeof rhs
+                  || Sexpr.Expr.sizeof lhs <> (member "width" rule |> to_int)
+               then failwith "learned-rule width mismatch";
                let report =
                  Rewrite_proof.verify ~timeouts:[ float_of_int !c_equiv_timeout ]
                    ~original:lhs ~candidate:rhs (member "certificate" rule)
                in
                if member "verification" report = `String "proved_compositional" then
-                 Sexpr.BvTbl.replace universal_rules lhs rhs
+                 let key, result = !canonicalize_reloaded_rule lhs rhs in
+                 Sexpr.BvTbl.replace universal_rules key result
                else _log_warn "rules" "discarding an unverified persisted rule"
              with exn ->
                _log_warn "rules" "discarding a malformed persisted rule: %s"
@@ -230,6 +233,12 @@ let canonical_rule_pair template result =
   let key = normalize template |> balance_associative in
   let result = Option.map (fun expression -> normalize expression |> balance_associative) result in
   (key, result, inverse)
+
+let () =
+  canonicalize_reloaded_rule :=
+    (fun lhs rhs ->
+      let key, result, _ = canonical_rule_pair lhs (Some rhs) in
+      key, Option.get result)
 
 let instantiate_rule inverse expression =
   let rec visit node =
@@ -652,9 +661,9 @@ let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
       Some (template, candidate, 0.)
   | None ->
   let problem = make_problem e new_leafs synthesis_timeout synthesis_repeat in
+  let portfolio_mode = !c_synthesizer_portfolio_backends <> [] in
   let backend_result =
-    if not !c_chs_adaptive_schedule || !c_synthesizer_portfolio_backends = [] then
-      run_backend problem
+    if not portfolio_mode then run_backend problem
     else
       let rec attempt total = function
         | [] -> No_result, total
@@ -671,7 +680,7 @@ let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
   in
   match backend_result with
   | (No_result | Backend_timed_out | Backend_failed | Ill_formed as outcome), time ->
-      record (status_of_outcome outcome) time false;
+      if not portfolio_mode then record (status_of_outcome outcome) time false;
       None
   | Returned synth_expr, time ->
       (* Cut leaves are correlated by the original expression. Check the
