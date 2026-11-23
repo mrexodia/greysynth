@@ -293,9 +293,9 @@ all replay compositionally. Root bit-sliced candidates retain msimba's focused
 `165 -> 5` and `242 -> 5` results.
 
 The corpus promotion gate is still not met at 2048 enodes / 4 iterations. The
-five egraph smoke suites establish all outputs but broad saturation quality is
-1.2619x PLDI Non-Poly, 0.9795x MBA-Obfuscator nonlinear, 0.8789x PLDI Poly,
-1.4889x QSynth EA, and approximately 1.00x msimba after root fallback. The
+five egraph smoke suites establish all outputs with geometric quality 0.9388x
+PLDI Non-Poly, 1.0053x MBA-Obfuscator nonlinear, 0.8789x PLDI Poly, 0.8379x
+QSynth EA, and 1.0045x msimba. The
 final C-Full run establishes 983 outputs (532 direct, 451 compositional), has 17
 process timeouts, and yields 967 strict reductions / 16 unchanged / 17 unknown.
 
