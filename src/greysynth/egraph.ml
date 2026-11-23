@@ -104,6 +104,7 @@ let union graph left right justification =
     true)
 
 exception Full
+exception Egraph_budget
 
 let raw_children = function
   | Var _ | Cst _ -> []
@@ -387,14 +388,18 @@ let optimize expression =
     last_fallback := true;
     expression)
   else
+    let initial_proof = Option.map Rewrite_proof.checkpoint !(Rewrite.journal) in
+    let initial_cache = Rewrite.checkpoint_caches () in
     try
-      let initial_proof = Option.map Rewrite_proof.checkpoint !(Rewrite.journal) in
-      let initial_cache = Rewrite.checkpoint_caches () in
       let graph = graph !c_egraph_max_enodes in
       let root = add_expr graph expression in
       let constants = Sample_evaluator.make 8 in
       let visited = Nodes.create 256 in
       let iteration = ref 0 and continue = ref true in
+      let local_deadline =
+        Unix.gettimeofday ()
+        +. (if !g_total_timeout <= 0. then 2. else min 2. (!g_total_timeout *. 0.2))
+      in
       (try
       while !continue && !iteration < !c_egraph_max_iters
             && graph.count < graph.limit && not !g_has_timedout do
@@ -412,6 +417,7 @@ let optimize expression =
                  and right_cost = Option.fold ~none:max_int ~some:fst best.(right_root) in
                  Int.compare right_cost left_cost)
         |> List.iter (fun (class_root, ids) ->
+               if Unix.gettimeofday () > local_deadline then raise Egraph_budget;
                let fallback_id, fallback = cheapest graph ids in
                let representative =
                  Option.fold ~none:fallback ~some:snd best.(class_root)
@@ -476,6 +482,10 @@ let optimize expression =
         Rewrite.restore_caches initial_cache;
         last_fallback := true;
         expression)
-    with Full ->
+    with Full | Egraph_budget ->
+      (match !(Rewrite.journal), initial_proof with
+      | Some builder, Some checkpoint -> Rewrite_proof.restore builder checkpoint
+      | _ -> ());
+      Rewrite.restore_caches initial_cache;
       last_fallback := true;
       expression

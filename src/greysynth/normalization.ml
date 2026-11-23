@@ -1392,6 +1392,17 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t) ~ac expression =
       ring_equalities = [ expression, candidate ]; allow_equal_cost }
   in
   let candidates = ref [] in
+  let bitsliced_fast = bitsliced_candidate cost expression in
+  Option.iter
+    (fun candidate ->
+      let equalities, ring_equalities =
+        Option.value (minterm_ring_proof expression candidate) ~default:([], [])
+      in
+      candidates :=
+        { expr = candidate; pass = "bitsliced"; equalities; ring_equalities;
+          allow_equal_cost = false } :: !candidates)
+    bitsliced_fast;
+  if Option.is_none bitsliced_fast then (
   List.iter (fun candidate -> candidates := direct "peephole" candidate :: !candidates)
     (peepholes constants.eval expression);
   if ac then
@@ -1452,7 +1463,7 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t) ~ac expression =
         candidates :=
           { expr = candidate; pass = "linear-mba"; equalities; ring_equalities;
             allow_equal_cost = false } :: !candidates)
-      (linear_candidates cost expression);
+      (linear_candidates cost expression));
   let seen = Nodes.create 32 in
   List.rev !candidates
   |> List.filter (fun candidate ->
