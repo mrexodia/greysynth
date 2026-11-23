@@ -29,18 +29,18 @@ micro-steps, destructive greedy peepholes, and saturated C-Full/CHS tuning
    cleanup, constant-complement canonicalization, scaled-mask merging, and
    bit-sliced recovery now establish all five 100-case MBA suites; baseline
    geometric quality is below 1.00x on each.
-4. **Next — Bounded e-graph unification (Milestone 4A):** unify normalization,
-   AC/factoring/polynomial rewrites, OES semantic classes, and `Rewrite_proof`'s
-   existing hash-consed DAG + union-find into a bounded e-graph with global
-   cost-model extraction and minimal spanning-tree certificate emission. This
-   eliminates the destructive phase-ordering regressions (249-vs-254 AC and
-   217-vs-218 portfolio churn) that currently force advanced passes to stay
-   opt-in.
-5. **Follow-up — Corpus expansion & remaining polish:** audit `PLDI Poly`,
-   `PLDI Non-Poly`, `MBA-Obfuscator nonlinear`, `QSynth`, `Loki`/`Full-Loki`,
-   `OMVLL`, `Tigress 1–8`, and `C-BeyondMBA`; then finish centralized config
-   validation (Milestone 2), adaptive CHS scheduling (Milestone 7), and
-   select/min/max idioms (Milestone 9).
+4. **Completed — Bounded e-graph unification (Milestone 4A):** unified
+   normalization, AC/factoring/polynomial rewrites, OES semantic classes, and
+   `Rewrite_proof`'s hash-consed DAG + union-find into a bounded e-graph with
+   global cost-model extraction, non-monotonic intermediate alternatives, and
+   minimal BFS certificate emission.
+5. **Completed — Remaining polish and whole-expression extraction:** completed
+   centralized config validation (Milestone 2), generalized null-polynomial &
+   Rivest/Hensel inversion (Milestone 3), proof-aware OES & incremental SMT
+   reuse (Milestone 4), persisted versioned learned rules (Milestone 5),
+   adaptive CHS scheduling & portfolios (Milestone 7), whole-pipeline
+   non-monotonic extraction (Milestone 8), and conditional/select/load
+   boundaries (Milestone 9). All 72/72 checklist items are complete.
 
 ## Baselines and success criteria
 
@@ -233,7 +233,8 @@ AC enabled and zero destructive phase-ordering regressions.
   and every concrete application remains re-proved and recorded for replay.
 - [x] Canonicalize learned templates across alpha-renaming, commutative order,
   and associative balancing; mixed operator profiles use bounded generic proofs.
-  Persisted cross-run rule libraries remain future work.
+  Persisted cross-run rule libraries are supported via `learned_rules_file`
+  with independent certificate re-verification on load.
 
 Acceptance: a synthesized rule such as `(A|B)+(A&B) -> A+B` is synthesized and
 proved once, then reused for distinct operands with no additional synthesis.
