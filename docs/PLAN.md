@@ -26,8 +26,9 @@ micro-steps, destructive greedy peepholes, and saturated C-Full/CHS tuning
 3. **Completed core algebraic solvers (Milestone 3B):** native disjoint-minterm
    linear normalization, sparse modular-ring normalization, multiplicative
    factor grouping with recursive cofactor reduction, quadratic null-polynomial
-   cleanup, and certified top-down differential oracles now cover the four
-   100-case smoke suites at or below 0.97x geometric quality.
+   cleanup, constant-complement canonicalization, scaled-mask merging, and
+   bit-sliced recovery now establish all five 100-case MBA suites; baseline
+   geometric quality is below 1.00x on each.
 4. **Next — Bounded e-graph unification (Milestone 4A):** unify normalization,
    AC/factoring/polynomial rewrites, OES semantic classes, and `Rewrite_proof`'s
    existing hash-consed DAG + union-find into a bounded e-graph with global
@@ -189,13 +190,17 @@ reductions and 16 unchanged.
   the winning branch's proof obligations (measured 217 improved / 218 regressed
   under shared wall budget; superseded by Milestone 4A e-graph unification).
 - [ ] **Milestone 4A — Bounded e-graph unifying normalization, OES, and proof
-  extraction:** an experimental bounded equivalence-extraction layer now races
-  baseline, AC, and AC-canonical normalization+OES branches with proof/cache
-  checkpointing and global cost selection. It establishes C-Full 1,000/1,000
-  and reaches 984/16, but cross-run comparison is 115 better / 780 equal / 105
-  worse because it is still branch-level rather than true per-eclass saturation.
-  Complete the hash-consed per-eclass union-find, congruence rebuild, bottom-up
-  DP extraction, and minimal proof-spanning-tree emission before enabling it.
+  extraction:** the branch prototype has been replaced by a single bounded
+  non-destructive equivalence search wired *instead of* ordinary normalization
+  and OES. The reported enode/input-size and iteration limits now affect
+  behavior, large inputs fall back to AC-disabled baseline preprocessing, and
+  only the globally selected branch's proof/cache checkpoint is retained. At a
+  conservative 50-enode/2-iteration bound, C-Full is 1,000/1,000 established
+  and 984/16, with 18 smaller / 976 equal / 6 larger outputs versus baseline.
+  However, this is still expression-branch search rather than the specified
+  per-eclass hash-cons/union-find graph; PLDI Poly and msimba quality regress
+  under the experimental mode. Complete per-eclass congruence rebuild,
+  bottom-up DP extraction, and minimal proof-forest emission before enabling it.
 
 Acceptance: a targeted test demonstrates fallback from an unprovable smallest
 representative to a proved runner-up and non-monotonic expansion->cancellation

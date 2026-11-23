@@ -234,12 +234,28 @@ Every case is strictly smaller; there are no refutations, unknowns, errors, or
 process timeouts. Focused msimba regressions reduce `165 -> 5` for the masked
 bit-sliced form and `242 -> 5` for the constant-mixed form.
 
-The experimental `egraph_extraction` preprocessing layer races baseline, AC,
-and AC-canonical normalization+OES branches while retaining only the selected
-branch's proof/cache checkpoint. On C-Full it establishes 1,000/1,000 outputs
-and reaches 984 strict reductions / 16 unchanged, versus 983/17 in the paired
-baseline run. Relative output sizes are 115 better, 780 equal, and 105 worse;
-the cross-run differences show that branch-level proof contention still
-prevents the promised no-regression property. It remains disabled by default
-until true per-eclass saturation and resource-isolated extraction replace this
-bounded branch prototype.
+## Round-8 hot-path and bounded extraction results
+
+Removing pre-recursion bit-sliced probing restores the eight-worker C-Full
+baseline to **1,000/1,000 established, 984 strict reductions, 16 unchanged**.
+The probe now runs bottom-up only for one-variable expressions containing a
+nontrivial bitwise constant mask. The sparse-ring pass is enabled from cost 5,
+so small formal cancellations are no longer skipped.
+
+The experimental `egraph_extraction` implementation is now a single bounded
+preprocessing search rather than a preprocessing pass followed by another full
+normalization/OES run. `egraph_max_iters` controls expansion rounds,
+`egraph_max_enodes` is also the input-size fast guard, proof/cache checkpoints
+are branch-local, and larger inputs fall back to baseline AC-disabled
+preprocessing. With the conservative 50-enode / 2-iteration configuration,
+C-Full remains **1,000/1,000 established and 984/16**; relative to the paired
+baseline, 18 outputs are smaller, 976 equal, and 6 larger (down from 105
+regressions in the first prototype).
+
+The five 100-case egraph-enabled smoke audits all establish 100/100 outputs and
+strictly reduce every input. Geometric quality is 0.9409x PLDI Non-Poly, 0.8604x
+MBA-Obfuscator nonlinear, 0.9991x PLDI Poly, 0.9661x QSynth EA, and 1.4766x
+msimba. The latter two quality regressions show that this remains bounded
+branch-level equivalence extraction, not the requested per-eclass
+union-find/congruence-rebuild e-graph. It stays disabled by default; Milestone
+4A remains open for true e-class saturation and minimal proof-forest extraction.
