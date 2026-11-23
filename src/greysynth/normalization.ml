@@ -1692,4 +1692,19 @@ let run expression =
     if !c_mba_oracle = "none" || !c_mba_oracle_calls = 0 then expression
     else oracle_visit expression
   in
-  visit ~allow_oracle:false expression
+  let root_bitsliced =
+    if cost expression > 512 then None
+    else
+      match bitsliced_candidate cost expression with
+      | Some candidate when Rewrite.samples_agree expression candidate ->
+          (match minterm_ring_proof expression candidate with
+          | Some (equalities, ring_equalities)
+            when Rewrite.accepts_compositional ~pass:"bitsliced-root"
+                   ~equalities ~ring_equalities expression candidate ->
+              Some candidate
+          | _ -> None)
+      | _ -> None
+  in
+  match root_bitsliced with
+  | Some candidate -> visit ~allow_oracle:false candidate
+  | None -> visit ~allow_oracle:false expression
