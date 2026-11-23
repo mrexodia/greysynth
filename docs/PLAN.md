@@ -189,7 +189,7 @@ reductions and 16 unchanged.
 - [x] Add baseline-vs-AC whole-normalizer portfolio extraction and retain only
   the winning branch's proof obligations (measured 217 improved / 218 regressed
   under shared wall budget; superseded by Milestone 4A e-graph unification).
-- [ ] **Milestone 4A — Bounded e-graph unifying normalization, OES, and proof
+- [x] **Milestone 4A — Bounded e-graph unifying normalization, OES, and proof
   extraction:** the branch worklist is deleted. The implementation now has
   hash-consed per-eclass enodes, union-find, direct semantic OES merges,
   congruence rebuild, journal-free proof justifications, bounded local-candidate
@@ -202,12 +202,13 @@ reductions and 16 unchanged.
   implemented; all focused child-class certificates replay. Lexicographic
   `(cost, AST nodes, expression)` extraction eliminates zero-cost Legacy cast
   cycles, and long additive spines skip heavyweight interior-prefix work. The
-  2048/4 C-Full gate now passes: 1,000/1,000 established, zero process timeouts,
-  and 984 strict reductions / 16 unchanged. Promotion remains open only on
-  quality: MBA-Obfuscator nonlinear is 0.9427x versus its 0.8693x baseline and
-  msimba is 1.0045x versus 0.9966x. Preserve the C-Full gate while extracting
-  better recursive/runner-up candidates on those two suites before enabling the
-  mode.
+  2048/4 C-Full gate passes: 1,000/1,000 established, zero process timeouts,
+  and 984 strict reductions / 16 unchanged. Bounded repeated-factor exploration,
+  pass-family candidate retention, and disjoint-mask bit-sliced proofs close the
+  final quality deltas: all five 100-case suites establish every output and
+  match or beat baseline (0.9290x Non-Poly, 0.7595x nonlinear, 0.8789x Poly,
+  0.8443x QSynth EA, and 0.9966409x msimba). The mode remains explicitly opt-in
+  to avoid silently changing existing deployments.
 
 Acceptance: a targeted test demonstrates fallback from an unprovable smallest
 representative to a proved runner-up and non-monotonic expansion->cancellation

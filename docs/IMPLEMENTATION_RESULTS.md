@@ -329,8 +329,38 @@ The exact C-Full audit now passes its correctness and reduction gate:
 and 984 strict reductions / 16 unchanged. Against the paired Round-10 output it
 has 94 smaller, 816 equal, and 90 larger Legacy-cost outputs.
 
-`egraph_extraction` remains disabled by default because MBA-Obfuscator nonlinear
-still misses its 0.8693x baseline and msimba misses its 0.9966x baseline.
-Milestone 4A therefore remains open despite the completed C-Full gate; the next
-step is runner-up/recursive candidate extraction for those two quality deltas,
-without weakening the now-complete proof and timeout gate.
+## Round-14 Milestone 4A completion
+
+Round 14 removes the final two quality regressions. Factor grouping now explores
+up to six repeated-factor steps, retains the cheapest branch, applies final
+ring/linear cleanup, and permits one accepted candidate per pass family rather
+than allowing a small dead-end minterm candidate to suppress factor grouping.
+The focused nonlinear regressions independently replay at `136 -> 5` (line 34)
+and `182 -> 8` (line 79).
+
+A disjoint-mask bit-sliced proof builder partitions mask signatures into atomic
+bit blocks, emits pure bitwise expansion obligations, and joins the expansions
+with `ring_mod2w`. Local/root bit-sliced handling uses this proof where it is
+cheaper; the e-graph root retains a 1.5-second direct fallback because replaying
+many separately spawned SMT edges is slower in the current checker. The sole
+msimba outlier now independently replays at `165 -> 5`, matching baseline.
+
+Exact final 100-case results are:
+
+| Dataset | established | geometric quality | baseline | gate |
+|---|---:|---:|---:|---:|
+| PLDI Non-Poly | 100/100 | 0.9290x | 0.9394x | pass |
+| MBA-Obfuscator nonlinear | 100/100 | 0.7595x | 0.8693x | pass |
+| PLDI Poly | 100/100 | 0.8789x | 0.8812x | pass |
+| QSynth EA | 100/100 | 0.8443x | 0.9673x | pass |
+| msimba | 100/100 | 0.9966409x | 0.9966409x | pass |
+
+All 500 outputs are established with zero audit verdict timeouts or errors. The
+final C-Full rerun also preserves the gate: 1,000/1,000 established (559 direct,
+441 compositional), zero timeout/error/unknown verdicts, and 984 strict
+reductions / 16 unchanged. It has 93 smaller / 815 equal / 92 larger Legacy-cost
+outputs versus the paired Round-10 run.
+
+Milestone 4A is complete. The bounded e-graph remains opt-in in configuration so
+default behavior does not change silently, but it now satisfies the complete
+proof, replay, resource, reduction, and five-dataset quality acceptance gate.
