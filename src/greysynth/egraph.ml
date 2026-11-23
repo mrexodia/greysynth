@@ -67,7 +67,11 @@ let optimize expression =
   last_enodes := 0;
   last_iterations := 0;
   last_fallback := false;
-  if not !c_egraph_extraction || size_of_expr expression > !c_egraph_max_enodes then (
+  let variable_count =
+    Sample_evaluator.variables_of_expr expression |> List.length
+  in
+  if not !c_egraph_extraction || variable_count < 2
+     || size_of_expr expression > !c_egraph_max_enodes then (
     last_fallback := true;
     expression)
   else
@@ -95,22 +99,31 @@ let optimize expression =
     let all = ref [ initial ] and frontier = ref [ initial ] in
     last_enodes := 1;
     last_iterations := 0;
-    let add_candidate base candidate =
+    let add_candidate ?(proved = false) ?(ring = false) base candidate =
       if List.length !all >= !c_egraph_max_enodes || Nodes.mem seen candidate then ()
       else if not (Rewrite.samples_agree base.expression candidate) then ()
       else
         let accepted =
-          if E.is_equal base.expression candidate then true
-          else
-            let verdict, _ =
-              Rewrite_proof.prove_equality
-                ~timeout:(min 1. (float_of_int !c_equiv_timeout))
-                base.expression candidate
+          if E.is_equal base.expression candidate || proved then true
+          else if ring then (
+            let local = Rewrite_proof.create base.expression in
+            Rewrite_proof.record_ring local ~pass:"egraph-ac" base.expression candidate;
+            let certificate = Rewrite_proof.finish local candidate in
+            let report =
+              Rewrite_proof.verify ~timeouts:[ min 1. (float_of_int !c_equiv_timeout) ]
+                ~original:base.expression ~candidate certificate
             in
-            if verdict = Yes then (
-              Rewrite.record ~pass:"egraph" base.expression candidate;
+            if Yojson.Basic.Util.member "verification" report
+               = `String "proved_compositional"
+            then (
+              Option.iter
+                (fun journal ->
+                  Rewrite_proof.record_ring journal ~pass:"egraph-ac"
+                    base.expression candidate)
+                !(Rewrite.journal);
               true)
-            else false
+            else false)
+          else false
         in
         if accepted then (
           Nodes.add seen candidate ();
@@ -133,19 +146,19 @@ let optimize expression =
               if List.length !all < !c_egraph_max_enodes then (
                 restore branch;
                 let canonical = ac_normalize branch.expression in
-                add_candidate branch canonical;
+                add_candidate ~ring:true branch canonical;
                 restore branch;
                 c_ac_normalization := false;
                 let normalized = Normalization.run branch.expression in
-                add_candidate branch normalized;
+                add_candidate ~proved:true branch normalized;
                 restore branch;
                 c_ac_normalization := true;
                 let ac = Normalization.run branch.expression in
-                add_candidate branch ac;
+                add_candidate ~proved:true branch ac;
                 if !c_oes && not !g_has_timedout then (
                   restore branch;
                   let oes = fst (Oes.linear_simplify branch.expression) in
-                  add_candidate branch oes)))
+                  add_candidate ~proved:true branch oes)))
             current;
           last_enodes := List.length !all
         done;
