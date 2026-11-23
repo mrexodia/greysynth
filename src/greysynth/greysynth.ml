@@ -170,12 +170,23 @@ let restore_preprocessing_log snapshot =
 
 let run_preprocessing gt input =
   let best = ref input in
-  if !c_normalization && not !g_has_timedout then (
-    best := run_normalization !best;
-    check_equiv gt ~tag:"normalization" log_normalization_is_equiv !best);
-  if !c_oes && not !g_has_timedout then (
-    best := oes_with_logs !best;
-    check_equiv gt ~tag:"OES" log_linear_is_equiv !best);
+  let standard () =
+    if !c_normalization && not !g_has_timedout then (
+      best := run_normalization !best;
+      check_equiv gt ~tag:"normalization" log_normalization_is_equiv !best);
+    if !c_oes && not !g_has_timedout then (
+      best := oes_with_logs !best;
+      check_equiv gt ~tag:"OES" log_linear_is_equiv !best)
+  in
+  if !c_egraph_extraction && not !g_has_timedout then (
+    best := Egraph.optimize !best;
+    if Egraph.fell_back () then (
+      let configured_ac = !c_ac_normalization in
+      Fun.protect
+        ~finally:(fun () -> c_ac_normalization := configured_ac)
+        (fun () -> c_ac_normalization := false; standard ()))
+    else check_equiv gt ~tag:"egraph" log_normalization_is_equiv !best)
+  else standard ();
   (* This relational extension is not part of the CCS'26 paper. *)
   if !c_fast_simplify && not !g_has_timedout then (
     best := fast_simplify_with_logs !best;
@@ -443,8 +454,7 @@ let run ?proof_output obf config gt =
   (* Checking does not require a separate ground truth: the input is the
      semantic reference when no ground truth was supplied. *)
   let reference = Some (Option.value gt ~default:obf) in
-  let prepared = if !c_egraph_extraction then Egraph.optimize obf else obf in
-  let result = run_passes reference prepared in
+  let result = run_passes reference obf in
   let result =
     if !c_normalization && not !g_has_timedout then
       try run_normalization result with Timeout_exception ->

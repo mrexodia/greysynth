@@ -1,20 +1,32 @@
-(* Bounded non-destructive equivalence exploration for preprocessing. Each
-   branch owns a proof/cache checkpoint; only the globally extracted branch is
-   committed. This is deliberately small while the full per-eclass congruence
-   representation is developed. *)
+(* Bounded non-destructive equivalence search used in place of ordinary
+   normalization+OES preprocessing. Branches retain independent proof/cache
+   checkpoints and only the globally extracted branch is committed. *)
 
 open Greysynth_utils.Utils
 open Config
 module E = Sexpr.Expr
+module Nodes = Sexpr.BvTbl
+
+let last_enodes = ref 0
+let last_iterations = ref 0
+let last_fallback = ref false
+let statistics () = (!last_enodes, !last_iterations)
+let fell_back () = !last_fallback
+
+type branch = {
+  expression : E.t;
+  proof : Rewrite_proof.checkpoint option;
+  cache : Rewrite.cache_checkpoint;
+}
 
 let associative = function
   | E.Plus | E.Mul | E.And | E.Or | E.Xor -> true
   | _ -> false
 
 let ac_normalize expression =
-  let memo = Sexpr.BvTbl.create 128 in
+  let memo = Nodes.create 128 in
   let rec normalize node =
-    match Sexpr.BvTbl.find_opt memo node with
+    match Nodes.find_opt memo node with
     | Some result -> result
     | None ->
         let result =
@@ -46,75 +58,107 @@ let ac_normalize expression =
           | E.Ite { c; t; e; _ } -> E.ite (normalize c) (normalize t) (normalize e)
           | _ -> node
         in
-        Sexpr.BvTbl.add memo node result;
+        Nodes.add memo node result;
         result
   in
   normalize expression
 
-let prove_equivalent ~pass left right =
-  if E.is_equal left right then true
-  else if not (Rewrite.samples_agree left right) then false
-  else
-    let verdict, _ =
-      Rewrite_proof.prove_equality
-        ~timeout:(min 1. (float_of_int !c_equiv_timeout)) left right
-    in
-    if verdict = Yes then (
-      Rewrite.record ~pass left right;
-      true)
-    else false
-
 let optimize expression =
-  if not !c_egraph_extraction then expression
+  last_enodes := 0;
+  last_iterations := 0;
+  last_fallback := false;
+  if not !c_egraph_extraction || size_of_expr expression > !c_egraph_max_enodes then (
+    last_fallback := true;
+    expression)
   else
+    let proof_builder = !(Rewrite.journal) in
+    let initial_proof = Option.map Rewrite_proof.checkpoint proof_builder in
+    let initial_cache = Rewrite.checkpoint_caches () in
     let configured_ac = !c_ac_normalization in
     let configured_fixedpoint = !c_oes_fixedpoint in
-    let proof = !(Rewrite.journal) in
-    let initial_proof = Option.map Rewrite_proof.checkpoint proof in
-    let initial_cache = Rewrite.checkpoint_caches () in
-    let restore proof_state cache_state =
-      (match proof, proof_state with
+    let restore branch =
+      (match proof_builder, branch.proof with
       | Some builder, Some checkpoint -> Rewrite_proof.restore builder checkpoint
       | _ -> ());
-      Rewrite.restore_caches cache_state
+      Rewrite.restore_caches branch.cache
     in
-    let run ~ac ~canonical =
-      restore initial_proof initial_cache;
-      c_ac_normalization := ac;
-      let input =
-        if not canonical then expression
-        else
-          let candidate = ac_normalize expression in
-          if prove_equivalent ~pass:"egraph-ac" expression candidate then candidate
-          else expression
-      in
-      let result = Normalization.run input in
-      let result =
-        if !c_oes && not !g_has_timedout then fst (Oes.linear_simplify result)
-        else result
-      in
-      let proof_state = Option.map Rewrite_proof.checkpoint proof in
-      let cache_state = Rewrite.checkpoint_caches () in
-      (result, proof_state, cache_state)
+    let checkpoint expression =
+      {
+        expression;
+        proof = Option.map Rewrite_proof.checkpoint proof_builder;
+        cache = Rewrite.checkpoint_caches ();
+      }
+    in
+    let initial = { expression; proof = initial_proof; cache = initial_cache } in
+    let seen = Nodes.create 256 in
+    Nodes.add seen expression ();
+    let all = ref [ initial ] and frontier = ref [ initial ] in
+    last_enodes := 1;
+    last_iterations := 0;
+    let add_candidate base candidate =
+      if List.length !all >= !c_egraph_max_enodes || Nodes.mem seen candidate then ()
+      else if not (Rewrite.samples_agree base.expression candidate) then ()
+      else
+        let accepted =
+          if E.is_equal base.expression candidate then true
+          else
+            let verdict, _ =
+              Rewrite_proof.prove_equality
+                ~timeout:(min 1. (float_of_int !c_equiv_timeout))
+                base.expression candidate
+            in
+            if verdict = Yes then (
+              Rewrite.record ~pass:"egraph" base.expression candidate;
+              true)
+            else false
+        in
+        if accepted then (
+          Nodes.add seen candidate ();
+          let branch = checkpoint candidate in
+          all := branch :: !all;
+          frontier := branch :: !frontier)
     in
     Fun.protect
       ~finally:(fun () ->
         c_ac_normalization := configured_ac;
         c_oes_fixedpoint := configured_fixedpoint)
       (fun () ->
-        let branches =
-          [ run ~ac:false ~canonical:false;
-            run ~ac:true ~canonical:false;
-            run ~ac:true ~canonical:true ]
-        in
-        let result, proof_state, cache_state =
+        for iteration = 1 to !c_egraph_max_iters do
+          check_timeout ();
+          last_iterations := iteration;
+          let current = !frontier in
+          frontier := [];
+          List.iter
+            (fun branch ->
+              if List.length !all < !c_egraph_max_enodes then (
+                restore branch;
+                let canonical = ac_normalize branch.expression in
+                add_candidate branch canonical;
+                restore branch;
+                c_ac_normalization := false;
+                let normalized = Normalization.run branch.expression in
+                add_candidate branch normalized;
+                restore branch;
+                c_ac_normalization := true;
+                let ac = Normalization.run branch.expression in
+                add_candidate branch ac;
+                if !c_oes && not !g_has_timedout then (
+                  restore branch;
+                  let oes = fst (Oes.linear_simplify branch.expression) in
+                  add_candidate branch oes)))
+            current;
+          last_enodes := List.length !all
+        done;
+        let selected =
           List.fold_left
-            (fun ((best, _, _) as selected) ((candidate, _, _) as branch) ->
-              let best_cost = size_of_expr best and candidate_cost = size_of_expr candidate in
+            (fun best candidate ->
+              let best_cost = size_of_expr best.expression
+              and candidate_cost = size_of_expr candidate.expression in
               if candidate_cost < best_cost
-                 || (candidate_cost = best_cost && E.compare candidate best < 0)
-              then branch else selected)
-            (List.hd branches) (List.tl branches)
+                 || (candidate_cost = best_cost
+                     && E.compare candidate.expression best.expression < 0)
+              then candidate else best)
+            initial !all
         in
-        restore proof_state cache_state;
-        result)
+        restore selected;
+        selected.expression)
