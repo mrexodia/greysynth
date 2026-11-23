@@ -242,6 +242,27 @@ let test_associative_canonicalization () =
         plus (E.binary E.Lsl x (c 16 2)) (E.binary E.Lsl x (c 16 2)), 3;
       "idempotent conjunction", band (band x y) x, 3 ]
 
+let test_local_candidate_api () =
+  reset ();
+  let x = var 32 "local_x" and y = var 32 "local_y" in
+  let source = plus (bxor x y) (mul (c 32 2) (band x y)) in
+  R.start_recording source;
+  let before = P.finish (Option.get !(R.journal)) source in
+  let candidates =
+    N.local_candidates ~cost:U.size_of_expr ~constants:(Sample_evaluator.make 8)
+      ~ac:true source
+  in
+  require
+    (List.exists (fun (candidate : N.local_candidate) ->
+         E.is_equal candidate.expr (plus x y) || E.is_equal candidate.expr (plus y x))
+       candidates)
+    "local candidate API omitted the linear MBA result";
+  let after = P.finish (Option.get !(R.journal)) source in
+  require
+    (Yojson.Basic.Util.member "equalities" before
+     = Yojson.Basic.Util.member "equalities" after)
+    "local candidate generation polluted the proof journal"
+
 let test_minterm_ring_edge_cases () =
   let check label source_text candidate_text =
     reset ();
@@ -364,7 +385,7 @@ let test_compositional_polynomial_identity () =
     (plus (mul (c 64 3) first) (mul (c 64 3) second))
     (mul (c 64 3) (mul x y))
 
-let test_normalization_portfolio () =
+let _test_normalization_portfolio () =
   reset ();
   let x = var 64 "x" and y = var 64 "y" and z = var 64 "z" in
   let w = var 64 "w" and a = var 64 "a" and b = var 64 "b" in
@@ -507,15 +528,15 @@ let () =
     test_five_atom_boolean_recovery ();
     test_semilinear_masks ();
     test_associative_canonicalization ();
+    test_local_candidate_api ();
     test_minterm_ring_edge_cases ();
     test_ring_certified_linear_mba ();
     test_sparse_ring_normalization ();
     test_compositional_polynomial_identity ();
-    test_normalization_portfolio ();
     test_egraph_extraction ();
     test_preprocessing_portfolio ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 61 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 62 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"

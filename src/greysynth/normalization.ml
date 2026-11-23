@@ -1374,6 +1374,96 @@ let bitsliced_candidate cost expression =
        with _ -> None)
   | _ -> None
 
+type local_candidate = {
+  expr : E.t;
+  pass : string;
+  equalities : (E.t * E.t) list;
+  ring_equalities : (E.t * E.t) list;
+  allow_equal_cost : bool;
+}
+
+let local_candidates ~cost ~(constants : Sample_evaluator.t) ~ac expression =
+  let direct pass ?(allow_equal_cost = false) candidate =
+    { expr = candidate; pass; equalities = [ expression, candidate ];
+      ring_equalities = []; allow_equal_cost }
+  in
+  let ring pass ?(allow_equal_cost = false) candidate =
+    { expr = candidate; pass; equalities = [];
+      ring_equalities = [ expression, candidate ]; allow_equal_cost }
+  in
+  let candidates = ref [] in
+  List.iter (fun candidate -> candidates := direct "peephole" candidate :: !candidates)
+    (peepholes constants.eval expression);
+  if ac then
+    List.iter
+      (fun candidate ->
+        let proposal =
+          match expression with
+          | E.Binary { f = (E.Plus | E.Mul); _ } ->
+              ring "ac" ~allow_equal_cost:true candidate
+          | _ -> direct "ac" ~allow_equal_cost:true candidate
+        in
+        candidates := proposal :: !candidates)
+      (canonical_candidates expression);
+  if cost expression >= 5 then
+    Option.iter
+      (fun candidate -> candidates := ring "ring-polynomial" candidate :: !candidates)
+      (ring_polynomial_candidate cost expression);
+  Option.iter
+    (fun (candidate, equalities, ring_equalities) ->
+      candidates :=
+        { expr = candidate; pass = "factor-group"; equalities; ring_equalities;
+          allow_equal_cost = false } :: !candidates)
+    (factor_group_candidate cost expression);
+  Option.iter
+    (fun (candidate, equalities, ring_equalities) ->
+      candidates :=
+        { expr = candidate; pass = "minterm-polynomial"; equalities; ring_equalities;
+          allow_equal_cost = false } :: !candidates)
+    (minterm_polynomial_candidate cost expression);
+  Option.iter
+    (fun (candidate, equalities) ->
+      candidates :=
+        { expr = candidate; pass = "product-partition"; equalities;
+          ring_equalities = []; allow_equal_cost = false } :: !candidates)
+    (product_partition_candidate expression);
+  Option.iter
+    (fun candidate ->
+      let equalities, ring_equalities =
+        Option.value (minterm_ring_proof expression candidate) ~default:([], [])
+      in
+      candidates :=
+        { expr = candidate; pass = "bitsliced"; equalities; ring_equalities;
+          allow_equal_cost = false } :: !candidates)
+    (bitsliced_candidate cost expression);
+  if cost expression >= 4 then
+    List.iter
+      (fun candidate ->
+        let equalities, ring_equalities =
+          if not (Rewrite.samples_agree expression candidate) then
+            ([ expression, candidate ], [])
+          else
+            match minterm_ring_proof expression candidate with
+            | Some proof -> proof
+            | None ->
+                Option.value (complement_product_steps expression candidate)
+                  ~default:([ expression, candidate ], [])
+        in
+        candidates :=
+          { expr = candidate; pass = "linear-mba"; equalities; ring_equalities;
+            allow_equal_cost = false } :: !candidates)
+      (linear_candidates cost expression);
+  let seen = Nodes.create 32 in
+  List.rev !candidates
+  |> List.filter (fun candidate ->
+         let allowed =
+           candidate.allow_equal_cost
+           || cost candidate.expr < cost expression
+         in
+         if not allowed || E.is_equal candidate.expr expression
+            || Nodes.mem seen candidate.expr then false
+         else (Nodes.add seen candidate.expr (); true))
+
 let oracle_compatible expression =
   let width = E.sizeof expression in
   let rec inspect = function
