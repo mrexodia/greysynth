@@ -213,5 +213,33 @@ output remained proved. Geometric quality improved slightly from 19.2494x to
 18.9725x and geometric compression from 2.5498x to 2.5870x, but strict
 reductions changed from 99 to 98 because locally accepted oracle forms altered
 later choices. The adapter therefore remains opt-in; it validates the protocol
-but does not replace general polynomial normalization or whole-pipeline
-portfolio extraction.
+but does not replace native polynomial normalization or whole-pipeline
+extraction.
+
+## Round-7 native semilinear and extraction results
+
+The finalized native minterm/ring, sparse polynomial, factor/cofactor, and
+bit-sliced passes produce the following fresh 100-case results, all checked
+against original inputs and independently replayed:
+
+| Dataset | Geometric quality | Arithmetic quality | Geometric compression | Proof routes |
+|---|---:|---:|---:|---:|
+| PLDI Non-Poly | **0.9394x** | **0.9634x** | **52.2488x** | 2 direct / 98 compositional |
+| MBA-Obfuscator nonlinear | **0.8693x** | 1.0852x | **14.4085x** | 0 direct / 100 compositional |
+| PLDI Poly | **0.8812x** | **0.9052x** | 3.7006x | 1 direct / 99 compositional |
+| QSynth EA | **0.9673x** | 1.3389x | 11.9430x | 20 direct / 80 compositional |
+| msimba | **0.9966x** | **0.9971x** | **45.1790x** | 0 direct / 100 compositional |
+
+Every case is strictly smaller; there are no refutations, unknowns, errors, or
+process timeouts. Focused msimba regressions reduce `165 -> 5` for the masked
+bit-sliced form and `242 -> 5` for the constant-mixed form.
+
+The experimental `egraph_extraction` preprocessing layer races baseline, AC,
+and AC-canonical normalization+OES branches while retaining only the selected
+branch's proof/cache checkpoint. On C-Full it establishes 1,000/1,000 outputs
+and reaches 984 strict reductions / 16 unchanged, versus 983/17 in the paired
+baseline run. Relative output sizes are 115 better, 780 equal, and 105 worse;
+the cross-run differences show that branch-level proof contention still
+prevents the promised no-regression property. It remains disabled by default
+until true per-eclass saturation and resource-isolated extraction replace this
+bounded branch prototype.

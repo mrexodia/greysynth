@@ -138,8 +138,10 @@ runs in one process have isolated metrics; reports account for every attempt.
   `ring_mod2w` certification:** supports variable, constant, compound-atom, and
   general `linear_candidates` targets, nonzero offsets, and constant shifts.
   The 100-case PLDI Non-Poly geometric quality moved from **19.2494x to 0.9394x**
-  with 100/100 established outputs. Connected-component scaling and broader
-  bit-sliced semilinear reconstruction remain follow-up optimizations.
+  with 100/100 established outputs. Constant-complement canonicalization,
+  scaled disjoint-mask merging, and one-variable bit-sliced affine/XOR recovery
+  bring the first 100 msimba cases to **0.9966x** quality with 100/100 replay.
+  Connected-component scaling and multivariable bit slicing remain follow-up work.
 - [x] **Milestone 3B.2 — Native factor grouping and sparse polynomial
   normalization:** combines formal monomials, factors repeated opaque terms,
   recursively reduces linear cofactors, and certifies results with ring edges.
@@ -187,12 +189,13 @@ reductions and 16 unchanged.
   the winning branch's proof obligations (measured 217 improved / 218 regressed
   under shared wall budget; superseded by Milestone 4A e-graph unification).
 - [ ] **Milestone 4A — Bounded e-graph unifying normalization, OES, and proof
-  extraction:** reuse `Rewrite_proof`'s hash-consed DAG + union-find under a
-  strict node/time budget (`max_enodes`, wall deadline) so AC, factoring,
-  minterm/polynomial rewrites, OES classes, and oracle candidates union into
-  e-classes non-destructively instead of overwriting the AST. Extract the
-  globally cheapest expression under the configured cost model via bottom-up DP
-  and emit only the spanning-tree proof edges connecting input to output.
+  extraction:** an experimental bounded equivalence-extraction layer now races
+  baseline, AC, and AC-canonical normalization+OES branches with proof/cache
+  checkpointing and global cost selection. It establishes C-Full 1,000/1,000
+  and reaches 984/16, but cross-run comparison is 115 better / 780 equal / 105
+  worse because it is still branch-level rather than true per-eclass saturation.
+  Complete the hash-consed per-eclass union-find, congruence rebuild, bottom-up
+  DP extraction, and minimal proof-spanning-tree emission before enabling it.
 
 Acceptance: a targeted test demonstrates fallback from an unprovable smallest
 representative to a proved runner-up and non-monotonic expansion->cancellation
