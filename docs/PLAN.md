@@ -196,13 +196,15 @@ reductions and 16 unchanged.
   saturation, and global bottom-up configured-cost extraction. The 2048-enode /
   4-iteration limits are enforced and large/stalled inputs fall back safely.
   Raw-child-aware congruence nodes, recursive BFS proof-path emission, rebuild
-  correctness, incremental extraction, materialized parent representatives, and
-  semantic-failure memoization are implemented; the two child-class replay
-  reproducers now pass. Corpus acceptance is still open: broad 2048/4 saturation
-  overruns the shared budget (latest C-Full: 984 established, 16 process
-  timeouts, 965 strict reductions). Make every local candidate generator poll
-  the graph-local deadline and complete resource-isolated fallback before
-  enabling the mode.
+  correctness, fixed-point incremental extraction, materialized parent
+  representatives, semantic-failure memoization, bottom-up scheduling,
+  cheapest-first candidate verification, and partial-progress extraction are
+  implemented; all focused child-class certificates replay. Corpus acceptance
+  is still open: some local candidate generators cannot be interrupted promptly
+  by the graph-local deadline (latest 2048/4 C-Full: 983 established, 17 process
+  timeouts, 967 strict reductions). Make candidate generation cooperatively
+  interruptible and start resource-isolated baseline fallback before the hard
+  process cap before enabling the mode.
 
 Acceptance: a targeted test demonstrates fallback from an unprovable smallest
 representative to a proved runner-up and non-monotonic expansion->cancellation

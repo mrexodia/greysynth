@@ -281,7 +281,26 @@ the graph saturates broadly. A two-second graph-local rollback and baseline
 fallback is implemented, but several candidate generators do not yet poll that
 local deadline frequently enough to prevent process-level overruns.
 
+## Round-12 e-graph scheduling and proof-path results
+
+Round 12 fixes recursive child proof emission, stale rebuild indexing,
+quadratic extraction, frozen parent representatives, semantic-merge retry
+storms, premature cost-5 termination, per-candidate deadline clamping,
+bottom-up class ordering, cheapest-first candidate verification, and
+partial-progress extraction. The exact `child_mba_inside_mul`,
+`child_ac_expose_parent`, `child_prop_cancel`, and `nonpoly_L2_full` certificates
+all replay compositionally. Root bit-sliced candidates retain msimba's focused
+`165 -> 5` and `242 -> 5` results.
+
+The corpus promotion gate is still not met at 2048 enodes / 4 iterations. The
+five egraph smoke suites establish all outputs but broad saturation quality is
+1.2619x PLDI Non-Poly, 0.9795x MBA-Obfuscator nonlinear, 0.8789x PLDI Poly,
+1.4889x QSynth EA, and approximately 1.00x msimba after root fallback. The
+final C-Full run establishes 983 outputs (532 direct, 451 compositional), has 17
+process timeouts, and yields 967 strict reductions / 16 unchanged / 17 unknown.
+
 `egraph_extraction` therefore remains disabled by default. Baseline results
-remain the authoritative 1,000/1,000 established, 984/16 C-Full result and the
-five sub-1.00x MBA quality measurements. Milestone 4A remains open for
-incremental/interruptible local-candidate scheduling and corpus acceptance.
+remain authoritative: 1,000/1,000 established and 984/16 on C-Full, with all
+five MBA smoke suites below 1.00x geometric quality. Milestone 4A remains open
+for making every local candidate generator interruptible under the graph-local
+budget and for resource-isolated fallback that starts before the process cap.
