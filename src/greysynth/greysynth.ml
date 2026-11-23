@@ -345,6 +345,9 @@ let report_json ~initial_size ~total_time ?proof gt result =
         ("ac_normalization", `Bool !c_ac_normalization);
         ("normalization_portfolio", `Bool !c_normalization_portfolio);
         ("preprocessing_portfolio", `Bool !c_preprocessing_portfolio);
+        ("egraph_extraction", `Bool !c_egraph_extraction);
+        ("egraph_max_enodes", `Int !c_egraph_max_enodes);
+        ("egraph_max_iters", `Int !c_egraph_max_iters);
         ("normalization_max_atoms", `Int !c_normalization_max_atoms);
         ("mba_oracle", `String !c_mba_oracle);
         ("mba_oracle_timeout", `Int !c_mba_oracle_timeout);
@@ -440,7 +443,8 @@ let run ?proof_output obf config gt =
   (* Checking does not require a separate ground truth: the input is the
      semantic reference when no ground truth was supplied. *)
   let reference = Some (Option.value gt ~default:obf) in
-  let result = run_passes reference obf in
+  let prepared = if !c_egraph_extraction then Egraph.optimize obf else obf in
+  let result = run_passes reference prepared in
   let result =
     if !c_normalization && not !g_has_timedout then
       try run_normalization result with Timeout_exception ->

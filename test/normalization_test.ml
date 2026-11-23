@@ -6,6 +6,7 @@ module C = Greysynth__Config
 module R = Greysynth__Rewrite
 module N = Greysynth__Normalization
 module G = Greysynth
+module EG = Greysynth__Egraph
 module P = Rewrite_proof
 
 let require condition message = if not condition then failwith message
@@ -26,6 +27,9 @@ let reset ?(strict = true) () =
   C.c_ac_normalization := false;
   C.c_normalization_portfolio := false;
   C.c_preprocessing_portfolio := false;
+  C.c_egraph_extraction := false;
+  C.c_egraph_max_enodes := 8192;
+  C.c_egraph_max_iters := 4;
   C.c_normalization_max_atoms := 6;
   C.c_mba_oracle := "none";
   C.c_mba_oracle_command := "";
@@ -411,6 +415,22 @@ let test_normalization_portfolio () =
   require (portfolio_edges = selected_edges)
     "normalization portfolio retained discarded-branch obligations"
 
+let test_egraph_extraction () =
+  reset ();
+  C.c_egraph_extraction := true;
+  C.c_oes := true;
+  let x = var 32 "eg_x" and y = var 32 "eg_y" in
+  let original = plus (plus (bor x y) (band x y)) (c 32 0) in
+  R.start_recording original;
+  let result = EG.optimize original in
+  require (U.size_of_expr result = 3)
+    "e-graph extraction missed the globally cheaper equivalent";
+  let certificate = P.finish (Option.get !(R.journal)) result in
+  let report = P.verify ~timeouts:[ 1.; 5. ] ~original ~candidate:result certificate in
+  require
+    (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+    "e-graph extracted result did not replay minimally"
+
 let test_preprocessing_portfolio () =
   let x = var 32 "portfolio_x" and y = var 32 "portfolio_y" in
   let original = plus (plus (bxor x y) (mul (c 32 2) (band x y))) (c 32 0) in
@@ -468,9 +488,10 @@ let () =
     test_sparse_ring_normalization ();
     test_compositional_polynomial_identity ();
     test_normalization_portfolio ();
+    test_egraph_extraction ();
     test_preprocessing_portfolio ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 60 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 61 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"
