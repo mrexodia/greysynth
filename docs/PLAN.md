@@ -190,18 +190,15 @@ reductions and 16 unchanged.
   the winning branch's proof obligations (measured 217 improved / 218 regressed
   under shared wall budget; superseded by Milestone 4A e-graph unification).
 - [ ] **Milestone 4A — Bounded e-graph unifying normalization, OES, and proof
-  extraction:** the branch prototype has been replaced by a single bounded
-  non-destructive equivalence search wired *instead of* ordinary normalization
-  and OES. The reported enode/input-size and iteration limits now affect
-  behavior, large inputs fall back to AC-disabled baseline preprocessing, and
-  only the globally selected branch's proof/cache checkpoint is retained. At a
-  conservative 50-enode/2-iteration bound, C-Full is 1,000/1,000 established
-  and 984/16, with 20 smaller / 974 equal / 6 larger outputs versus baseline.
-  Avoiding redundant monolithic proof checks restores PLDI Poly and msimba to
-  baseline-or-better quality. However, this is still expression-branch search
-  rather than the specified per-eclass hash-cons/union-find graph. Complete
-  per-eclass congruence rebuild, bottom-up DP extraction, and minimal
-  proof-forest emission before enabling it.
+  extraction:** the branch worklist is deleted. The implementation now has
+  hash-consed per-eclass enodes, union-find, direct semantic OES merges,
+  congruence rebuild, journal-free proof justifications, bounded local-candidate
+  saturation, and global bottom-up configured-cost extraction. The 2048-enode /
+  4-iteration limits are enforced and large/stalled inputs fall back safely.
+  All five smoke suites and C-Full replay completely; C-Full remains 984/16 with
+  20 smaller / 974 equal / 6 larger outputs. Complete shortest-path/minimal
+  proof-forest emission and eliminate the final six C-Full cross-run differences
+  before enabling it by default.
 
 Acceptance: a targeted test demonstrates fallback from an unprovable smallest
 representative to a proved runner-up and non-monotonic expansion->cancellation

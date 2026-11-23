@@ -253,11 +253,21 @@ redundant monolithic re-proof of already compositionally proved branches,
 relative output sizes are 20 smaller, 974 equal, and 6 larger (down from 105
 regressions in the first prototype).
 
-The five 100-case egraph-enabled smoke audits all establish 100/100 outputs and
-strictly reduce every input. Geometric quality is 0.9409x PLDI Non-Poly, 0.8604x
-MBA-Obfuscator nonlinear, 0.8812x PLDI Poly, 0.9653x QSynth EA, and 0.9966x
-msimba. Thus the smoking-gun PLDI Poly/msimba regression is fixed. The six
-C-Full cross-run regressions and branch-oriented representation show that this
-remains bounded equivalence search, not the requested per-eclass
-union-find/congruence-rebuild e-graph. It stays disabled by default; Milestone
-4A remains open for true e-class saturation and minimal proof-forest extraction.
+The five 100-case egraph-enabled smoke audits establish every output. Geometric
+quality is 0.9409x PLDI Non-Poly, 0.8604x MBA-Obfuscator nonlinear, 0.8812x PLDI
+Poly, 0.9653x QSynth EA, and 0.9966x msimba after baseline fallback for a stalled
+root. Thus the smoking-gun PLDI Poly/msimba regression is fixed.
+
+Round 10 replaces the branch worklist completely with hash-consed per-eclass
+nodes, union-find merging, direct semantic OES class merging, congruence
+rebuild, bounded local-candidate saturation, and bottom-up configured-cost
+extraction. Saturation stores proof justifications outside the producer journal
+and emits only the selected root component's proof forest. Bounds are honest
+(`egraph_max_enodes=2048`, `egraph_max_iters=4`), and large/stalled roots fall
+back to baseline preprocessing.
+
+C-Full remains 1,000/1,000 established and 984/16, with 20 smaller / 974 equal /
+6 larger outputs versus the paired baseline. PLDI Non-Poly is also slightly
+higher than baseline (0.9409x vs. 0.9394x). The graph therefore remains disabled
+by default until proof emission is reduced from the selected component forest
+to shortest required paths and the final cross-run differences are eliminated.
