@@ -177,7 +177,7 @@ let cheapest graph ids =
     None ids
   |> Option.get
 
-let verify_local candidate lhs rhs =
+let verify_local ~local_deadline candidate lhs rhs =
   if not (Rewrite.samples_agree lhs rhs) then false
   else
     let builder = Rewrite_proof.create lhs in
@@ -193,10 +193,13 @@ let verify_local candidate lhs rhs =
       Rewrite_proof.record builder ~pass:candidate.pass lhs rhs;
     let certificate = Rewrite_proof.finish builder rhs in
     let timeout =
-      if !g_total_timeout <= 0. then float_of_int !c_equiv_timeout
-      else
-        min (float_of_int !c_equiv_timeout)
-          (!g_total_timeout -. (Unix.gettimeofday () -. !g_start_time))
+      let local_remaining = local_deadline -. Unix.gettimeofday () in
+      let global_remaining =
+        if !g_total_timeout <= 0. then infinity
+        else !g_total_timeout -. (Unix.gettimeofday () -. !g_start_time)
+      in
+      min 0.5 (min (float_of_int !c_equiv_timeout)
+                 (min local_remaining global_remaining))
     in
     if timeout <= 0. then false
     else
@@ -231,7 +234,7 @@ let rebuild graph =
   round ();
   !changed
 
-let semantic_merge graph =
+let semantic_merge ~local_deadline graph =
   let buckets = Hashtbl.create 128 in
   let changed = ref false in
   representatives graph
@@ -241,6 +244,7 @@ let semantic_merge graph =
          match Hashtbl.find_opt buckets signature with
          | None -> Hashtbl.add buckets signature (root, id, expression)
          | Some (other_root, other_id, other_expression) ->
+             if Unix.gettimeofday () > local_deadline then raise Egraph_budget;
              if find graph root <> find graph other_root then
                let failure_key = min root other_root, max root other_root in
                if not (Hashtbl.mem graph.semantic_failures failure_key) then (
@@ -258,7 +262,7 @@ let semantic_merge graph =
                      allow_equal_cost = true;
                    }
                  in
-                 if verify_local candidate other_expression expression
+                 if verify_local ~local_deadline candidate other_expression expression
                     && union graph other_id id
                          (Proof
                             {
@@ -402,20 +406,45 @@ let optimize expression =
       in
       (try
       while !continue && !iteration < !c_egraph_max_iters
-            && graph.count < graph.limit && not !g_has_timedout do
+            && graph.count < graph.limit - 1 && not !g_has_timedout do
         incr iteration;
         check_timeout ();
         let changed = ref false in
         let best = compute_best graph in
+        let root_class = find graph root in
+        let root_fast = ref false in
+        (match best.(root_class) with
+        | Some (_, root_expression) when size_of_expr root_expression <= 512 ->
+            (match Normalization.bitsliced_candidate size_of_expr root_expression with
+            | Some candidate ->
+                let proposal : Normalization.local_candidate =
+                  let equalities, ring_equalities =
+                    Option.value
+                      (Normalization.minterm_ring_proof root_expression candidate)
+                      ~default:([ root_expression, candidate ], [])
+                  in
+                  { expr = candidate; pass = "egraph-root-bitsliced"; equalities;
+                    ring_equalities; allow_equal_cost = false }
+                in
+                if verify_local ~local_deadline proposal root_expression candidate then (
+                  let root_id = add_expr graph root_expression in
+                  let candidate_id = add_expr graph candidate in
+                  if union graph root_id candidate_id
+                       (Proof
+                          { lhs = root_expression; rhs = candidate;
+                            smt_edges = proposal.equalities;
+                            ring_edges = proposal.ring_equalities;
+                            pass = proposal.pass })
+                  then changed := true;
+                  root_fast := true)
+            | None -> ())
+        | _ -> ());
+        if not !root_fast then (
         representatives graph
         |> List.sort (fun (left_root, _) (right_root, _) ->
-               let root_class = find graph root in
-               if left_root = root_class then -1
-               else if right_root = root_class then 1
-               else
-                 let left_cost = Option.fold ~none:max_int ~some:fst best.(left_root)
-                 and right_cost = Option.fold ~none:max_int ~some:fst best.(right_root) in
-                 Int.compare right_cost left_cost)
+               let left_cost = Option.fold ~none:max_int ~some:fst best.(left_root)
+               and right_cost = Option.fold ~none:max_int ~some:fst best.(right_root) in
+               Int.compare left_cost right_cost)
         |> List.iter (fun (class_root, ids) ->
                if Unix.gettimeofday () > local_deadline then raise Egraph_budget;
                let fallback_id, fallback = cheapest graph ids in
@@ -426,36 +455,61 @@ let optimize expression =
                  if E.is_equal representative fallback then fallback_id
                  else add_expr graph representative
                in
-               if not (Nodes.mem visited representative) then (
+               if size_of_expr representative > 1
+                  && not (Nodes.mem visited representative) then (
                  Nodes.add visited representative ();
-                 Normalization.local_candidates ~cost:size_of_expr ~constants
-                   ~ac:!c_ac_normalization representative
-                 |> List.iter (fun (candidate : Normalization.local_candidate) ->
-                        if graph.count < graph.limit
-                           && (candidate.allow_equal_cost
-                               || size_of_expr candidate.expr < size_of_expr representative)
-                           && verify_local candidate representative candidate.expr
-                        then
-                          let candidate_id = add_expr graph candidate.expr in
-                          if union graph id candidate_id
-                               (Proof
-                                  {
-                                    lhs = representative;
-                                    rhs = candidate.expr;
-                                    smt_edges = candidate.equalities;
-                                    ring_edges = candidate.ring_equalities;
-                                    pass = candidate.pass;
-                                  })
-                          then changed := true)));
-        if semantic_merge graph then changed := true;
-        if rebuild graph then changed := true;
+                 let candidates =
+                   Normalization.local_candidates ~cost:size_of_expr ~constants
+                     ~ac:!c_ac_normalization representative
+                   |> List.sort (fun (left : Normalization.local_candidate) right ->
+                          let order = Int.compare (size_of_expr left.expr) (size_of_expr right.expr) in
+                          if order <> 0 then order
+                          else Bool.compare left.allow_equal_cost right.allow_equal_cost)
+                 in
+                 let rec process cheaper_found equal_found = function
+                   | [] -> ()
+                   | (candidate : Normalization.local_candidate) :: rest ->
+                       if Unix.gettimeofday () > local_deadline then raise Egraph_budget;
+                       let strictly_cheaper =
+                         size_of_expr candidate.expr < size_of_expr representative
+                       in
+                       if (strictly_cheaper && cheaper_found)
+                          || (candidate.allow_equal_cost && equal_found)
+                       then process cheaper_found equal_found rest
+                       else if graph.count < graph.limit
+                               && (candidate.allow_equal_cost || strictly_cheaper)
+                               && verify_local ~local_deadline candidate representative candidate.expr
+                       then (
+                         let candidate_id = add_expr graph candidate.expr in
+                         let merged =
+                           union graph id candidate_id
+                             (Proof
+                                {
+                                  lhs = representative;
+                                  rhs = candidate.expr;
+                                  smt_edges = candidate.equalities;
+                                  ring_edges = candidate.ring_equalities;
+                                  pass = candidate.pass;
+                                })
+                         in
+                         if merged then changed := true;
+                         process (cheaper_found || strictly_cheaper)
+                           (equal_found || candidate.allow_equal_cost) rest)
+                       else process cheaper_found equal_found rest
+                 in
+                 process false false candidates));
+        if semantic_merge ~local_deadline graph then changed := true;
+        if rebuild graph then changed := true);
+        if !root_fast then continue := false;
         let root_class = find graph root in
         let root_best =
           Option.fold ~none:(node graph root).expr ~some:snd (compute_best graph).(root_class)
         in
         if not !changed || size_of_expr root_best <= 1 then continue := false
       done
-      with Timeout_exception -> g_has_timedout := true);
+      with
+      | Timeout_exception -> g_has_timedout := true
+      | Egraph_budget | Full -> continue := false);
       last_enodes := graph.count;
       last_iterations := !iteration;
       let result = extract graph root in
@@ -465,14 +519,7 @@ let optimize expression =
       let replayable =
         match !(Rewrite.journal) with
         | None -> true
-        | Some builder ->
-            let certificate = Rewrite_proof.finish builder result in
-            let report =
-              Rewrite_proof.verify ~timeouts:[ float_of_int !c_equiv_timeout ]
-                ~original:expression ~candidate:result certificate
-            in
-            Yojson.Basic.Util.member "verification" report
-            = `String "proved_compositional"
+        | Some builder -> Rewrite_proof.is_connected builder result
       in
       if replayable then result
       else (

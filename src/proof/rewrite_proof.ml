@@ -492,6 +492,10 @@ let ring_equal g left right =
       else Ring_not_equal
     with Ring_limit -> Ring_limit_exceeded
 
+let is_connected builder candidate =
+  let candidate = of_expr builder.graph candidate in
+  congruent builder.graph builder.edges builder.original candidate
+
 let verify ?(timeouts = [1.]) ~original ~candidate certificate =
   let started = Unix.gettimeofday () in
   let checked = ref 0 and proved = ref 0 and unknown = ref 0 and timed_out = ref 0 in

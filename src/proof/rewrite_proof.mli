@@ -16,6 +16,10 @@ val record_ring : builder -> pass:string -> Sexpr.Expr.t -> Sexpr.Expr.t -> unit
 (** [record_ring] requests exact formal commutative-ring normalization modulo
     the common bit width. Non-ring subterms are opaque indeterminates. *)
 
+val is_connected : builder -> Sexpr.Expr.t -> bool
+(** Structural congruence check over already-established builder edges; performs
+    no SMT queries. *)
+
 val finish : builder -> Sexpr.Expr.t -> Yojson.Basic.t
 
 val prove_equality_with_model : timeout:float -> Sexpr.Expr.t -> Sexpr.Expr.t ->
