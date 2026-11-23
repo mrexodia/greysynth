@@ -1259,8 +1259,24 @@ let rec product_partition_candidate expression =
 let bitsliced_candidate cost expression =
   let width = E.sizeof expression in
   let variables = Sample_evaluator.variables_of_expr expression in
+  let rec has_nontrivial_mask = function
+    | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+        let here =
+          match constant_value x, constant_value y with
+          | Some value, _ | _, Some value ->
+              not (Bitvector.is_zeros value || Bitvector.is_fill value)
+          | _ -> false
+        in
+        here || has_nontrivial_mask x || has_nontrivial_mask y
+    | E.Unary { x; _ } -> has_nontrivial_mask x
+    | E.Binary { x; y; _ } -> has_nontrivial_mask x || has_nontrivial_mask y
+    | E.Ite { c; t; e; _ } ->
+        has_nontrivial_mask c || has_nontrivial_mask t || has_nontrivial_mask e
+    | _ -> false
+  in
   match variables with
-  | [ name, variable_width ] when variable_width = width && width <= 128 ->
+  | [ name, variable_width ]
+    when variable_width = width && width <= 128 && has_nontrivial_mask expression ->
       let variable = E.var name width name in
       let evaluate value =
         let bindings = Hashtbl.create 1 in
@@ -1539,23 +1555,13 @@ let run expression =
                      ~equalities ~ring_equalities original candidate
                | None -> Rewrite.accepts ~pass original candidate
            in
-           let early_bitsliced =
+           let early_minterm =
              if cost original < 11 then None
              else
-               match bitsliced_candidate cost original with
-               | Some candidate when accept_minterm "bitsliced-root" candidate ->
-                   Some candidate
-               | _ -> None
-           in
-           let early_minterm =
-             match early_bitsliced with
-             | Some candidate -> Some candidate
-             | None when cost original < 11 -> None
-             | None ->
-                 Sample_evaluator.variables_of_expr original
-                 |> List.map (fun (name, width) -> E.var name width name)
-                 |> List.filter (fun candidate -> cost candidate < cost original)
-                 |> List.find_opt (accept_minterm "minterm-ring-mba")
+               Sample_evaluator.variables_of_expr original
+               |> List.map (fun (name, width) -> E.var name width name)
+               |> List.filter (fun candidate -> cost candidate < cost original)
+               |> List.find_opt (accept_minterm "minterm-ring-mba")
            in
            (match early_minterm with
            | Some candidate -> current := visit candidate
@@ -1578,15 +1584,16 @@ let run expression =
              | Some candidate -> current := candidate; current := visit ~allow_oracle:false candidate
              | None ->
              let bitsliced =
-               match if cost !current >= 11 then bitsliced_candidate cost !current else None with
-               | Some candidate when Rewrite.samples_agree !current candidate ->
-                   (match minterm_ring_proof !current candidate with
+               match if cost original >= 11 then bitsliced_candidate cost original else None with
+               | Some candidate when cost candidate < cost !current
+                                     && Rewrite.samples_agree original candidate ->
+                   (match minterm_ring_proof original candidate with
                    | Some (equalities, ring_equalities)
                      when Rewrite.accepts_compositional ~pass:"bitsliced"
-                            ~equalities ~ring_equalities !current candidate ->
+                            ~equalities ~ring_equalities original candidate ->
                        Some candidate
                    | _ ->
-                       if Rewrite.accepts ~pass:"bitsliced" !current candidate
+                       if Rewrite.accepts ~pass:"bitsliced" original candidate
                        then Some candidate else None)
                | _ -> None
              in
@@ -1618,7 +1625,7 @@ let run expression =
              let ring_normalized =
                match factor_grouped with
                | Some candidate -> Some candidate
-               | None when cost !current < 11 -> None
+               | None when cost !current < 5 -> None
                | None ->
                    (match ring_polynomial_candidate cost !current with
                    | Some candidate

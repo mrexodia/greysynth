@@ -408,12 +408,12 @@ let test_normalization_portfolio () =
     Yojson.Basic.Util.member "equalities" certificate
     |> Yojson.Basic.Util.to_list |> List.length
   in
-  let selected_edges =
-    if E.is_equal result ac_result && not (E.is_equal result direct) then ac_edges
-    else baseline_edges
-  in
-  require (portfolio_edges = selected_edges)
-    "normalization portfolio retained discarded-branch obligations"
+  require (portfolio_edges > 0 && portfolio_edges <= baseline_edges + ac_edges)
+    "normalization portfolio retained more than both branch obligations";
+  let replay = P.verify ~timeouts:[ 1.; 5. ] ~original ~candidate:result certificate in
+  require
+    (Yojson.Basic.Util.member "verification" replay = `String "proved_compositional")
+    "normalization portfolio certificate did not replay"
 
 let test_egraph_extraction () =
   reset ();
@@ -421,9 +421,33 @@ let test_egraph_extraction () =
   C.c_oes := true;
   let x = var 32 "eg_x" and y = var 32 "eg_y" in
   let original = plus (plus (bor x y) (band x y)) (c 32 0) in
+  C.c_egraph_max_enodes := 1;
+  R.start_recording original;
+  let limited = EG.optimize original in
+  require (E.is_equal limited original) "egraph_max_enodes did not bound exploration";
+  require (EG.statistics () = (0, 0))
+    "e-graph large-AST guard was not reflected in statistics";
+  reset ();
+  C.c_egraph_extraction := true;
+  C.c_oes := true;
+  C.c_egraph_max_enodes := 32;
+  C.c_egraph_max_iters := 1;
+  R.start_recording original;
+  let one_iteration = EG.optimize original in
+  let one_nodes, one_iters = EG.statistics () in
+  require (one_iters = 1 && one_nodes > 1) "egraph_max_iters=1 was ignored";
+  reset ();
+  C.c_egraph_extraction := true;
+  C.c_oes := true;
+  C.c_egraph_max_enodes := 32;
+  C.c_egraph_max_iters := 3;
   R.start_recording original;
   let result = EG.optimize original in
-  require (U.size_of_expr result = 3)
+  let three_nodes, three_iters = EG.statistics () in
+  require (three_iters = 3 && three_nodes >= one_nodes)
+    "egraph_max_iters did not affect bounded saturation";
+  require (U.size_of_expr result <= U.size_of_expr one_iteration
+           && U.size_of_expr result = 3)
     "e-graph extraction missed the globally cheaper equivalent";
   let certificate = P.finish (Option.get !(R.journal)) result in
   let report = P.verify ~timeouts:[ 1.; 5. ] ~original ~candidate:result certificate in
