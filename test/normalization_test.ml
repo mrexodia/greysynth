@@ -576,7 +576,7 @@ let test_round15_canonicalization () =
     "Rivest criterion rejected a permutation polynomial";
   require (not (N.is_permutation_poly ~width:64 [ Z.zero; Z.of_int 2 ]))
     "Rivest criterion accepted an even linear coefficient";
-  match N.invert_permutation_poly ~width:64 ~max_degree:1 [ Z.of_int 7; Z.of_int 3 ] with
+  (match N.invert_permutation_poly ~width:64 ~max_degree:1 [ Z.of_int 7; Z.of_int 3 ] with
   | Some [ offset; slope ] ->
       let modulus = Z.shift_left Z.one 64 in
       require (Z.equal (Z.erem (Z.mul slope (Z.of_int 3)) modulus) Z.one)
@@ -585,7 +585,27 @@ let test_round15_canonicalization () =
         (Z.equal
            (Z.erem (Z.add offset (Z.mul slope (Z.of_int 7))) modulus) Z.zero)
         "Hensel affine inverse has the wrong offset"
-  | _ -> failwith "Hensel affine inversion failed"
+  | _ -> failwith "Hensel affine inversion failed");
+  let polynomial width variable coefficients =
+    List.rev coefficients
+    |> List.fold_left
+         (fun result coefficient ->
+           plus (E.constant (Bitvector.create coefficient width)) (mul variable result))
+         (c width 0)
+  in
+  List.iter
+    (fun width ->
+      let variable = var width (Printf.sprintf "perm_quad_%d" width) in
+      let quadratic = Z.shift_left Z.one (width - 3) in
+      let coefficients = [ Z.zero; Z.one; quadratic ] in
+      match N.invert_permutation_poly ~width ~max_degree:8 coefficients with
+      | None -> failwith (Printf.sprintf "quadratic Hensel inversion failed at %d" width)
+      | Some inverse ->
+          let inner = polynomial width variable coefficients in
+          let composition = polynomial width inner inverse in
+          prove (Printf.sprintf "quadratic permutation composition %d" width)
+            composition variable)
+    [ 8; 16; 32; 64 ]
 
 let test_egraph_round14_regressions () =
   let check label text maximum =

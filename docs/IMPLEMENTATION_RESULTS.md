@@ -380,6 +380,8 @@ and a `ring_mod2w` expansion edge. Degree-2/3/4 null products at 8/16/32/64 bits
 all independently replay. Rivest's exact parity criterion and bounded
 Hensel/Newton inverse construction are exposed for low-degree permutation
 polynomials; inverses are returned only after deterministic modular validation.
+Nested quadratic inverse compositions reduce and replay to the original variable
+at 8/16/32/64 bits.
 
 The mixed-width peephole set now includes composed masks, XOR constants,
 extension/restriction chains, logical shift masks, complementary mask selects,
