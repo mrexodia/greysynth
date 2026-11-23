@@ -196,11 +196,12 @@ reductions and 16 unchanged.
   behavior, large inputs fall back to AC-disabled baseline preprocessing, and
   only the globally selected branch's proof/cache checkpoint is retained. At a
   conservative 50-enode/2-iteration bound, C-Full is 1,000/1,000 established
-  and 984/16, with 18 smaller / 976 equal / 6 larger outputs versus baseline.
-  However, this is still expression-branch search rather than the specified
-  per-eclass hash-cons/union-find graph; PLDI Poly and msimba quality regress
-  under the experimental mode. Complete per-eclass congruence rebuild,
-  bottom-up DP extraction, and minimal proof-forest emission before enabling it.
+  and 984/16, with 20 smaller / 974 equal / 6 larger outputs versus baseline.
+  Avoiding redundant monolithic proof checks restores PLDI Poly and msimba to
+  baseline-or-better quality. However, this is still expression-branch search
+  rather than the specified per-eclass hash-cons/union-find graph. Complete
+  per-eclass congruence rebuild, bottom-up DP extraction, and minimal
+  proof-forest emission before enabling it.
 
 Acceptance: a targeted test demonstrates fallback from an unprovable smallest
 representative to a proved runner-up and non-monotonic expansion->cancellation

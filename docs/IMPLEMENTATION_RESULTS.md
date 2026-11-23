@@ -248,14 +248,16 @@ normalization/OES run. `egraph_max_iters` controls expansion rounds,
 `egraph_max_enodes` is also the input-size fast guard, proof/cache checkpoints
 are branch-local, and larger inputs fall back to baseline AC-disabled
 preprocessing. With the conservative 50-enode / 2-iteration configuration,
-C-Full remains **1,000/1,000 established and 984/16**; relative to the paired
-baseline, 18 outputs are smaller, 976 equal, and 6 larger (down from 105
+C-Full remains **1,000/1,000 established and 984/16**; after removing the
+redundant monolithic re-proof of already compositionally proved branches,
+relative output sizes are 20 smaller, 974 equal, and 6 larger (down from 105
 regressions in the first prototype).
 
 The five 100-case egraph-enabled smoke audits all establish 100/100 outputs and
 strictly reduce every input. Geometric quality is 0.9409x PLDI Non-Poly, 0.8604x
-MBA-Obfuscator nonlinear, 0.9991x PLDI Poly, 0.9661x QSynth EA, and 1.4766x
-msimba. The latter two quality regressions show that this remains bounded
-branch-level equivalence extraction, not the requested per-eclass
+MBA-Obfuscator nonlinear, 0.8812x PLDI Poly, 0.9653x QSynth EA, and 0.9966x
+msimba. Thus the smoking-gun PLDI Poly/msimba regression is fixed. The six
+C-Full cross-run regressions and branch-oriented representation show that this
+remains bounded equivalence search, not the requested per-eclass
 union-find/congruence-rebuild e-graph. It stays disabled by default; Milestone
 4A remains open for true e-class saturation and minimal proof-forest extraction.
