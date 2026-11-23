@@ -1011,7 +1011,7 @@ let minterm_polynomial_candidate cost expression =
           if cost candidate >= cost expression then None
           else Some (candidate, equalities, (expanded, candidate) :: ring_equalities)))
 
-let factor_group_candidate cost expression =
+let factor_group_steps cost expression =
   let width = E.sizeof expression in
   let modulus = Z.shift_left Z.one width in
   let normalize value =
@@ -1064,7 +1064,7 @@ let factor_group_candidate cost expression =
          in
          take 6 factors)
   in
-  List.find_map (fun (factor, _) ->
+  List.filter_map (fun (factor, _) ->
       let remove_factor factors =
         let rec remove prefix = function
           | [] -> None
@@ -1152,6 +1152,54 @@ let factor_group_candidate cost expression =
             in
             Some (candidate, equalities, (expression, raw) :: cleanup)))
     selected
+
+let factor_group_candidate cost expression =
+  let finish current equalities ring_equalities =
+    if E.is_equal current expression then None
+    else
+      let refinements =
+        Option.to_list (ring_polynomial_candidate cost current)
+        @ linear_candidates cost current
+        |> List.filter (fun candidate ->
+               cost candidate < cost current && Rewrite.samples_agree current candidate)
+        |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+      in
+      match refinements with
+      | candidate :: _ ->
+          let next_equalities, next_ring =
+            match minterm_ring_proof current candidate with
+            | Some proof -> proof
+            | None ->
+                (match ring_polynomial_candidate cost current with
+                | Some ring when E.is_equal ring candidate -> ([], [ current, candidate ])
+                | _ -> ([ current, candidate ], []))
+          in
+          Some (candidate, equalities @ next_equalities,
+                ring_equalities @ next_ring)
+      | [] -> Some (current, equalities, ring_equalities)
+  in
+  let rec loop remaining current equalities ring_equalities =
+    let terminal = finish current equalities ring_equalities in
+    if remaining = 0 then terminal
+    else
+      let descendants =
+        factor_group_steps cost current
+        |> List.filter_map (fun (candidate, next_equalities, next_ring) ->
+               if cost candidate >= cost current then None
+               else
+                 loop (remaining - 1) candidate
+                   (equalities @ next_equalities) (ring_equalities @ next_ring))
+      in
+      List.fold_left
+        (fun best candidate ->
+          match best with
+          | None -> Some candidate
+          | Some (previous, _, _) ->
+              let expression, _, _ = candidate in
+              if cost expression < cost previous then Some candidate else best)
+        terminal descendants
+  in
+  loop 6 expression [] []
 
 let rec product_partition_candidate expression =
   let same = E.is_equal in
@@ -1374,6 +1422,100 @@ let bitsliced_candidate cost expression =
        with _ -> None)
   | _ -> None
 
+let first_some left right = match left with Some _ -> left | None -> right
+
+let bitsliced_ring_proof original candidate =
+  let width = E.sizeof original in
+  let masked_variable = function
+    | E.Binary { f = E.And; x = (E.Var _ as variable); y = E.Cst mask; _ }
+    | E.Binary { f = E.And; x = E.Cst mask; y = (E.Var _ as variable); _ } ->
+        Some (variable, Bitvector.value_of mask)
+    | _ -> None
+  in
+  let candidate_parts =
+    match candidate with
+    | E.Binary { f = E.Xor; x = masked; y = E.Cst constant; _ }
+    | E.Binary { f = E.Xor; x = E.Cst constant; y = masked; _ } ->
+        Option.map
+          (fun (variable, mask) -> variable, mask, Bitvector.value_of constant)
+          (masked_variable masked)
+    | _ -> None
+  in
+  Option.bind candidate_parts (fun (variable, candidate_mask, xor_constant) ->
+      let masks = ref [ candidate_mask; xor_constant ] in
+      let valid = ref true in
+      let rec collect = function
+        | expression ->
+            (match masked_variable expression with
+            | Some (other, mask) when E.is_equal variable other -> masks := mask :: !masks
+            | Some _ -> valid := false
+            | None ->
+                match expression with
+                | E.Unary { x; _ } -> collect x
+                | E.Binary { x; y; _ } -> collect x; collect y
+                | E.Ite { c; t; e; _ } -> collect c; collect t; collect e
+                | (E.Var _ as other) when not (E.is_equal variable other) -> valid := false
+                | _ -> ())
+      in
+      collect original;
+      if not !valid then None
+      else
+        let signatures = Hashtbl.create width in
+        for bit = 0 to width - 1 do
+          let signature =
+            List.map (fun mask -> Z.testbit mask bit) !masks
+            |> List.map string_of_bool |> String.concat ""
+          in
+          let block = Option.value (Hashtbl.find_opt signatures signature) ~default:Z.zero in
+          Hashtbl.replace signatures signature
+            (Z.logor block (Z.shift_left Z.one bit))
+        done;
+        let blocks = Hashtbl.fold (fun _ block result -> block :: result) signatures [] in
+        let masked block = E.binary E.And variable (constant width block) in
+        let sum = function
+          | [] -> zeros width
+          | head :: tail -> List.fold_left (E.binary E.Plus) head tail
+        in
+        let blocks_for mask =
+          List.filter (fun block -> not (Z.equal Z.zero (Z.logand block mask))) blocks
+        in
+        let edges = ref [] and seen = Nodes.create 32 in
+        let rec expand = function
+          | expression ->
+              (match masked_variable expression with
+              | Some (other, mask) when E.is_equal variable other ->
+                  let expanded = blocks_for mask |> List.map masked |> sum in
+                  if not (E.is_equal expression expanded) && not (Nodes.mem seen expression) then (
+                    Nodes.add seen expression ();
+                    edges := (expression, expanded) :: !edges);
+                  expanded
+              | _ ->
+                  match expression with
+                  | E.Unary { f; x; _ } -> E.unary f (expand x)
+                  | E.Binary { f; x; y; _ } -> E.binary f (expand x) (expand y)
+                  | E.Ite { c; t; e; _ } -> E.ite (expand c) (expand t) (expand e)
+                  | expression -> expression)
+        in
+        let expanded_original = expand original in
+        let positive, negative =
+          blocks_for candidate_mask
+          |> List.partition (fun block -> Z.equal Z.zero (Z.logand block xor_constant))
+        in
+        let expanded_candidate =
+          let base = constant width xor_constant in
+          let with_positive =
+            List.fold_left (fun result block -> E.binary E.Plus result (masked block))
+              base positive
+          in
+          List.fold_left (fun result block -> E.binary E.Minus result (masked block))
+            with_positive negative
+        in
+        let equalities =
+          if E.is_equal candidate expanded_candidate then !edges
+          else (candidate, expanded_candidate) :: !edges
+        in
+        Some (equalities, [ expanded_original, expanded_candidate ]))
+
 type local_candidate = {
   expr : E.t;
   pass : string;
@@ -1399,7 +1541,9 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
   Option.iter
     (fun candidate ->
       let equalities, ring_equalities =
-        Option.value (minterm_ring_proof expression candidate) ~default:([], [])
+        Option.value (bitsliced_ring_proof expression candidate)
+          ~default:(Option.value (minterm_ring_proof expression candidate)
+                      ~default:([], []))
       in
       candidates :=
         { expr = candidate; pass = "bitsliced"; equalities; ring_equalities;
@@ -1445,7 +1589,9 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
   Option.iter
     (fun candidate ->
       let equalities, ring_equalities =
-        Option.value (minterm_ring_proof expression candidate) ~default:([], [])
+        Option.value (bitsliced_ring_proof expression candidate)
+          ~default:(Option.value (minterm_ring_proof expression candidate)
+                      ~default:([], []))
       in
       candidates :=
         { expr = candidate; pass = "bitsliced"; equalities; ring_equalities;
@@ -1693,7 +1839,11 @@ let run expression =
                match if cost original >= 11 then bitsliced_candidate cost original else None with
                | Some candidate when cost candidate < cost !current
                                      && Rewrite.samples_agree original candidate ->
-                   (match minterm_ring_proof original candidate with
+                   (match
+                      first_some
+                        (bitsliced_ring_proof original candidate)
+                        (minterm_ring_proof original candidate)
+                    with
                    | Some (equalities, ring_equalities)
                      when Rewrite.accepts_compositional ~pass:"bitsliced"
                             ~equalities ~ring_equalities original candidate ->
@@ -1803,7 +1953,11 @@ let run expression =
     else
       match bitsliced_candidate cost expression with
       | Some candidate when Rewrite.samples_agree expression candidate ->
-          (match minterm_ring_proof expression candidate with
+          (match
+             first_some
+               (bitsliced_ring_proof expression candidate)
+               (minterm_ring_proof expression candidate)
+           with
           | Some (equalities, ring_equalities)
             when Rewrite.accepts_compositional ~pass:"bitsliced-root"
                    ~equalities ~ring_equalities expression candidate ->

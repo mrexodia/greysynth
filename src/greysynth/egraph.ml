@@ -177,7 +177,8 @@ let cheapest graph ids =
     None ids
   |> Option.get
 
-let verify_local ~local_deadline (candidate : Normalization.local_candidate) lhs rhs =
+let verify_local ?(timeout_cap = 0.5) ~local_deadline
+    (candidate : Normalization.local_candidate) lhs rhs =
   if not (Rewrite.samples_agree lhs rhs) then false
   else
     let timeout =
@@ -186,7 +187,7 @@ let verify_local ~local_deadline (candidate : Normalization.local_candidate) lhs
         if !g_total_timeout <= 0. then infinity
         else !g_total_timeout -. (Unix.gettimeofday () -. !g_start_time)
       in
-      min 0.5 (min (float_of_int !c_equiv_timeout)
+      min timeout_cap (min (float_of_int !c_equiv_timeout)
                  (min local_remaining global_remaining))
     in
     let direct =
@@ -535,7 +536,8 @@ let optimize expression =
                   { expr = candidate; pass = "egraph-root-bitsliced"; equalities;
                     ring_equalities; allow_equal_cost = false }
                 in
-                if verify_local ~local_deadline proposal root_expression candidate then (
+                if verify_local ~timeout_cap:1.5 ~local_deadline proposal
+                     root_expression candidate then (
                   let root_id = add_expr graph root_expression in
                   let candidate_id = add_expr graph candidate in
                   if union graph root_id candidate_id
@@ -581,16 +583,17 @@ let optimize expression =
                           if order <> 0 then order
                           else Bool.compare left.allow_equal_cost right.allow_equal_cost)
                  in
-                 let rec process cheaper_found equal_found = function
+                 let accepted_passes = Hashtbl.create 8 in
+                 let rec process equal_found = function
                    | [] -> ()
                    | (candidate : Normalization.local_candidate) :: rest ->
                        if Unix.gettimeofday () > local_deadline then raise Egraph_budget;
                        let strictly_cheaper =
                          size_of_expr candidate.expr < size_of_expr representative
                        in
-                       if (strictly_cheaper && cheaper_found)
+                       if (strictly_cheaper && Hashtbl.mem accepted_passes candidate.pass)
                           || (candidate.allow_equal_cost && equal_found)
-                       then process cheaper_found equal_found rest
+                       then process equal_found rest
                        else if graph.count < graph.limit
                                && (candidate.allow_equal_cost || strictly_cheaper)
                                && verify_local ~local_deadline candidate representative candidate.expr
@@ -608,11 +611,11 @@ let optimize expression =
                                 })
                          in
                          if merged then changed := true;
-                         process (cheaper_found || strictly_cheaper)
-                           (equal_found || candidate.allow_equal_cost) rest)
-                       else process cheaper_found equal_found rest
+                         if strictly_cheaper then Hashtbl.replace accepted_passes candidate.pass ();
+                         process (equal_found || candidate.allow_equal_cost) rest)
+                       else process equal_found rest
                  in
-                 process false false candidates));
+                 process false candidates));
         if semantic_merge ~local_deadline graph then changed := true;
         if rebuild graph then changed := true);
         if !root_fast then continue := false;

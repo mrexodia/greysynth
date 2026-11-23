@@ -526,6 +526,32 @@ let test_egraph_child_replay () =
   let z = var 64 "z" and y = var 64 "y" in
   check "child MBA inside multiplication" (mul z (plus inner y)) 5
 
+let test_egraph_round14_regressions () =
+  let check label text maximum =
+    reset ();
+    C.c_egraph_extraction := true;
+    C.c_ac_normalization := true;
+    C.c_egraph_max_enodes := 2048;
+    C.c_egraph_max_iters := 4;
+    let original = String_to_sexpr.parse text in
+    R.start_recording original;
+    let result = EG.optimize original in
+    require (U.size_of_expr result <= maximum)
+      (Printf.sprintf "%s: expected cost <= %d, got %d" label maximum
+         (U.size_of_expr result));
+    let certificate = P.finish (Option.get !(R.journal)) result in
+    let report = P.verify ~timeouts:[ 1.; 5. ] ~original ~candidate:result certificate in
+    require
+      (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+      (label ^ ": certificate did not replay")
+  in
+  check "nonlinear factor chain 34"
+    "-17*(x^y)*(x&y)-6*(x^y)*(x&~y)+5*(x^y)*~(x&~x)+5*(x^y)*~(x|y)-17*(x^y)*~(x|~y)-11*(x^y)*~y-11*y*(x&y)-22*y*(x&~y)+1*y*~(x&~x)-11*y*~(x|y)-11*y*~(x|~y)+11*y*~y+11*(x^y)*(x|y)+11*y*(x|y)" 5;
+  check "nonlinear factor chain 79"
+    "-8*(x^y)*(x&y)-10*(x^y)*(x&~y)+8*(x^y)*(x|~y)-1*(x^y)*~(x&~y)-2*(x^y)*~(x|y)+8*(x|~y)*(x&y)+10*(x|~y)*(x&~y)-8*(x|~y)*(x|~y)+1*(x|~y)*~(x&~y)+2*(x|~y)*~(x|y)+1*(x^y)*~(x&y)+6*(x^y)*~(x|~y)-7*(x^y)*~x-1*(x|~y)*~(x&y)-6*(x|~y)*~(x|~y)+7*(x|~y)*~x" 8;
+  check "msimba disjoint masks"
+    "-7360133807098015136+(1*(-1863238229756760676&x))+(576460752303423487*(32&x))+(288230376151711743*(64&x))+(36028797018963967*(512&x))+(4503599627370495*(4096&x))+(1125899906842623*(16384&x))+(70368744177663*(262144&x))+(17592186044415*(1048576&x))+(2199023255551*(8388608&x))+(68719476735*(268435456&x))+(17179869183*(1073741824&x))+(1073741823*(17179869184&x))+(536870911*(34359738368&x))+(67108863*(274877906944&x))+(16777215*(1099511627776&x))+(4194303*(4398046511104&x))+(2097151*(8796093022208&x))+(131071*(140737488355328&x))+(65535*(281474976710656&x))+(32767*(562949953421312&x))+(8191*(2251799813685248&x))+(4095*(4503599627370496&x))+(1023*(18014398509481984&x))+(511*(36028797018963968&x))+(255*(72057594037927936&x))+(31*(576460752303423488&x))+(15*(1152921504606846976&x))" 5
+
 let test_preprocessing_portfolio () =
   let x = var 32 "portfolio_x" and y = var 32 "portfolio_y" in
   let original = plus (plus (bxor x y) (mul (c 32 2) (band x y))) (c 32 0) in
@@ -586,6 +612,7 @@ let () =
     test_egraph_extraction ();
     test_egraph_legacy_cast_cycle ();
     test_egraph_child_replay ();
+    test_egraph_round14_regressions ();
     test_preprocessing_portfolio ();
     test_nonlinear_is_opaque ();
     print_endline "normalization_test: 64 solver-backed normalization regressions passed")
