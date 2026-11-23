@@ -179,8 +179,9 @@ let run_preprocessing gt input =
       check_equiv gt ~tag:"OES" log_linear_is_equiv !best)
   in
   if !c_egraph_extraction && not !g_has_timedout then (
+    let before = !best in
     best := Egraph.optimize !best;
-    if Egraph.fell_back () then (
+    if Egraph.fell_back () || Sexpr.Expr.is_equal !best before then (
       let configured_ac = !c_ac_normalization in
       Fun.protect
         ~finally:(fun () -> c_ac_normalization := configured_ac)
