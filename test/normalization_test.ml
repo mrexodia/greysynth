@@ -232,6 +232,41 @@ let test_associative_canonicalization () =
         plus (E.binary E.Lsl x (c 16 2)) (E.binary E.Lsl x (c 16 2)), 3;
       "idempotent conjunction", band (band x y) x, 3 ]
 
+let test_minterm_ring_edge_cases () =
+  let check label source_text candidate_text =
+    reset ();
+    C.c_equiv_timeout := 1;
+    let source = String_to_sexpr.parse source_text in
+    let candidate = String_to_sexpr.parse candidate_text in
+    let equalities, ring_equalities =
+      match N.minterm_ring_proof source candidate with
+      | Some proof -> proof
+      | None -> failwith (label ^ ": minterm proof construction failed")
+    in
+    let builder = P.create source in
+    List.iter (fun (left, right) -> P.record builder ~pass:label left right) equalities;
+    List.iter (fun (left, right) -> P.record_ring builder ~pass:label left right)
+      ring_equalities;
+    let report = P.verify ~timeouts:[ 1. ] ~original:source ~candidate
+        (P.finish builder candidate) in
+    require
+      (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+      (label ^ ": " ^ Yojson.Basic.to_string report)
+  in
+  check "non-variable target" "(a^b)+2*(a&b)" "a+b";
+  check "large coefficients to zero"
+    "0x123456789abcdef1*(a&b)+0xedcba9876543210f*(a&b)" "0";
+  check "constant offset" "~a+a" "-1";
+  check "compound atom"
+    "10*((x*y)^z)+20*((x*y)&z)-9*(x*y)-10*z" "x*y";
+  check "constant shift" "a<<3" "8*a";
+  reset ();
+  let source = String_to_sexpr.parse
+      "10*((x*y)^z)+20*((x*y)&z)-9*(x*y)-10*z" in
+  let result = N.run source in
+  require (E.is_equal result (String_to_sexpr.parse "x*y"))
+    "non-variable linear candidate was not wired into normalization"
+
 let test_ring_certified_linear_mba () =
   reset ();
   C.c_equiv_timeout := 1;
@@ -251,6 +286,47 @@ let test_ring_certified_linear_mba () =
     ("ring-certified linear MBA did not replay: " ^ Yojson.Basic.to_string report);
   require (Yojson.Basic.Util.member "ring_proofs" report = `Int 1)
     "linear MBA certificate did not use the ring kernel"
+
+let test_sparse_ring_normalization () =
+  let check label source expected =
+    reset ();
+    R.start_recording source;
+    let result = N.run source in
+    let expected_match =
+      E.is_equal result expected
+      || (match U.are_equivalent result expected (Some 2) with
+          | U.Yes, _, _ -> true
+          | _ -> false)
+    in
+    require expected_match
+      (label ^ ": sparse ring result mismatch: " ^ U.pp result);
+    let report = P.verify ~timeouts:[ 1. ] ~original:source ~candidate:result
+        (P.finish (Option.get !(R.journal)) result) in
+    require
+      (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+      (label ^ ": sparse ring certificate failed")
+  in
+  let x = var 64 "ring_x" and y = var 64 "ring_y" in
+  let xy = mul x y in
+  check "two-term polynomial cancellation"
+    (minus (plus (mul (c 64 3) xy) (mul (c 64 5) xy)) (mul (c 64 8) xy))
+    (c 64 0);
+  check "formal polynomial composition"
+    (minus (plus x (mul (c 64 2) (mul x x))) (mul (c 64 2) (mul x x))) x;
+  let null_term =
+    mul (E.constant (Bitvector.create (Z.shift_left Z.one 63) 64))
+      (mul x (minus x (c 64 1)))
+  in
+  check "quadratic null polynomial" null_term (c 64 0);
+  check "quadratic null-polynomial composition" (plus x null_term) x;
+  let a = var 64 "factor_a" and b = var 64 "factor_b" in
+  let factor = band x (E.unary E.Not y) in
+  let factored_source =
+    plus (mul factor (bxor a b))
+      (mul (c 64 2) (mul factor (band a b)))
+  in
+  check "multiplicative cofactor reduction" factored_source
+    (mul factor (plus a b))
 
 let test_compositional_polynomial_identity () =
   let x = var 64 "px" and y = var 64 "py" in
@@ -371,12 +447,14 @@ let () =
     test_five_atom_boolean_recovery ();
     test_semilinear_masks ();
     test_associative_canonicalization ();
+    test_minterm_ring_edge_cases ();
     test_ring_certified_linear_mba ();
+    test_sparse_ring_normalization ();
     test_compositional_polynomial_identity ();
     test_normalization_portfolio ();
     test_preprocessing_portfolio ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 47 solver-backed normalization regressions passed")
+    print_endline "normalization_test: 58 solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"

@@ -103,8 +103,32 @@ let peepholes evaluate expression =
         | other, E.Unary { f = E.Minus; x; _ } -> same x other
         | _ -> false
       in
+      let null_quadratic () =
+        let rec flatten coefficient factors = function
+          | E.Binary { f = E.Mul; x; y; _ } ->
+              let coefficient, factors = flatten coefficient factors x in
+              flatten coefficient factors y
+          | term ->
+              (match constant_value term with
+              | Some value ->
+                  (Z.mul coefficient (Bitvector.value_of value), factors)
+              | None -> (coefficient, term :: factors))
+        in
+        let coefficient, factors = flatten Z.one [] expression in
+        let half = Z.shift_left Z.one (E.sizeof x - 1) in
+        let divisible = Z.equal (Z.erem coefficient half) Z.zero in
+        let pair =
+          match factors with
+          | [ first; E.Binary { f = E.Minus; x = second; y = one; _ } ]
+          | [ E.Binary { f = E.Minus; x = second; y = one; _ }; first ] ->
+              same first second && is_number Z.one one
+          | _ -> false
+        in
+        if divisible && pair then [ zero ] else []
+      in
       let identities =
         match f with
+        | E.Mul when null_quadratic () <> [] -> null_quadratic ()
         | E.And when complements x y -> [ zero ]
         | E.Or | E.Xor when complements x y -> [ fill ]
         | E.Plus when complements x y -> [ fill ]
@@ -347,22 +371,53 @@ let canonical_candidates expression =
         [ build_balanced E.Mul (sorted terms) ]
   | _ -> []
 
-let minterm_ring_proof original candidate =
+let minterm_ring_expansion original candidate =
   let width = E.sizeof original in
   if E.sizeof candidate <> width then None
   else
-    let variables =
-      Sample_evaluator.variables_of_expr original
-      @ Sample_evaluator.variables_of_expr candidate
-      |> List.sort_uniq Stdlib.compare
+    let atom_table = Sexpr.BvTbl.create 16 in
+    let valid = ref true in
+    let add_atom expression =
+      if E.sizeof expression = width then Sexpr.BvTbl.replace atom_table expression ()
     in
-    if variables = [] || List.length variables > !c_normalization_max_atoms then None
-    else if List.exists (fun (_, size) -> size <> width) variables then None
+    let rec collect_boolean = function
+      | E.Cst value when Bitvector.is_zeros value || Bitvector.is_fill value -> ()
+      | E.Unary { f = E.Not; x; _ } -> collect_boolean x
+      | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+          collect_boolean x; collect_boolean y
+      | expression -> add_atom expression
+    and collect_arithmetic expression =
+      if Sexpr.BvTbl.mem atom_table expression then ()
+      else
+        match expression with
+        | E.Cst _ -> ()
+        | E.Unary { f = E.Minus; x; _ } -> collect_arithmetic x
+        | E.Binary { f = (E.Plus | E.Minus); x; y; _ } ->
+            collect_arithmetic x; collect_arithmetic y
+        | E.Binary { f = E.Mul; x; y; _ } ->
+            (match constant_value x, constant_value y with
+            | Some _, _ -> collect_arithmetic y
+            | _, Some _ -> collect_arithmetic x
+            | _ -> collect_arithmetic x; collect_arithmetic y)
+        | E.Binary { f = E.Lsl; x; y; _ } when Option.is_some (constant_value y) ->
+            collect_arithmetic x
+        | (E.Var _ | E.Unary { f = E.Not; _ }
+          | E.Binary { f = (E.And | E.Or | E.Xor); _ }) as expression ->
+            collect_boolean expression
+        | _ -> valid := false
+    in
+    (* Source bitwise contexts define opaque atoms first; candidate arithmetic
+       may then reuse the exact same compound term (for example [x*y]). *)
+    collect_arithmetic original;
+    collect_arithmetic candidate;
+    let atoms =
+      Sexpr.BvTbl.fold (fun expression () result -> expression :: result)
+        atom_table []
+      |> List.sort E.compare |> Array.of_list
+    in
+    if not !valid || Array.length atoms = 0
+       || Array.length atoms > !c_normalization_max_atoms then None
     else
-      let atoms =
-        variables |> List.map (fun (name, size) -> E.var name size name)
-        |> Array.of_list
-      in
       let count = Array.length atoms in
       let atom_index expression =
         let rec find index =
@@ -372,34 +427,40 @@ let minterm_ring_proof original candidate =
         in
         find 0
       in
-      let rec boolean_value assignment = function
-        | E.Var _ as variable ->
-            Option.map
-              (fun index -> assignment land (1 lsl index) <> 0)
-              (atom_index variable)
-        | E.Cst value when Bitvector.is_zeros value -> Some false
-        | E.Cst value when Bitvector.is_fill value -> Some true
-        | E.Unary { f = E.Not; x; _ } -> Option.map not (boolean_value assignment x)
-        | E.Binary { f = (E.And | E.Or | E.Xor as op); x; y; _ } ->
-            Option.bind (boolean_value assignment x) (fun left ->
-                Option.map
-                  (fun right ->
-                    match op with
-                    | E.And -> left && right
-                    | E.Or -> left || right
-                    | E.Xor -> left <> right
-                    | _ -> assert false)
-                  (boolean_value assignment y))
-        | _ -> None
+      let rec boolean_value assignment expression =
+        match atom_index expression with
+        | Some index -> Some (assignment land (1 lsl index) <> 0)
+        | None ->
+            match expression with
+            | E.Cst value when Bitvector.is_zeros value -> Some false
+            | E.Cst value when Bitvector.is_fill value -> Some true
+            | E.Unary { f = E.Not; x; _ } ->
+                Option.map not (boolean_value assignment x)
+            | E.Binary { f = (E.And | E.Or | E.Xor as op); x; y; _ } ->
+                Option.bind (boolean_value assignment x) (fun left ->
+                    Option.map
+                      (fun right ->
+                        match op with
+                        | E.And -> left && right
+                        | E.Or -> left || right
+                        | E.Xor -> left <> right
+                        | _ -> assert false)
+                      (boolean_value assignment y))
+            | _ -> None
       in
       let is_boolean expression =
         let saw_variable = ref false in
-        let rec inspect = function
-          | E.Var _ -> saw_variable := true; true
-          | E.Cst value -> Bitvector.is_zeros value || Bitvector.is_fill value
-          | E.Unary { f = E.Not; x; _ } -> inspect x
-          | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } -> inspect x && inspect y
-          | _ -> false
+        let rec inspect expression =
+          if Option.is_some (atom_index expression) then (
+            saw_variable := true;
+            true)
+          else
+            match expression with
+            | E.Cst value -> Bitvector.is_zeros value || Bitvector.is_fill value
+            | E.Unary { f = E.Not; x; _ } -> inspect x
+            | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+                inspect x && inspect y
+            | _ -> false
         in
         inspect expression && !saw_variable
       in
@@ -418,8 +479,16 @@ let minterm_ring_proof original candidate =
         | [ term ] -> term
         | head :: tail -> E.binary E.Plus head (sum tail)
       in
+      let all_minterms = sum (Array.to_list minterms) in
+      let fill_expr = E.constant (Bitvector.fill width) in
       let expansions = Hashtbl.create 32 in
-      let smt_edges = ref [] in
+      let smt_edges = ref [] and ring_edges = ref [] in
+      let fill_expanded = ref false in
+      let ensure_fill_expansion () =
+        if not !fill_expanded then (
+          fill_expanded := true;
+          smt_edges := (fill_expr, all_minterms) :: !smt_edges)
+      in
       let expand_boolean expression =
         match Hashtbl.find_opt expansions expression with
         | Some result -> result
@@ -438,30 +507,53 @@ let minterm_ring_proof original candidate =
         if is_boolean expression then Some (expand_boolean expression)
         else
           match expression with
-          | E.Cst _ -> Some expression
+          | E.Cst value when Bitvector.is_zeros value -> Some expression
+          | E.Cst value ->
+              ensure_fill_expansion ();
+              if Bitvector.is_fill value then Some all_minterms
+              else
+                let coefficient = E.constant (Bitvector.neg value) in
+                let via_fill = E.binary E.Mul coefficient fill_expr in
+                ring_edges := (expression, via_fill) :: !ring_edges;
+                Some (E.binary E.Mul coefficient all_minterms)
           | E.Unary { f = E.Minus; x; _ } -> Option.map (E.unary E.Minus) (expand x)
-          | E.Binary { f = (E.Plus | E.Minus | E.Mul as op); x; y; _ } ->
+          | E.Binary { f = E.Mul; x; y; _ } ->
+              (match constant_value x, constant_value y with
+              | Some _, _ -> Option.map (fun y -> E.binary E.Mul x y) (expand y)
+              | _, Some _ -> Option.map (fun x -> E.binary E.Mul x y) (expand x)
+              | _ ->
+                  Option.bind (expand x) (fun x ->
+                      Option.map (fun y -> E.binary E.Mul x y) (expand y)))
+          | E.Binary { f = (E.Plus | E.Minus as op); x; y; _ } ->
               Option.bind (expand x) (fun x ->
                   Option.map (fun y -> E.binary op x y) (expand y))
           | E.Binary { f = E.Lsl; x; y; _ } ->
               (match constant_value y with
               | Some amount when Z.lt (Bitvector.value_of amount) (Z.of_int width) ->
                   Option.map
-                    (fun x ->
-                      let replacement =
-                        E.binary E.Mul x
-                          (constant width
-                             (Z.shift_left Z.one (Z.to_int (Bitvector.value_of amount))))
+                    (fun expanded_x ->
+                      let power =
+                        constant width
+                          (Z.shift_left Z.one (Z.to_int (Bitvector.value_of amount)))
                       in
-                      smt_edges := (expression, replacement) :: !smt_edges;
-                      replacement)
+                      let unexpanded = E.binary E.Mul x power in
+                      smt_edges := (expression, unexpanded) :: !smt_edges;
+                      E.binary E.Mul expanded_x power)
                     (expand x)
               | _ -> None)
           | _ -> None
       in
       Option.bind (expand original) (fun left ->
-          Option.map (fun right -> (List.rev !smt_edges, [ left, right ]))
+          Option.map
+            (fun right ->
+              (List.rev !smt_edges, List.rev ((left, right) :: !ring_edges),
+               left, right))
             (expand candidate))
+
+let minterm_ring_proof original candidate =
+  Option.map
+    (fun (equalities, ring_equalities, _, _) -> (equalities, ring_equalities))
+    (minterm_ring_expansion original candidate)
 
 (* Break constant-scaled complements into small replayable algebraic steps.
    This avoids one monolithic bit-blasted proof for otherwise linear MBAs. *)
@@ -485,6 +577,11 @@ let complement_product_steps original candidate =
       | _ -> (expression, [])
     in
     match rewritten with
+    | E.Unary { f = E.Not; x = term; _ } ->
+        let replacement =
+          E.binary E.Minus (E.unary E.Minus term) (integer (E.sizeof term) 1)
+        in
+        (replacement, (rewritten, replacement) :: child_edges)
     | E.Binary { f = E.Mul; x = E.Cst coefficient;
                  y = E.Unary { f = E.Not; x = term; _ }; _ }
     | E.Binary { f = E.Mul; x = E.Unary { f = E.Not; x = term; _ };
@@ -507,7 +604,7 @@ let complement_product_steps original candidate =
                (Greysynth_utils.Utils.size_of_expr right))
       |> function head :: _ -> head | [] -> rewritten
     in
-    Some (edges @ [ rewritten, compact; compact, candidate ])
+    Some (edges, [ rewritten, compact; compact, candidate ])
 
 (* Linear arithmetic combinations of bitwise functions admit a conjunction
    basis over their atoms. Nonlinear/mixed-width subtrees are opaque atoms,
@@ -747,6 +844,225 @@ let linear_candidates cost expression =
    routinely times out because it contains multiplication. The local Boolean
    partitions and distributive ring steps below each prove quickly, while the
    certificate checker derives the endpoints through congruence/transitivity. *)
+module RingMonomial = struct
+  type t = E.t list
+  let compare = Stdlib.compare
+end
+
+module RingPolynomial = Map.Make (RingMonomial)
+
+exception Ring_candidate_too_complex
+
+let ring_polynomial_candidate expression =
+  let width = E.sizeof expression in
+  let modulus = Z.shift_left Z.one width in
+  let normalize value =
+    let value = Z.erem value modulus in
+    if Z.sign value < 0 then Z.add value modulus else value
+  in
+  let add_term monomial coefficient polynomial =
+    if List.length monomial > 8 then raise Ring_candidate_too_complex;
+    let old = Option.value (RingPolynomial.find_opt monomial polynomial) ~default:Z.zero in
+    let value = normalize (Z.add old coefficient) in
+    let result =
+      if Z.equal value Z.zero then RingPolynomial.remove monomial polynomial
+      else RingPolynomial.add monomial value polynomial
+    in
+    if RingPolynomial.cardinal result > 256 then raise Ring_candidate_too_complex;
+    result
+  in
+  let add left right = RingPolynomial.fold add_term left right in
+  let neg polynomial =
+    RingPolynomial.fold
+      (fun monomial coefficient result -> add_term monomial (Z.neg coefficient) result)
+      polynomial RingPolynomial.empty
+  in
+  let mul left right =
+    RingPolynomial.fold
+      (fun left_monomial left_coefficient result ->
+        RingPolynomial.fold
+          (fun right_monomial right_coefficient result ->
+            add_term
+              (List.sort E.compare (left_monomial @ right_monomial))
+              (Z.mul left_coefficient right_coefficient) result)
+          right result)
+      left RingPolynomial.empty
+  in
+  let saw_ring = ref false in
+  let rec parse = function
+    | E.Cst value ->
+        add_term [] (Bitvector.value_of value) RingPolynomial.empty
+    | E.Unary { f = E.Minus; x; _ } -> saw_ring := true; neg (parse x)
+    | E.Binary { f = E.Plus; x; y; _ } -> saw_ring := true; add (parse x) (parse y)
+    | E.Binary { f = E.Minus; x; y; _ } ->
+        saw_ring := true; add (parse x) (neg (parse y))
+    | E.Binary { f = E.Mul; x; y; _ } -> saw_ring := true; mul (parse x) (parse y)
+    | opaque -> add_term [ opaque ] Z.one RingPolynomial.empty
+  in
+  try
+    let polynomial = parse expression in
+    if not !saw_ring then None
+    else
+      let positive = ref [] and negative = ref [] in
+      let half = Z.shift_left Z.one (width - 1) in
+      let monomial_expression = function
+        | [] -> None
+        | head :: tail -> Some (List.fold_left (E.binary E.Mul) head tail)
+      in
+      RingPolynomial.iter
+        (fun monomial coefficient ->
+          let is_negative = Z.geq coefficient half in
+          let magnitude = if is_negative then Z.sub modulus coefficient else coefficient in
+          let term =
+            match monomial_expression monomial with
+            | None -> constant width magnitude
+            | Some monomial when Z.equal magnitude Z.one -> monomial
+            | Some monomial -> E.binary E.Mul (constant width magnitude) monomial
+          in
+          if is_negative then negative := term :: !negative
+          else positive := term :: !positive)
+        polynomial;
+      let sum terms =
+        match List.sort E.compare terms with
+        | [] -> None
+        | head :: tail -> Some (List.fold_left (E.binary E.Plus) head tail)
+      in
+      let candidate =
+        match sum !positive, sum !negative with
+        | None, None -> zeros width
+        | Some value, None -> value
+        | None, Some value -> E.unary E.Minus value
+        | Some positive, Some negative -> E.binary E.Minus positive negative
+      in
+      if Greysynth_utils.Utils.size_of_expr candidate
+         < Greysynth_utils.Utils.size_of_expr expression
+      then Some candidate else None
+  with Ring_candidate_too_complex -> None
+
+let minterm_polynomial_candidate expression =
+  Option.bind (minterm_ring_expansion expression expression)
+    (fun (equalities, ring_equalities, expanded, _) ->
+      Option.bind (ring_polynomial_candidate expanded) (fun candidate ->
+          if Greysynth_utils.Utils.size_of_expr candidate
+             >= Greysynth_utils.Utils.size_of_expr expression
+          then None
+          else Some (candidate, equalities, (expanded, candidate) :: ring_equalities)))
+
+let factor_group_candidate cost expression =
+  let width = E.sizeof expression in
+  let modulus = Z.shift_left Z.one width in
+  let normalize value =
+    let value = Z.erem value modulus in
+    if Z.sign value < 0 then Z.add value modulus else value
+  in
+  let rec additive coefficient = function
+    | E.Binary { f = E.Plus; x; y; _ } -> additive coefficient x @ additive coefficient y
+    | E.Binary { f = E.Minus; x; y; _ } ->
+        additive coefficient x @ additive (Z.neg coefficient) y
+    | E.Unary { f = E.Minus; x; _ } -> additive (Z.neg coefficient) x
+    | term -> [ normalize coefficient, term ]
+  in
+  let rec factors coefficient = function
+    | E.Cst value -> (normalize (Z.mul coefficient (Bitvector.value_of value)), [])
+    | E.Unary { f = E.Minus; x; _ } -> factors (Z.neg coefficient) x
+    | E.Binary { f = E.Mul; x; y; _ } ->
+        let left_coefficient, left = factors coefficient x in
+        let right_coefficient, right = factors Z.one y in
+        (normalize (Z.mul left_coefficient right_coefficient), left @ right)
+    | factor -> (normalize coefficient, [ factor ])
+  in
+  let terms =
+    additive Z.one expression
+    |> List.map (fun (coefficient, term) ->
+           let coefficient, factors = factors coefficient term in
+           (coefficient, List.sort E.compare factors))
+  in
+  let frequencies = Sexpr.BvTbl.create 32 in
+  List.iter
+    (fun (_, factors) ->
+      List.sort_uniq E.compare factors
+      |> List.iter (fun factor ->
+             let count = Option.value (Sexpr.BvTbl.find_opt frequencies factor) ~default:0 in
+             Sexpr.BvTbl.replace frequencies factor (count + 1)))
+    terms;
+  let selected =
+    Sexpr.BvTbl.fold
+      (fun factor frequency best ->
+        if frequency < 2 then best
+        else match best with
+          | None -> Some (factor, frequency)
+          | Some (previous, previous_frequency) ->
+              if frequency > previous_frequency
+                 || (frequency = previous_frequency && E.compare factor previous < 0)
+              then Some (factor, frequency) else best)
+      frequencies None
+  in
+  match selected with
+  | None -> None
+  | Some (factor, _) ->
+      let remove_factor factors =
+        let rec remove prefix = function
+          | [] -> None
+          | head :: tail when E.is_equal head factor -> Some (List.rev_append prefix tail)
+          | head :: tail -> remove (head :: prefix) tail
+        in
+        remove [] factors
+      in
+      let grouped, remainder =
+        List.fold_left
+          (fun (grouped, remainder) (coefficient, factors) ->
+            match remove_factor factors with
+            | Some cofactor -> ((coefficient, cofactor) :: grouped, remainder)
+            | None -> (grouped, (coefficient, factors) :: remainder))
+          ([], []) terms
+      in
+      let term_expression (coefficient, factors) =
+        let product =
+          match factors with
+          | [] -> None
+          | head :: tail -> Some (List.fold_left (E.binary E.Mul) head tail)
+        in
+        match product with
+        | None -> constant width coefficient
+        | Some product when Z.equal coefficient Z.one -> product
+        | Some product -> E.binary E.Mul (constant width coefficient) product
+      in
+      let sum terms =
+        match List.map term_expression (List.rev terms) with
+        | [] -> zeros width
+        | head :: tail -> List.fold_left (E.binary E.Plus) head tail
+      in
+      let cofactor = sum grouped in
+      let remainder_expression = sum remainder in
+      let candidates =
+        let variables =
+          Sample_evaluator.variables_of_expr cofactor
+          |> List.map (fun (name, size) -> E.var name size name)
+        in
+        let ring = Option.to_list (ring_polynomial_candidate cofactor) in
+        variables @ ring @ linear_candidates cost cofactor
+        |> List.filter (fun candidate -> cost candidate < cost cofactor)
+        |> List.sort_uniq (fun left right ->
+               let order = Int.compare (cost left) (cost right) in
+               if order = 0 then E.compare left right else order)
+      in
+      let simplification =
+        List.find_map
+          (fun candidate ->
+            if not (Rewrite.samples_agree cofactor candidate) then None
+            else
+              Option.map (fun proof -> (candidate, proof))
+                (minterm_ring_proof cofactor candidate))
+          candidates
+      in
+      Option.bind simplification (fun (simplified, (equalities, cofactor_ring)) ->
+          let factored = E.binary E.Mul factor cofactor in
+          let simplified_factored = E.binary E.Mul factor simplified in
+          let raw = E.binary E.Plus factored remainder_expression in
+          let candidate = E.binary E.Plus simplified_factored remainder_expression in
+          if cost candidate >= cost expression then None
+          else Some (candidate, equalities, (expression, raw) :: cofactor_ring))
+
 let rec product_partition_candidate expression =
   let same = E.is_equal in
   let commutative_operator = function
@@ -985,9 +1301,18 @@ let run expression =
     else (
       incr oracle_calls;
       match oracle_candidate current with
-      | Some candidate when cost candidate < cost current
-                           && Rewrite.accepts ~pass:"mba-oracle" current candidate ->
-          Some candidate
+      | Some candidate when cost candidate < cost current ->
+          let accepted =
+            if not (Rewrite.samples_agree current candidate) then
+              Rewrite.accepts ~pass:"mba-oracle" current candidate
+            else
+              match minterm_ring_proof current candidate with
+              | Some (equalities, ring_equalities) ->
+                  Rewrite.accepts_compositional ~pass:"mba-oracle-ring"
+                    ~equalities ~ring_equalities current candidate
+              | None -> Rewrite.accepts ~pass:"mba-oracle" current candidate
+          in
+          if accepted then Some candidate else None
       | _ -> None)
   in
   let rec oracle_visit node =
@@ -1020,11 +1345,13 @@ let run expression =
                |> List.map (fun (name, width) -> E.var name width name)
                |> List.filter (fun candidate -> cost candidate < cost original)
                |> List.find_opt (fun candidate ->
-                      match minterm_ring_proof original candidate with
-                      | Some (equalities, ring_equalities) ->
-                          Rewrite.accepts_compositional ~pass:"minterm-ring-mba"
-                            ~equalities ~ring_equalities original candidate
-                      | None -> false)
+                      if not (Rewrite.samples_agree original candidate) then false
+                      else
+                        match minterm_ring_proof original candidate with
+                        | Some (equalities, ring_equalities) ->
+                            Rewrite.accepts_compositional ~pass:"minterm-ring-mba"
+                              ~equalities ~ring_equalities original candidate
+                        | None -> false)
            in
            (match early_minterm with
            | Some candidate -> current := visit candidate
@@ -1046,17 +1373,54 @@ let run expression =
              match oracle with
              | Some candidate -> current := candidate; current := visit ~allow_oracle:false candidate
              | None ->
-             let decomposed =
-               match product_partition_candidate !current with
-               | Some (candidate, equalities)
-                 when cost candidate < cost !current
-                      && Rewrite.accepts_compositional ~pass:"polynomial"
-                           ~equalities !current candidate ->
+             let minterm_polynomial =
+               match minterm_polynomial_candidate !current with
+               | Some (candidate, equalities, ring_equalities)
+                 when Rewrite.samples_agree !current candidate
+                      && Rewrite.accepts_compositional ~pass:"minterm-polynomial"
+                           ~equalities ~ring_equalities !current candidate ->
                    Some candidate
                | _ -> None
              in
+             let factor_grouped =
+               match minterm_polynomial with
+               | Some candidate -> Some candidate
+               | None ->
+                   (match factor_group_candidate cost !current with
+                   | Some (candidate, equalities, ring_equalities)
+                     when Rewrite.accepts_compositional ~pass:"factor-group"
+                            ~equalities ~ring_equalities !current candidate ->
+                       Some candidate
+                   | _ -> None)
+             in
+             let ring_normalized =
+               match factor_grouped with
+               | Some candidate -> Some candidate
+               | None ->
+                   (match ring_polynomial_candidate !current with
+                   | Some candidate
+                     when Rewrite.samples_agree !current candidate
+                          && Rewrite.accepts_compositional ~pass:"ring-polynomial"
+                               ~equalities:[] ~ring_equalities:[ !current, candidate ]
+                               !current candidate -> Some candidate
+                   | _ -> None)
+             in
+             let decomposed =
+               match ring_normalized with
+               | Some candidate -> Some candidate
+               | None ->
+                   (match product_partition_candidate !current with
+                   | Some (candidate, equalities)
+                     when cost candidate < cost !current
+                          && Rewrite.accepts_compositional ~pass:"polynomial"
+                               ~equalities !current candidate ->
+                       Some candidate
+                   | _ -> None)
+             in
              match decomposed with
-             | Some candidate -> current := candidate; current := visit candidate
+             | Some candidate ->
+                 current := candidate;
+                 current := visit ~allow_oracle candidate
              | None ->
                  let candidates = peepholes constants.eval !current
                      @ (if !c_ac_normalization then canonical_candidates !current else [])
@@ -1066,14 +1430,29 @@ let run expression =
                      let order = Int.compare (cost a) (cost b) in
                      if order = 0 then E.compare a b else order) candidates in
                  let accepts candidate =
-                   match complement_product_steps !current candidate with
-                   | Some equalities ->
-                       Rewrite.accepts_compositional ~pass:"linear-mba"
-                         ~equalities !current candidate
-                   | None -> Rewrite.accepts ~pass:"normalize" !current candidate
+                   let fallback () =
+                     match complement_product_steps !current candidate with
+                     | Some (equalities, ring_equalities) ->
+                         if Rewrite.accepts_compositional ~pass:"linear-mba"
+                              ~equalities ~ring_equalities !current candidate
+                         then true
+                         else Rewrite.accepts ~pass:"normalize" !current candidate
+                     | None -> Rewrite.accepts ~pass:"normalize" !current candidate
+                   in
+                   if not (Rewrite.samples_agree !current candidate) then
+                     Rewrite.accepts ~pass:"normalize" !current candidate
+                   else
+                     match minterm_ring_proof !current candidate with
+                     | Some (equalities, ring_equalities) ->
+                         if Rewrite.accepts_compositional ~pass:"minterm-ring-mba"
+                              ~equalities ~ring_equalities !current candidate
+                         then true else fallback ()
+                     | None -> fallback ()
                  in
                  match List.find_opt accepts candidates with
-                 | Some candidate -> current := candidate; current := visit candidate
+                 | Some candidate ->
+                     current := candidate;
+                     current := visit ~allow_oracle candidate
                  | None -> ())
          with Timeout_exception -> g_has_timedout := true);
         Nodes.replace results original !current;
