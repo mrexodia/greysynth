@@ -23,14 +23,11 @@ micro-steps, destructive greedy peepholes, and saturated C-Full/CHS tuning
    closure in `Rewrite_proof`. Pair it with pure-bitwise minterm expansion so
    64-bit linear, factored, polynomial, and oracle candidates certify in
    milliseconds without monolithic bit-blasting or 50-edge micro-step chains.
-3. **Next — Three general algebraic MBA solvers (Milestone 3B):** replace
-   dataset-specific pattern accretion with (a) general linear + connected-
-   component + bit-sliced semilinear normalization backed by minterm +
-   `ring_mod2w` proofs, (b) general subterm-lifting + multiplicative factor
-   grouping + sparse modular polynomial / Rivest-Hensel permutation-polynomial
-   normalization, and (c) certified top-down maximal-subtree external oracles
-   (`rumba`/`cobra`), leaving OES + CHS strictly for residual mixed-operator
-   and conditional expressions.
+3. **Completed core algebraic solvers (Milestone 3B):** native disjoint-minterm
+   linear normalization, sparse modular-ring normalization, multiplicative
+   factor grouping with recursive cofactor reduction, quadratic null-polynomial
+   cleanup, and certified top-down differential oracles now cover the four
+   100-case smoke suites at or below 0.97x geometric quality.
 4. **Next — Bounded e-graph unification (Milestone 4A):** unify normalization,
    AC/factoring/polynomial rewrites, OES semantic classes, and `Rewrite_proof`'s
    existing hash-consed DAG + union-find into a bounded e-graph with global
@@ -137,40 +134,38 @@ runs in one process have isolated metrics; reports account for every attempt.
   100-case PLDI Poly sample from 31 to 100 strict reductions.
 - [x] Decompose constant-scaled complement terms into replayable local algebra
   steps, making the 16-bit constant-offset case reliable at a one-second budget.
-- [ ] **Milestone 3B.1 — Native linear & bit-sliced semilinear normalization
-  with disjoint-minterm + `ring_mod2w` certification:** the first native pass now
-  proves variable-target 2–6 atom linear MBAs with pure-bitwise minterm edges
-  plus one ring edge, moving the 100-case PLDI Non-Poly geometric quality from
-  **19.25x to 1.5868x** with 100/100 replay at a five-second schedule. Extend it
-  to general compact candidates, connected components, and bit-sliced masks to
-  reach the ~1.1x target.
-- [ ] **Milestone 3B.2 — Native factor-grouping, sparse polynomial, and
-  permutation-polynomial normalization:** lift non-MBA subterms as opaque atoms,
-  group multiplicative factors and recursively reduce linear cofactors via
-  `ring_mod2w` (the immediate `MBA-Obfuscator nonlinear` milestone, targeting
-  `11.47x -> ~1.1x` and `poly_mba_cancel` `167 -> 11`), normalize sparse modular
-  polynomials, and invert univariate permutation polynomials mod $2^w$ via
-  Rivest's criterion + Hensel lifting (handling null-polynomial factors like
-  $2^{w-1}x(x-1)=0$ via tiny local `"smt"` lemmas).
+- [x] **Milestone 3B.1 — Native linear normalization with disjoint-minterm +
+  `ring_mod2w` certification:** supports variable, constant, compound-atom, and
+  general `linear_candidates` targets, nonzero offsets, and constant shifts.
+  The 100-case PLDI Non-Poly geometric quality moved from **19.2494x to 0.9394x**
+  with 100/100 established outputs. Connected-component scaling and broader
+  bit-sliced semilinear reconstruction remain follow-up optimizations.
+- [x] **Milestone 3B.2 — Native factor grouping and sparse polynomial
+  normalization:** combines formal monomials, factors repeated opaque terms,
+  recursively reduces linear cofactors, and certifies results with ring edges.
+  MBA-Obfuscator nonlinear moved from **11.4734x to 0.8693x** with 100/100
+  compositional proofs. A quadratic falling-factorial null rule and formal
+  polynomial-composition regressions are included.
+- [ ] Generalize null-polynomial recognition and implement explicit
+  Rivest/Hensel inversion when sparse ring normalization alone cannot expose the
+  lower-cost univariate permutation-polynomial result.
 - [x] Add two-value affine-Boolean extraction with compact DNF/CNF/ANF recovery
   before falling back to a dense AND-monomial basis. NPN/ESOP tables remain a
   possible performance refinement.
 - [x] Normalize after every CHS horizon and before the final OES cleanup.
 - [x] Add optional `rumba` and `cobra` CLI adapters for differential testing and
   bounded candidate experiments. They remain disabled by default.
-- [ ] **Milestone 3B.3 — Fix `mba_oracle` targeting and keep native OCaml
-  solvers primary:** propagate `~allow_oracle` through recursive `visit` calls,
-  target maximal `oracle_compatible` subtrees top-down (even under non-MBA roots
-  like `Ite`/`Uext`), and certify oracle candidates through the minterm +
-  `ring_mod2w` proof bridge for differential experiments. Replace oracle
-  dependence with native OCaml implementations of the useful coefficient/minterm,
-  factor-grouping, semilinear, and worklist ideas; do not copy external
-  implementation source without explicit license/attribution review.
+- [x] **Milestone 3B.3 — Certified differential oracles:** propagate oracle
+  suppression through recursion, target maximal compatible subtrees top-down,
+  clamp deadlines, and certify compatible answers through minterm/ring proofs.
+  Native OCaml minterm, sparse-ring, and factor solvers remain primary; external
+  implementations are optional comparison tools only.
 
-Acceptance: property tests verify `ring_mod2w` against Bitwuzla and prove all
-committed rewrites; `PLDI Non-Poly` and `MBA-Obfuscator nonlinear` drop from
-19.25x / 11.47x toward ~1.1x with 100% independent `mba_proof` replay and no
-regression on C-Full.
+Acceptance achieved: randomized tests verify `ring_mod2w` against Bitwuzla;
+PLDI Non-Poly and MBA-Obfuscator nonlinear reach **0.9394x / 0.8693x** geometric
+quality with 100% independent replay. PLDI Poly and QSynth EA remain at
+0.8812x / 0.9673x, and C-Full remains 1,000/1,000 established with 984 strict
+reductions and 16 unchanged.
 
 ## Milestone 4: proof-aware OES and equality search
 

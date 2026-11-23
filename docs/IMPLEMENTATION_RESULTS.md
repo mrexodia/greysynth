@@ -98,20 +98,23 @@ Ground-truth-aware reruns quantify why strict reduction alone is insufficient:
 
 | 100-case sample | Legacy geometric quality | Arithmetic quality | Geometric compression |
 |---|---:|---:|---:|
-| PLDI Poly | 1.0602x | 1.1033x | 3.0755x |
+| PLDI Poly (native ring solver) | **0.8812x** | **0.9052x** | **3.7006x** |
 | PLDI Non-Poly (before ring kernel) | 19.2494x | 39.8843x | 2.5498x |
-| PLDI Non-Poly (ring-certified minterms) | **1.5868x** | **3.7286x** | **30.9318x** |
-| MBA-Obfuscator nonlinear | 11.4734x | 11.6924x | 1.0916x |
-| QSynth EA | 1.0073x | 1.3707x | 11.4693x |
+| PLDI Non-Poly (native minterm/ring solver) | **0.9394x** | **0.9634x** | **52.2488x** |
+| MBA-Obfuscator nonlinear (native factor/ring solver) | **0.8693x** | **1.0852x** | **14.4085x** |
+| QSynth EA (native ring solver) | **0.9673x** | 1.3389x | **11.9430x** |
 
 All 400 outputs are proved against their inputs. Short whole-expression checks
 against supplied ground truths prove 155 and leave 245 explicitly unknown;
 these ratios compare syntax/cost and do not claim that every supplied answer is
-semantically consistent. The native minterm + modular-ring pass subsequently
-moves PLDI Non-Poly geometric quality from **19.2494x to 1.5868x** and makes all
-100 cases strictly smaller. With a five-second replay schedule, all 100 outputs
-are established (2 direct and 98 compositional proofs). MBA-Obfuscator algebra
-is now the dominant remaining quality gap.
+semantically consistent. The final native minterm/ring and factor-grouping
+passes make all four 100-case samples strictly smaller and establish every
+output against its original input. PLDI Non-Poly moves from **19.2494x to
+0.9394x** geometric quality (2 direct, 98 compositional proofs), while
+MBA-Obfuscator nonlinear moves from **11.4734x to 0.8693x** (100 compositional
+proofs). Ratios below 1 mean GreySynth found a proved expression smaller than
+the supplied ground truth under the selected metric; they do not imply that an
+inconsistent supplied answer was adopted.
 
 ## Representative probes
 
@@ -153,6 +156,22 @@ congruence and transitivity. Follow-up commutativity/scaling fixes also produce:
 Both replay compositionally; the measured simplification times are about 8 ms
 and 29 ms respectively in the Dev Container.
 
+### Native modular-ring kernel and algebraic solvers
+
+Certificates may now mark an equality as `ring_mod2w`. Independent replay
+normalizes `+`, `-`, unary negation, multiplication, and constants to a sparse
+polynomial modulo `2^w`, treating every non-ring term as an opaque typed
+indeterminate. Degree, monomial-count, and 200,000-operation guards fail closed
+with an explicit `ring_limit_exceeded` result. Randomized 8/16/32/64-bit tests
+cross-check accepted ring identities against Bitwuzla.
+
+The native linear solver emits small SMT minterm expansions plus one ring edge.
+The sparse polynomial solver combines/cancels formal monomials, and the factor
+solver groups repeated factors and recursively reduces each linear cofactor.
+A quadratic null-polynomial rule handles `2^(w-1) * x * (x-1) == 0` before ring
+normalization. The formerly failing PLDI inner expression now reduces `29 -> 1`
+in about 5 ms, and its outer product reduces `129 -> 3` in about 11 ms.
+
 ## Follow-up pipeline validation
 
 The second implementation review drove additional focused regressions:
@@ -170,9 +189,11 @@ The second implementation review drove additional focused regressions:
 - The audit's new quality metrics were validated on the 100-case PLDI Poly run
   under legacy, paper-AST, instruction, and readability costs.
 
-The current eight-worker C-Full deterministic run remains **1,000/1,000 proved,
-984 strict reductions, 16 unchanged** after structured real samples and the
-expanded local proof machinery.
+The final eight-worker C-Full deterministic replay after the native ring,
+minterm, sparse-polynomial, factor-grouping, and null-polynomial passes remains
+**1,000/1,000 established (554 direct, 446 compositional), 984 strict
+reductions, 16 unchanged**, with zero refutations, unknowns, errors, or process
+timeouts.
 
 A new complete-preprocessing portfolio races baseline normalization+OES against
 AC normalization+OES and prunes the discarded branch's obligations. On C-Full
