@@ -423,18 +423,21 @@ end
 module Polynomial = Map.Make (Monomial)
 
 exception Ring_limit
+type ring_verdict = Ring_equal | Ring_not_equal | Ring_limit_exceeded
 
 let ring_equal g left right =
   let width = (node g left).width in
-  if width <> (node g right).width then false
+  if width <> (node g right).width then Ring_not_equal
   else
+    let operations = ref 0 in
     let modulus = Z.shift_left Z.one width in
     let normalize value =
       let value = Z.erem value modulus in
       if Z.sign value < 0 then Z.add value modulus else value
     in
     let add_term monomial coefficient polynomial =
-      if List.length monomial > 16 then raise Ring_limit;
+      incr operations;
+      if !operations > 200_000 || List.length monomial > 16 then raise Ring_limit;
       let coefficient = normalize coefficient in
       let old = Option.value (Polynomial.find_opt monomial polynomial) ~default:Z.zero in
       let value = normalize (Z.add old coefficient) in
@@ -484,13 +487,16 @@ let ring_equal g left right =
           Hashtbl.add memo id result;
           result
     in
-    try Polynomial.equal Z.equal (polynomial left) (polynomial right)
-    with Ring_limit -> false
+    try
+      if Polynomial.equal Z.equal (polynomial left) (polynomial right) then Ring_equal
+      else Ring_not_equal
+    with Ring_limit -> Ring_limit_exceeded
 
 let verify ?(timeouts = [1.]) ~original ~candidate certificate =
   let started = Unix.gettimeofday () in
   let checked = ref 0 and proved = ref 0 and unknown = ref 0 and timed_out = ref 0 in
   let abstract = ref 0 and direct = ref 0 and ring = ref 0 in
+  let ring_limits = ref 0 in
   let nodes = ref 0 and edges_count = ref 0 in
   let result verification reason = `Assoc [
     "verification", `String verification;
@@ -500,7 +506,7 @@ let verify ?(timeouts = [1.]) ~original ~candidate certificate =
     "nodes", `Int !nodes; "provided_equalities", `Int !edges_count;
     "checked_equalities", `Int !checked; "proved_equalities", `Int !proved;
     "abstract_proofs", `Int !abstract; "direct_proofs", `Int !direct;
-    "ring_proofs", `Int !ring;
+    "ring_proofs", `Int !ring; "ring_limit_equalities", `Int !ring_limits;
     "unknown_equalities", `Int !unknown; "timeout_equalities", `Int !timed_out;
   ] in
   try
@@ -531,8 +537,10 @@ let verify ?(timeouts = [1.]) ~original ~candidate certificate =
         let verdict, method_ =
           match edge.rule with
           | Ring_mod2w ->
-              if ring_equal g edge.left edge.right then U.Yes, "ring_mod2w"
-              else U.No, "ring_mod2w"
+              (match ring_equal g edge.left edge.right with
+              | Ring_equal -> U.Yes, "ring_mod2w"
+              | Ring_not_equal -> U.No, "ring_not_equal"
+              | Ring_limit_exceeded -> U.Unknown, "ring_limit_exceeded")
           | Smt -> attempt timeouts
         in
         match verdict with
@@ -544,9 +552,12 @@ let verify ?(timeouts = [1.]) ~original ~candidate certificate =
             established := edge :: !established
         | U.No -> fail "a local equality was refuted; this does not refute the final output"
         | U.Timeout -> incr timed_out
-        | U.Unknown | U.Disabled -> incr unknown) obligations;
+        | U.Unknown | U.Disabled ->
+            incr unknown;
+            if method_ = "ring_limit_exceeded" then incr ring_limits) obligations;
       if congruent g !established input_id output_id then
         result "proved_compositional" "smt_equalities_and_congruence"
+      else if !ring_limits > 0 then result "unknown" "ring_limit_exceeded"
       else if !timed_out > 0 && !unknown = 0 then result "timeout" "unresolved_equalities"
       else result "unknown" "unresolved_equalities")
   with exn -> result "error" (Printexc.to_string exn)

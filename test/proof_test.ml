@@ -88,9 +88,13 @@ let () =
   let factors = List.init 17 (fun _ -> rx) in
   let left_degree = List.fold_left (E.binary E.Mul) (List.hd factors) (List.tl factors) in
   let right_degree = List.fold_right (E.binary E.Mul) (List.tl factors) (List.hd factors) in
-  expect "error"
-    (P.verify ~original:left_degree ~candidate:right_degree
-       (ring_certificate left_degree right_degree));
+  let limited =
+    P.verify ~original:left_degree ~candidate:right_degree
+      (ring_certificate left_degree right_degree)
+  in
+  expect "unknown" limited;
+  require (field "reason" limited = `String "ring_limit_exceeded")
+    "ring degree limit was not reported explicitly";
   Printf.printf "proof_test: typed DAG, ring kernel, endpoint binding and incomplete-derivation regressions passed\n";
   if not available then (
     if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
