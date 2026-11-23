@@ -38,8 +38,8 @@ let c_ac_normalization = ref false
 let c_normalization_portfolio = ref false
 let c_preprocessing_portfolio = ref false
 let c_egraph_extraction = ref false
-let c_egraph_max_enodes = ref 50
-let c_egraph_max_iters = ref 2
+let c_egraph_max_enodes = ref 2048
+let c_egraph_max_iters = ref 4
 let c_normalization_max_atoms = ref 6
 let c_mba_oracle = ref "none"
 let c_mba_oracle_command = ref ""
@@ -122,9 +122,9 @@ let load_config_from_json json_file : unit =
        | `Null -> false
        | v -> to_bool v);
     (c_egraph_max_enodes :=
-       match json |> member "egraph_max_enodes" with `Null -> 50 | v -> to_int v);
+       match json |> member "egraph_max_enodes" with `Null -> 2048 | v -> to_int v);
     (c_egraph_max_iters :=
-       match json |> member "egraph_max_iters" with `Null -> 2 | v -> to_int v);
+       match json |> member "egraph_max_iters" with `Null -> 4 | v -> to_int v);
     if !c_egraph_max_enodes <= 0 || !c_egraph_max_iters <= 0 then
       failwith "config: egraph limits must be positive";
     (c_normalization_max_atoms :=
