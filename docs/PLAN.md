@@ -199,12 +199,15 @@ reductions and 16 unchanged.
   correctness, fixed-point incremental extraction, materialized parent
   representatives, semantic-failure memoization, bottom-up scheduling,
   cheapest-first candidate verification, and partial-progress extraction are
-  implemented; all focused child-class certificates replay. Corpus acceptance
-  is still open: some local candidate generators cannot be interrupted promptly
-  by the graph-local deadline (latest 2048/4 C-Full: 983 established, 17 process
-  timeouts, 967 strict reductions). Make candidate generation cooperatively
-  interruptible and start resource-isolated baseline fallback before the hard
-  process cap before enabling the mode.
+  implemented; all focused child-class certificates replay. Lexicographic
+  `(cost, AST nodes, expression)` extraction eliminates zero-cost Legacy cast
+  cycles, and long additive spines skip heavyweight interior-prefix work. The
+  2048/4 C-Full gate now passes: 1,000/1,000 established, zero process timeouts,
+  and 984 strict reductions / 16 unchanged. Promotion remains open only on
+  quality: MBA-Obfuscator nonlinear is 0.9427x versus its 0.8693x baseline and
+  msimba is 1.0045x versus 0.9966x. Preserve the C-Full gate while extracting
+  better recursive/runner-up candidates on those two suites before enabling the
+  mode.
 
 Acceptance: a targeted test demonstrates fallback from an unprovable smallest
 representative to a proved runner-up and non-monotonic expansion->cancellation

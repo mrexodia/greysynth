@@ -299,8 +299,38 @@ QSynth EA, and 1.0045x msimba. The
 final C-Full run establishes 983 outputs (532 direct, 451 compositional), has 17
 process timeouts, and yields 967 strict reductions / 16 unchanged / 17 unknown.
 
-`egraph_extraction` therefore remains disabled by default. Baseline results
-remain authoritative: 1,000/1,000 established and 984/16 on C-Full, with all
-five MBA smoke suites below 1.00x geometric quality. Milestone 4A remains open
-for making every local candidate generator interruptible under the graph-local
-budget and for resource-isolated fallback that starts before the process cap.
+## Round-13 extraction termination and additive-spine scheduling
+
+Round 13 makes extraction monotone in the lexicographic triple `(configured
+cost, AST nodes, expression)` and caps fixed-point rounds by the enode count.
+Zero-cost Legacy cast cycles can no longer grow forever: `target_3137` now
+finishes `436 -> 3` in 0.36s and `target_2927` finishes `685 -> 5` in 1.32s,
+with both certificates replaying compositionally. A focused Uext/Restrict cycle
+regression terminates below one second and extracts the smaller AST.
+
+Heavy algebraic candidate generation is skipped on genuine left-associated
+prefixes of additive spines with at least eight terms, while maximal sums and
+right-hand/non-additive children retain the full candidate suite. Direct
+single-edge SMT probes now use the budget-aware endpoint proof cache. The
+Round-12 nonlinear line-32 result improves from `158 -> 76` to `158 -> 10`.
+
+Exact 100-case egraph-enabled results at 2048 enodes / 4 iterations are:
+
+| Dataset | established | geometric quality | process failures |
+|---|---:|---:|---:|
+| PLDI Non-Poly | 100/100 | 0.9290x | 0 |
+| MBA-Obfuscator nonlinear | 100/100 | 0.9427x | 0 |
+| PLDI Poly | 100/100 | 0.8789x | 0 |
+| QSynth EA | 100/100 | 0.8429x | 0 |
+| msimba | 100/100 | 1.0045x | 0 |
+
+The exact C-Full audit now passes its correctness and reduction gate:
+1,000/1,000 established (557 direct, 443 compositional), zero process timeouts,
+and 984 strict reductions / 16 unchanged. Against the paired Round-10 output it
+has 94 smaller, 816 equal, and 90 larger Legacy-cost outputs.
+
+`egraph_extraction` remains disabled by default because MBA-Obfuscator nonlinear
+still misses its 0.8693x baseline and msimba misses its 0.9966x baseline.
+Milestone 4A therefore remains open despite the completed C-Full gate; the next
+step is runner-up/recursive candidate extraction for those two quality deltas,
+without weakening the now-complete proof and timeout gate.
