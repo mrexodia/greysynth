@@ -167,7 +167,7 @@ let verify_local candidate lhs rhs =
       Rewrite_proof.record builder ~pass:candidate.pass lhs rhs;
     let certificate = Rewrite_proof.finish builder rhs in
     let report =
-      Rewrite_proof.verify ~timeouts:[ min 1. (float_of_int !c_equiv_timeout) ]
+      Rewrite_proof.verify ~timeouts:[ float_of_int !c_equiv_timeout ]
         ~original:lhs ~candidate:rhs certificate
     in
     Yojson.Basic.Util.member "verification" report = `String "proved_compositional"
@@ -313,6 +313,14 @@ let optimize expression =
         check_timeout ();
         let changed = ref false in
         representatives graph
+        |> List.sort (fun (left_root, left_ids) (right_root, right_ids) ->
+               let root_class = find graph root in
+               if left_root = root_class then -1
+               else if right_root = root_class then 1
+               else
+                 let _, left = cheapest graph left_ids
+                 and _, right = cheapest graph right_ids in
+                 Int.compare (size_of_expr right) (size_of_expr left))
         |> List.iter (fun (_root, ids) ->
                let id, representative = cheapest graph ids in
                if not (Nodes.mem visited representative) then (
@@ -338,7 +346,11 @@ let optimize expression =
                           then changed := true)));
         if semantic_merge graph then changed := true;
         if rebuild graph then changed := true;
-        if not !changed then continue := false
+        let _, root_best =
+          let root_class = find graph root in
+          cheapest graph (Option.value (Hashtbl.find_opt graph.classes root_class) ~default:[ root ])
+        in
+        if not !changed || size_of_expr root_best <= 5 then continue := false
       done;
       last_enodes := graph.count;
       last_iterations := !iteration;

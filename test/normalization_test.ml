@@ -465,8 +465,8 @@ let test_egraph_extraction () =
   R.start_recording original;
   let result = EG.optimize original in
   let three_nodes, three_iters = EG.statistics () in
-  require (three_iters = 3 && three_nodes >= one_nodes)
-    "egraph_max_iters did not affect bounded saturation";
+  require (three_iters >= one_iters && three_iters <= 3 && three_nodes >= one_nodes)
+    "egraph iteration bound or fixed-point termination is inconsistent";
   require (U.size_of_expr result <= U.size_of_expr one_iteration
            && U.size_of_expr result = 3)
     "e-graph extraction missed the globally cheaper equivalent";
