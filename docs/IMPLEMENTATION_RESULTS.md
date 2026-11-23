@@ -364,3 +364,34 @@ outputs versus the paired Round-10 run.
 Milestone 4A is complete. The bounded e-graph remains opt-in in configuration so
 default behavior does not change silently, but it now satisfies the complete
 proof, replay, resource, reduction, and five-dataset quality acceptance gate.
+
+## Round-15 configuration, polynomial, conditional, and load boundaries
+
+Configuration parsing, canonical defaults, validation, reset, and report
+serialization now come from one typed declarative table. `Config.report_fields`
+drives the existing report keys directly; invalid ranges and renamed
+`local_synthesis` fail descriptively. Focused tests cover reset/report changes
+and invalid configuration rejection.
+
+Univariate degree-2..8 polynomials can now be converted from the power basis to
+the falling-factorial basis using Stirling coefficients. Terms satisfying the
+`2^(w-v2(k!))` divisibility criterion are dropped with local null obligations
+and a `ring_mod2w` expansion edge. Degree-2/3/4 null products at 8/16/32/64 bits
+all independently replay. Rivest's exact parity criterion and bounded
+Hensel/Newton inverse construction are exposed for low-degree permutation
+polynomials; inverses are returned only after deterministic modular validation.
+
+The mixed-width peephole set now includes composed masks, XOR constants,
+extension/restriction chains, logical shift masks, complementary mask selects,
+condition canonicalization, same-condition ITE collapse, equality propagation,
+and branchless XOR/OR/add select recovery. Every accepted candidate still uses
+the configured cost and shared SMT/compositional proof gate.
+
+Memory loads are explicitly outside the pure-expression proof model. The proof
+DAG rejects `E.Load`, while the pipeline leaves load expressions unchanged,
+emits `equiv: ukn` plus `proof_semantics: outside_proof_semantics`, and does not
+write a certificate.
+
+The exact-current five 100-case smoke rerun is unchanged from Round 14: 500/500
+established, with geometric quality 0.9290x / 0.7595x / 0.8789x / 0.8443x /
+0.9966409x for Non-Poly, nonlinear, Poly, QSynth EA, and msimba respectively.

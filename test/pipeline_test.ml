@@ -626,7 +626,42 @@ let test_logging_reset () =
     "fast simplification equivalence metric survived reset";
   require (!(L.log_final_is_equiv) = U.Disabled) "equivalence metrics survived reset"
 
+let test_load_boundary () =
+  let load = E.load 1 Machine.LittleEndian x Libterm.Sexpr.Memory.root in
+  let config = Filename.temp_file "greysynth-load" ".json" in
+  let proof = Filename.temp_file "greysynth-load" ".proof.json" in
+  Sys.remove proof;
+  Yojson.Basic.to_file config (`Assoc []);
+  G.run ~proof_output:proof load config None;
+  Sys.remove config;
+  require (not (Sys.file_exists proof))
+    "pipeline emitted a pure-expression certificate for a memory load";
+  require (!(L.log_final_is_equiv) = U.Disabled)
+    "pipeline claimed equivalence for a memory load"
+
+let test_config_reporting () =
+  C.reset_defaults ();
+  let fields = C.report_fields () in
+  require (List.assoc "egraph_max_enodes" fields = `Int 2048)
+    "default config report changed egraph limit";
+  C.c_egraph_max_enodes := 17;
+  require (List.assoc "egraph_max_enodes" (C.report_fields ()) = `Int 17)
+    "reported option did not follow runtime configuration";
+  C.reset_defaults ();
+  require (!(C.c_egraph_max_enodes) = 2048)
+    "reset_defaults did not restore canonical configuration";
+  let invalid = Filename.temp_file "greysynth-invalid" ".json" in
+  Yojson.Basic.to_file invalid (`Assoc [ "normalization_max_atoms", `Int 11 ]);
+  let rejected =
+    try C.load_config_from_json invalid; false
+    with Failure message -> String.length message > 7 && String.sub message 0 7 = "config:"
+  in
+  Sys.remove invalid;
+  require rejected "invalid configuration did not fail descriptively"
+
 let () =
+  test_config_reporting ();
+  test_load_boundary ();
   test_oes_legacy_collision ();
   test_strict_oes_unknown ();
   test_strict_relational_unknown ();

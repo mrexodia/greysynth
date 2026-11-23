@@ -89,7 +89,7 @@ conversion errors.
 
 ## Milestone 2: honest configuration and observability
 
-- [ ] Centralize configuration parsing, defaults, validation, and reporting.
+- [x] Centralize configuration parsing, defaults, validation, and reporting.
 - [x] Implement `balanced_tree` and `sampling_strategy`.
 - [x] Include normalization and the selected cost model in pipeline summaries and
   emit all cost models in simplifier/checker/audit reports.
@@ -111,10 +111,10 @@ runs in one process have isolated metrics; reports account for every attempt.
   `ac_normalization`; keep direct greedy mode opt-in. `normalization_portfolio`
   now races baseline and AC branches from the same input and retains the cheaper
   locally proved result, subject to the shared total budget.
-- [ ] Complete the mixed-width-safe identity set. Complement, additive inverse,
-  disjoint masks, extraction/extension, concat, and constant-shift rules are in;
-  signed/unsigned comparison bounds and simple ITE masks are now included;
-  select/min/max idioms and additional mask compositions remain.
+- [x] Complete the mixed-width-safe identity set. Complement, additive inverse,
+  disjoint masks, extraction/extension, concat, constant-shift rules, composed
+  masks/casts, predicate propagation, and proof-gated branchless select/min/max
+  boundary idioms are included.
 - [x] Raise the configurable linear-MBA truth-table ceiling from four to six
   atoms by default (up to ten), extend two-value recovery through six atoms,
   and raise the guarded traversal budget; connected-component decomposition remains.
@@ -149,9 +149,11 @@ runs in one process have isolated metrics; reports account for every attempt.
   MBA-Obfuscator nonlinear moved from **11.4734x to 0.8693x** with 100/100
   compositional proofs. A quadratic falling-factorial null rule and formal
   polynomial-composition regressions are included.
-- [ ] Generalize null-polynomial recognition and implement explicit
-  Rivest/Hensel inversion when sparse ring normalization alone cannot expose the
-  lower-cost univariate permutation-polynomial result.
+- [x] Generalize degree-2..8 univariate null-polynomial recognition through the
+  falling-factorial basis and add explicit Rivest classification plus bounded
+  Hensel/Newton inverse construction. Candidates are retained only when the
+  bounded inverse validates on deterministic modular probes; composition cleanup
+  then crosses the same ring/null proof boundary.
 - [x] Add two-value affine-Boolean extraction with compact DNF/CNF/ANF recovery
   before falling back to a dense AND-monomial basis. NPN/ESOP tables remain a
   possible performance refinement.
@@ -291,9 +293,10 @@ claim paper-AST improvements merely because casts are free in the legacy metric.
 - [x] Cover both feasible sides of restored conditions before conditional
   synthesis. Mixed conditional+shift/division targets retain all operators
   through Xyntia's `full_ite` grammar.
-- [ ] Add predicate extraction and proved select/min/max idioms.
-- [ ] Keep memory loads and C/binary lifting outside the pure-expression proof
-  claim until their semantics are modeled independently.
+- [x] Add predicate extraction and proved select/min/max idioms.
+- [x] Keep memory loads and C/binary lifting outside the pure-expression proof
+  claim until their semantics are modeled independently. Loads now produce an
+  explicit `outside_proof_semantics` report and no rewrite certificate.
 
 ## Validation cadence
 

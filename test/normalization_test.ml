@@ -526,6 +526,67 @@ let test_egraph_child_replay () =
   let z = var 64 "z" and y = var 64 "y" in
   check "child MBA inside multiplication" (mul z (plus inner y)) 5
 
+let test_round15_canonicalization () =
+  let prove label original expected =
+    reset ();
+    R.start_recording original;
+    let result = N.run original in
+    require (E.is_equal result expected)
+      (Printf.sprintf "%s: unexpected normal form %s (expected %s)" label
+         (U.pp result) (U.pp expected));
+    let certificate = P.finish (Option.get !(R.journal)) result in
+    let report = P.verify ~timeouts:[ 1.; 5. ] ~original ~candidate:result certificate in
+    require
+      (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+      (label ^ ": certificate did not replay")
+  in
+  let x = var 16 "r15_x" and y = var 16 "r15_y" in
+  let m1 = c 16 0xf0f0 and m2 = c 16 0xcccc in
+  prove "mask composition" (band (band x m1) m2) (band x (c 16 0xc0c0));
+  let condition = E.binary E.Eq x (c 16 0) in
+  prove "predicate branch substitution"
+    (E.ite condition (plus x y) (c 16 7))
+    (E.ite condition y (c 16 7));
+  let bit = var 1 "r15_c" in
+  let mask = E.unary (E.Sext 15) bit in
+  prove "branchless select"
+    (bxor (band (bxor x y) mask) y) (E.ite bit x y);
+  List.iter
+    (fun width ->
+      List.iter
+        (fun degree ->
+          let variable = var width (Printf.sprintf "null_%d_%d" width degree) in
+          let rec falling index result =
+            if index = degree then result
+            else
+              let term = if index = 0 then variable else minus variable (c width index) in
+              falling (index + 1) (mul result term)
+          in
+          let rec v2 n power total =
+            if power > n then total else v2 n (power * 2) (total + (n / power))
+          in
+          let coefficient = Z.shift_left Z.one (width - v2 degree 2 0) in
+          let original = mul (E.constant (Bitvector.create coefficient width))
+              (falling 1 variable) in
+          prove (Printf.sprintf "falling null %d/%d" width degree)
+            original (c width 0))
+        [ 2; 3; 4 ])
+    [ 8; 16; 32; 64 ];
+  require (N.is_permutation_poly ~width:64 [ Z.one; Z.one; Z.of_int 2 ])
+    "Rivest criterion rejected a permutation polynomial";
+  require (not (N.is_permutation_poly ~width:64 [ Z.zero; Z.of_int 2 ]))
+    "Rivest criterion accepted an even linear coefficient";
+  match N.invert_permutation_poly ~width:64 ~max_degree:1 [ Z.of_int 7; Z.of_int 3 ] with
+  | Some [ offset; slope ] ->
+      let modulus = Z.shift_left Z.one 64 in
+      require (Z.equal (Z.erem (Z.mul slope (Z.of_int 3)) modulus) Z.one)
+        "Hensel affine inverse has the wrong slope";
+      require
+        (Z.equal
+           (Z.erem (Z.add offset (Z.mul slope (Z.of_int 7))) modulus) Z.zero)
+        "Hensel affine inverse has the wrong offset"
+  | _ -> failwith "Hensel affine inversion failed"
+
 let test_egraph_round14_regressions () =
   let check label text maximum =
     reset ();
@@ -612,6 +673,7 @@ let () =
     test_egraph_extraction ();
     test_egraph_legacy_cast_cycle ();
     test_egraph_child_replay ();
+    test_round15_canonicalization ();
     test_egraph_round14_regressions ();
     test_preprocessing_portfolio ();
     test_nonlinear_is_opaque ();

@@ -89,6 +89,136 @@ let evaluator = ref (Sample_evaluator.make 1)
 
 exception Timeout_exception
 
+type config_spec = {
+  json_key : string;
+  report_key : string option;
+  required : bool;
+  default : Yojson.Basic.t;
+  set_json : Yojson.Basic.t -> unit;
+  get_json : unit -> Yojson.Basic.t;
+  validate : unit -> unit;
+}
+
+let bool_spec ?report ?(required = false) key default target =
+  { json_key = key; report_key = report; required; default = `Bool default;
+    set_json = (fun json -> target := Yojson.Basic.Util.to_bool json);
+    get_json = (fun () -> `Bool !target); validate = (fun () -> ()) }
+
+let int_spec ?report ?(required = false) ?(validate = fun _ -> true)
+    ?(message = "must be valid") key default target =
+  { json_key = key; report_key = report; required; default = `Int default;
+    set_json = (fun json -> target := Yojson.Basic.Util.to_int json);
+    get_json = (fun () -> `Int !target);
+    validate = (fun () -> if not (validate !target) then failwith ("config: " ^ key ^ " " ^ message)) }
+
+let string_spec ?report ?(required = false) ?(validate = fun _ -> true)
+    ?(message = "must be valid") key default target =
+  { json_key = key; report_key = report; required; default = `String default;
+    set_json = (fun json -> target := Yojson.Basic.Util.to_string json);
+    get_json = (fun () -> `String !target);
+    validate = (fun () -> if not (validate !target) then failwith ("config: " ^ key ^ " " ^ message)) }
+
+let config_specs =
+  [
+    bool_spec ~report:"is_normalization_enabled" "normalization" true c_normalization;
+    bool_spec ~report:"ac_normalization" "ac_normalization" false c_ac_normalization;
+    bool_spec ~report:"normalization_portfolio" "normalization_portfolio" false c_normalization_portfolio;
+    bool_spec ~report:"preprocessing_portfolio" "preprocessing_portfolio" false c_preprocessing_portfolio;
+    bool_spec ~report:"egraph_extraction" "egraph_extraction" false c_egraph_extraction;
+    int_spec ~report:"egraph_max_enodes" ~validate:((<) 0) ~message:"must be positive"
+      "egraph_max_enodes" 2048 c_egraph_max_enodes;
+    int_spec ~report:"egraph_max_iters" ~validate:((<) 0) ~message:"must be positive"
+      "egraph_max_iters" 4 c_egraph_max_iters;
+    int_spec ~report:"normalization_max_atoms" ~validate:(fun value -> value >= 1 && value <= 10)
+      ~message:"must be between 1 and 10" "normalization_max_atoms" 6 c_normalization_max_atoms;
+    string_spec ~report:"mba_oracle" ~validate:(fun value -> List.mem value ["none"; "rumba"; "cobra"])
+      ~message:"must be none, rumba, or cobra" "mba_oracle" "none" c_mba_oracle;
+    string_spec "mba_oracle_command" "" c_mba_oracle_command;
+    int_spec ~report:"mba_oracle_timeout" ~validate:((<) 0) ~message:"must be positive"
+      "mba_oracle_timeout" 2 c_mba_oracle_timeout;
+    int_spec ~report:"mba_oracle_calls" ~validate:((<=) 0) ~message:"must be nonnegative"
+      "mba_oracle_calls" 4 c_mba_oracle_calls;
+    bool_spec ~report:"is_linear_enabled" "oes" true c_oes;
+    bool_spec "oes_extended" false c_oes_extended;
+    bool_spec "oes_fixedpoint" false c_oes_fixedpoint;
+    int_spec ~report:"oes_candidate_limit" ~validate:((<) 0) ~message:"must be positive"
+      "oes_candidate_limit" 1 c_oes_candidate_limit;
+    bool_spec "local_extend" false c_local_extend;
+    int_spec ~validate:((<) 0) ~message:"must be positive" "local_extend_depth" 4 c_local_extend_depth;
+    bool_spec ~report:"is_fast_simplify_enabled" "fast_simplify" false c_fast_simplify;
+    bool_spec ~report:"is_global_enabled" "global_synthesis" false c_global_synthesis;
+    bool_spec ~report:"is_chs_enabled" "chs" true c_chs;
+    int_spec ~report:"chs_max_inputs" ~validate:((<=) 0) ~message:"must be nonnegative"
+      "chs_max_inputs" 0 c_chs_max_inputs;
+    int_spec ~report:"chs_max_horizon" ~validate:((<=) 0) ~message:"must be nonnegative"
+      "chs_max_horizon" 0 c_chs_max_horizon;
+    int_spec ~validate:((<) 0) ~message:"must be positive" "synthesis_timeout" 2 c_synthesis_timeout;
+    int_spec ~validate:((<) 0) ~message:"must be positive" "synthesis_repeat" 1 c_synthesis_repeat;
+    int_spec ~report:"cegis_retries" ~validate:((<=) 0) ~message:"must be nonnegative"
+      "cegis_retries" 1 c_cegis_retries;
+    bool_spec ~report:"learn_synthesis_rules" "learn_synthesis_rules" true c_learn_synthesis_rules;
+    bool_spec ~report:"balanced_tree" "balanced_tree" true c_balanced_tree;
+    bool_spec "reject_non_equiv_simplifications" true c_reject_non_equiv_simplifications;
+    int_spec ~validate:((<) 0) ~message:"must be positive" "equiv_timeout" 1 c_equiv_timeout;
+    bool_spec ~report:"check_equiv" "check_equiv" false c_check_equiv;
+    int_spec ~validate:((<) 0) ~message:"must be positive" "nb_samples" 100 c_nb_samples;
+    bool_spec ~report:"local_cache" "local_cache" true c_local_cache;
+    bool_spec "add_constants_to_synthesis" true c_add_constants_to_synthesis;
+    int_spec ~report:"synthesis_constant_limit" ~validate:((<=) 0)
+      ~message:"must be nonnegative" "synthesis_constant_limit" 12 c_synthesis_constant_limit;
+    string_spec "synthesizer" "xyntia" c_synthesizer_name;
+    string_spec "xyntia_grammar" "auto" c_xyntia_grammar;
+    bool_spec ~report:"branch_covering_samples" "branch_covering_samples" true
+      c_branch_covering_samples;
+    { json_key = "cost_model"; report_key = Some "cost_model"; required = false;
+      default = `String "legacy";
+      set_json = (fun json ->
+        let value = Yojson.Basic.Util.to_string json in
+        try Greysynth_utils.Utils.cost_model := Greysynth_utils.Utils.cost_model_of_string value
+        with Invalid_argument message -> failwith ("config: " ^ message));
+      get_json = (fun () -> `String (Greysynth_utils.Utils.string_of_cost_model
+                                       !Greysynth_utils.Utils.cost_model));
+      validate = (fun () -> ()) };
+    { json_key = "sampling_strategy"; report_key = None; required = false;
+      default = `String "real";
+      set_json = (fun json ->
+        match Yojson.Basic.Util.to_string json with
+        | "real" -> c_sampling_strategy := RealValues
+        | "label" -> c_sampling_strategy := LabelValues
+        | "wrong_naive" -> c_sampling_strategy := WrongNaive
+        | value -> failwith ("config: unknown sampling_strategy " ^ value));
+      get_json = (fun () -> `String (string_of_sampling !c_sampling_strategy));
+      validate = (fun () -> ()) };
+    { json_key = "total_timeout"; report_key = None; required = false;
+      default = `Int 600;
+      set_json = (fun json -> g_total_timeout := float_of_int (Yojson.Basic.Util.to_int json));
+      get_json = (fun () -> `Float !g_total_timeout);
+      validate = (fun () -> if !g_total_timeout < 0. then failwith "config: total_timeout must be nonnegative") };
+  ]
+
+let reset_defaults () =
+  List.iter (fun spec -> spec.set_json spec.default) config_specs
+
+let report_fields () =
+  List.filter_map
+    (fun spec -> Option.map (fun key -> key, spec.get_json ()) spec.report_key)
+    config_specs
+
+let apply_config_specs json =
+  if Yojson.Basic.Util.member "local_synthesis" json <> `Null then
+    failwith "config: \"local_synthesis\" was renamed to \"chs\"";
+  List.iter
+    (fun spec ->
+      let value = Yojson.Basic.Util.member spec.json_key json in
+      if value = `Null then (
+        if spec.required then failwith ("config: missing " ^ spec.json_key)
+        else spec.set_json spec.default)
+      else spec.set_json value;
+      spec.validate ())
+    config_specs;
+  if !c_mba_oracle <> "none" && !c_mba_oracle_command = "" then
+    failwith "config: mba_oracle_command is required when an MBA oracle is enabled"
+
 let check_timeout () =
   if !g_total_timeout > 0. then
     let elapsed = Unix.gettimeofday () -. !g_start_time in
@@ -99,158 +229,10 @@ let check_timeout () =
 
 let load_config_from_json json_file : unit =
   try
+    reset_defaults ();
     let json = Yojson.Basic.from_file json_file in
-    let open Yojson.Basic.Util in
-    (c_normalization :=
-       match json |> member "normalization" with
-       | `Null -> true
-       | v -> to_bool v);
-    (c_ac_normalization :=
-       match json |> member "ac_normalization" with
-       | `Null -> false
-       | v -> to_bool v);
-    (c_normalization_portfolio :=
-       match json |> member "normalization_portfolio" with
-       | `Null -> false
-       | v -> to_bool v);
-    (c_preprocessing_portfolio :=
-       match json |> member "preprocessing_portfolio" with
-       | `Null -> false
-       | v -> to_bool v);
-    (c_egraph_extraction :=
-       match json |> member "egraph_extraction" with
-       | `Null -> false
-       | v -> to_bool v);
-    (c_egraph_max_enodes :=
-       match json |> member "egraph_max_enodes" with `Null -> 2048 | v -> to_int v);
-    (c_egraph_max_iters :=
-       match json |> member "egraph_max_iters" with `Null -> 4 | v -> to_int v);
-    if !c_egraph_max_enodes <= 0 || !c_egraph_max_iters <= 0 then
-      failwith "config: egraph limits must be positive";
-    (c_normalization_max_atoms :=
-       match json |> member "normalization_max_atoms" with
-       | `Null -> 6
-       | v -> to_int v);
-    if !c_normalization_max_atoms < 1 || !c_normalization_max_atoms > 10 then
-      failwith "config: normalization_max_atoms must be between 1 and 10";
-    (c_mba_oracle :=
-       match json |> member "mba_oracle" with `Null -> "none" | v -> to_string v);
-    if not (List.mem !c_mba_oracle [ "none"; "rumba"; "cobra" ]) then
-      failwith "config: mba_oracle must be none, rumba, or cobra";
-    (c_mba_oracle_command :=
-       match json |> member "mba_oracle_command" with `Null -> "" | v -> to_string v);
-    (c_mba_oracle_timeout :=
-       match json |> member "mba_oracle_timeout" with `Null -> 2 | v -> to_int v);
-    (c_mba_oracle_calls :=
-       match json |> member "mba_oracle_calls" with `Null -> 4 | v -> to_int v);
-    if !c_mba_oracle_timeout <= 0 || !c_mba_oracle_calls < 0 then
-      failwith "config: MBA oracle timeout must be positive and calls nonnegative";
-    if !c_mba_oracle <> "none" && !c_mba_oracle_command = "" then
-      failwith "config: mba_oracle_command is required when an MBA oracle is enabled";
-    c_oes := json |> member "oes" |> to_bool;
-    (c_oes_extended :=
-       match json |> member "oes_extended" with
-       | `Null -> false
-       | v -> to_bool v);
-    (c_oes_fixedpoint :=
-       match json |> member "oes_fixedpoint" with
-       | `Null -> false
-       | v -> to_bool v);
-    (c_oes_candidate_limit :=
-       match json |> member "oes_candidate_limit" with
-       | `Null -> 1
-       | v -> to_int v);
-    if !c_oes_candidate_limit <= 0 then
-      failwith "config: oes_candidate_limit must be positive";
-    (c_local_extend :=
-       match json |> member "local_extend" with
-       | `Null -> false
-       | v -> to_bool v);
-    (c_local_extend_depth :=
-       match json |> member "local_extend_depth" with
-       | `Null -> 4
-       | v -> to_int v);
-    (c_fast_simplify :=
-       match json |> member "fast_simplify" with
-       | `Null -> false
-       | v -> to_bool v);
-    c_global_synthesis := json |> member "global_synthesis" |> to_bool;
-    if member "local_synthesis" json <> `Null then
-      failwith "config: \"local_synthesis\" was renamed to \"chs\"";
-    c_chs := json |> member "chs" |> to_bool;
-    (c_chs_max_inputs :=
-       match json |> member "chs_max_inputs" with `Null -> 0 | v -> to_int v);
-    (c_chs_max_horizon :=
-       match json |> member "chs_max_horizon" with `Null -> 0 | v -> to_int v);
-    if !c_chs_max_inputs < 0 || !c_chs_max_horizon < 0 then
-      failwith "config: CHS limits must be nonnegative";
-    c_synthesis_timeout := json |> member "synthesis_timeout" |> to_int;
-    c_synthesis_repeat := json |> member "synthesis_repeat" |> to_int;
-    (c_cegis_retries :=
-       match json |> member "cegis_retries" with
-       | `Null -> 1
-       | v -> to_int v);
-    if !c_cegis_retries < 0 then failwith "config: cegis_retries must be nonnegative";
-    (c_learn_synthesis_rules :=
-       match json |> member "learn_synthesis_rules" with
-       | `Null -> true
-       | v -> to_bool v);
-    c_balanced_tree := json |> member "balanced_tree" |> to_bool;
-    c_reject_non_equiv_simplifications :=
-      json |> member "reject_non_equiv_simplifications" |> to_bool;
-    c_equiv_timeout := json |> member "equiv_timeout" |> to_int;
-    c_check_equiv := json |> member "check_equiv" |> to_bool;
-    c_nb_samples := json |> member "nb_samples" |> to_int;
-    if !c_nb_samples <= 0 then
-      failwith "config: nb_samples must be positive";
-    if !c_equiv_timeout <= 0 then
-      failwith "config: equiv_timeout must be positive";
-    c_local_cache := json |> member "local_cache" |> to_bool;
-    c_add_constants_to_synthesis :=
-      json |> member "add_constants_to_synthesis" |> to_bool;
-    (c_synthesis_constant_limit :=
-       match json |> member "synthesis_constant_limit" with
-       | `Null -> 12
-       | v -> to_int v);
-    if !c_synthesis_constant_limit < 0 then
-      failwith "config: synthesis_constant_limit must be nonnegative";
-    (Greysynth_utils.Utils.cost_model :=
-       match json |> member "cost_model" with
-       | `Null -> Greysynth_utils.Utils.Legacy
-       | `String value ->
-           (try Greysynth_utils.Utils.cost_model_of_string value
-            with Invalid_argument message -> failwith ("config: " ^ message))
-       | _ -> failwith "config: cost_model must be a string");
-
-    (* Backend-specific keys are read by the backend itself *)
-    (c_synthesizer_name :=
-       match json |> member "synthesizer" with
-       | `Null -> "xyntia"
-       | v -> to_string v);
-    (c_xyntia_grammar :=
-       match json |> member "xyntia_grammar" with
-       | `Null -> "auto"
-       | v -> to_string v);
+    apply_config_specs json;
     c_synthesizer := Synth_backends.select !c_synthesizer_name json;
-
-    g_total_timeout := json |> member "total_timeout" |> to_int |> float_of_int;
-
-    let sampling_str = json |> member "sampling_strategy" |> to_string in
-    (c_sampling_strategy :=
-       match sampling_str with
-       | "label" -> LabelValues
-       | "real" -> RealValues
-       | "wrong_naive" -> WrongNaive
-       | _ ->
-           failwith
-             (Format.sprintf
-                "Unknown sampling_strategy: %s (expected 'real' or 'label' or \
-                 'wrong_naive')"
-                sampling_str));
-    (c_branch_covering_samples :=
-       match json |> member "branch_covering_samples" with
-       | `Null -> true
-       | v -> to_bool v);
 
     (* Print configuration summary *)
     let pipeline =

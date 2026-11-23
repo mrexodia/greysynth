@@ -31,6 +31,12 @@ let available =
 
 let () =
   let x = var "x" 8 and y = var "y" 8 in
+  let load = E.load 1 Machine.LittleEndian x Libterm.Sexpr.Memory.root in
+  let load_rejected =
+    try ignore (P.create load); false
+    with Failure message -> String.length message > 0
+  in
+  require load_rejected "memory load entered the pure-expression proof graph";
   let identity = certificate x x [] in
   expect "proved_compositional" (P.verify ~original:x ~candidate:x identity);
   expect "error" (P.verify ~original:y ~candidate:x identity);

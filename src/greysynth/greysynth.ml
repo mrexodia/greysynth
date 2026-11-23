@@ -309,7 +309,7 @@ let rule_json src dst count extra =
      ]
     @ extra)
 
-let report_json ~initial_size ~total_time ?proof gt result =
+let report_json ~initial_size ~total_time ?proof ?(outside_proof_semantics = false) gt result =
   let equiv r = `String (equiv_to_str !r) in
   let costs expression =
     `Assoc
@@ -350,35 +350,12 @@ let report_json ~initial_size ~total_time ?proof gt result =
        ("has_timed_out", `Bool !g_has_timedout);
      ]
     @ ground_truth
+    @ (if outside_proof_semantics then
+         [ "proof_semantics", `String "outside_proof_semantics" ]
+       else [])
     @ (match proof with None -> [] | Some metadata -> ["proof_certificate", metadata])
+    @ Config.report_fields ()
     @ [
-        (* configuration *)
-        ("is_normalization_enabled", `Bool !c_normalization);
-        ("ac_normalization", `Bool !c_ac_normalization);
-        ("normalization_portfolio", `Bool !c_normalization_portfolio);
-        ("preprocessing_portfolio", `Bool !c_preprocessing_portfolio);
-        ("egraph_extraction", `Bool !c_egraph_extraction);
-        ("egraph_max_enodes", `Int !c_egraph_max_enodes);
-        ("egraph_max_iters", `Int !c_egraph_max_iters);
-        ("normalization_max_atoms", `Int !c_normalization_max_atoms);
-        ("mba_oracle", `String !c_mba_oracle);
-        ("mba_oracle_timeout", `Int !c_mba_oracle_timeout);
-        ("mba_oracle_calls", `Int !c_mba_oracle_calls);
-        ("cost_model", `String (string_of_cost_model !cost_model));
-        ("is_linear_enabled", `Bool !c_oes);
-        ("is_fast_simplify_enabled", `Bool !c_fast_simplify);
-        ("is_global_enabled", `Bool !c_global_synthesis);
-        ("is_chs_enabled", `Bool !c_chs);
-        ("local_cache", `Bool !c_local_cache);
-        ("oes_candidate_limit", `Int !c_oes_candidate_limit);
-        ("cegis_retries", `Int !c_cegis_retries);
-        ("learn_synthesis_rules", `Bool !c_learn_synthesis_rules);
-        ("branch_covering_samples", `Bool !c_branch_covering_samples);
-        ("chs_max_inputs", `Int !c_chs_max_inputs);
-        ("chs_max_horizon", `Int !c_chs_max_horizon);
-        ("synthesis_constant_limit", `Int !c_synthesis_constant_limit);
-        ("balanced_tree", `Bool !c_balanced_tree);
-        ("check_equiv", `Bool !c_check_equiv);
         ( "rewrite_validation",
           `String
             (if !c_reject_non_equiv_simplifications then "proved" else "sampled") );
@@ -433,18 +410,31 @@ let report_json ~initial_size ~total_time ?proof gt result =
 
 (* ── Entry point ───────────────────────────────────────────────── *)
 
+let rec contains_load = function
+  | Sexpr.Expr.Load _ -> true
+  | Sexpr.Expr.Unary { x; _ } -> contains_load x
+  | Sexpr.Expr.Binary { x; y; _ } -> contains_load x || contains_load y
+  | Sexpr.Expr.Ite { c; t; e; _ } ->
+      contains_load c || contains_load t || contains_load e
+  | _ -> false
+
 let run ?proof_output obf config gt =
   Logging.reset ();
   load_config_from_json config;
-  evaluator :=
-    Sample_evaluator.make ~variables:(Sample_evaluator.variables_of_expr obf)
-      ~seed:0 !c_nb_samples;
+  let outside_proof_semantics = contains_load obf in
+  if not outside_proof_semantics then
+    evaluator :=
+      Sample_evaluator.make ~variables:(Sample_evaluator.variables_of_expr obf)
+        ~seed:0 !c_nb_samples;
   log_obfuscated_expression := obf;
   g_start_time := Unix.gettimeofday ();
   g_has_timedout := false;
   Rewrite.reset ~original:obf ();
   Synthesis.reset_rule_cache ();
-  Option.iter (fun _ -> Rewrite.start_recording obf) proof_output;
+  if outside_proof_semantics then
+    Logging._log_warn "proof" "memory loads are outside the pure-expression proof semantics";
+  if not outside_proof_semantics then
+    Option.iter (fun _ -> Rewrite.start_recording obf) proof_output;
 
   let initial_size = size_of_expr obf in
   _log "greysynth" "input size=%d%s" initial_size
@@ -455,9 +445,9 @@ let run ?proof_output obf config gt =
   (* Checking does not require a separate ground truth: the input is the
      semantic reference when no ground truth was supplied. *)
   let reference = Some (Option.value gt ~default:obf) in
-  let result = run_passes reference obf in
+  let result = if outside_proof_semantics then obf else run_passes reference obf in
   let result =
-    if !c_normalization && not !g_has_timedout then
+    if not outside_proof_semantics && !c_normalization && not !g_has_timedout then
       try run_normalization result with Timeout_exception ->
         g_has_timedout := true;
         result
@@ -465,16 +455,21 @@ let run ?proof_output obf config gt =
   in
   (* final OES clean-up, skipped once out of time *)
   let result =
-    if !c_oes && not !g_has_timedout then
+    if not outside_proof_semantics && !c_oes && not !g_has_timedout then
       try oes_quiet result with Timeout_exception ->
         g_has_timedout := true;
         result
     else result
   in
-  check_equiv reference ~tag:"final" log_final_is_equiv result;
+  if not outside_proof_semantics then
+    check_equiv reference ~tag:"final" log_final_is_equiv result;
 
-  let proof = Option.map (fun path -> Rewrite.write_certificate path result) proof_output in
+  let proof =
+    if outside_proof_semantics then None
+    else Option.map (fun path -> Rewrite.write_certificate path result) proof_output
+  in
   let total_time = Unix.gettimeofday () -. !g_start_time in
   print_summary ~initial_size ~total_time gt result;
   Format.printf "%s\n"
-    (Yojson.Basic.pretty_to_string (report_json ~initial_size ~total_time ?proof gt result))
+    (Yojson.Basic.pretty_to_string
+       (report_json ~initial_size ~total_time ?proof ~outside_proof_semantics gt result))

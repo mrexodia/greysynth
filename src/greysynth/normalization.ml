@@ -11,6 +11,96 @@ let constant width value = E.constant (Bitvector.create value width)
 let integer width value = constant width (Z.of_int value)
 let zeros width = integer width 0
 
+let is_permutation_poly ~width coefficients =
+  if width < 2 then false
+  else
+    let coefficient degree =
+      Option.value (List.nth_opt coefficients degree) ~default:Z.zero
+    in
+    let odd value = Z.testbit value 0 in
+    let sum_with_parity parity =
+      List.mapi (fun degree value -> degree, value) coefficients
+      |> List.fold_left
+           (fun sum (degree, value) ->
+             if degree >= 2 && degree mod 2 = parity then Z.add sum value else sum)
+           Z.zero
+    in
+    odd (coefficient 1)
+    && not (odd (sum_with_parity 0))
+    && not (odd (sum_with_parity 1))
+
+let invert_permutation_poly ~width ~max_degree coefficients =
+  if not (is_permutation_poly ~width coefficients) || max_degree < 1 then None
+  else
+    let odd value = Z.testbit value 0 in
+    let modulus = Z.shift_left Z.one width in
+    let normalize value =
+      let value = Z.erem value modulus in
+      if Z.sign value < 0 then Z.add value modulus else value
+    in
+    let eval coefficients value =
+      List.rev coefficients
+      |> List.fold_left (fun result coefficient -> normalize (Z.add coefficient (Z.mul value result))) Z.zero
+    in
+    let derivative coefficients value =
+      coefficients |> List.mapi (fun degree coefficient -> degree, coefficient)
+      |> List.fold_left
+           (fun result (degree, coefficient) ->
+             if degree = 0 then result
+             else
+               let term =
+                 Z.mul (Z.of_int degree) coefficient
+                 |> fun coefficient -> Z.mul coefficient (Z.pow value (degree - 1))
+               in
+               normalize (Z.add result term))
+           Z.zero
+    in
+    let root = ref Z.zero in
+    for _ = 1 to width + 1 do
+      let slope = derivative coefficients !root in
+      if odd slope then
+        root := normalize (Z.sub !root (Z.mul (eval coefficients !root) (Z.invert slope modulus)))
+    done;
+    let poly_mul left right limit =
+      let result = Array.make (limit + 1) Z.zero in
+      List.iteri (fun i a ->
+          List.iteri (fun j b ->
+              if i + j <= limit then
+                result.(i + j) <- normalize (Z.add result.(i + j) (Z.mul a b))) right) left;
+      Array.to_list result
+    in
+    let compose source inverse limit =
+      let result = Array.make (limit + 1) Z.zero in
+      let power = ref (Z.one :: List.init limit (fun _ -> Z.zero)) in
+      List.iter
+        (fun coefficient ->
+          List.iteri (fun degree value ->
+              result.(degree) <- normalize (Z.add result.(degree) (Z.mul coefficient value))) !power;
+          power := poly_mul !power inverse limit)
+        source;
+      Array.to_list result
+    in
+    let inverse = ref [ !root ] in
+    let slope_inverse = Z.invert (derivative coefficients !root) modulus in
+    for degree = 1 to max_degree do
+      let padded = !inverse @ [ Z.zero ] in
+      let composed = compose coefficients padded degree in
+      let current = Option.value (List.nth_opt composed degree) ~default:Z.zero in
+      let target = if degree = 1 then Z.one else Z.zero in
+      inverse := padded |> List.mapi (fun index value ->
+          if index = degree then normalize (Z.mul (Z.sub target current) slope_inverse)
+          else value)
+    done;
+    let probes =
+      List.init 256 Z.of_int
+      @ List.init width (fun bit -> Z.shift_left Z.one bit)
+      @ [ Z.pred modulus ]
+    in
+    if List.for_all
+         (fun value -> Z.equal (eval !inverse (eval coefficients value)) (normalize value))
+         probes
+    then Some !inverse else None
+
 let rec constant_value = function
   | E.Cst value -> Some value
   | E.Unary { f; x; _ } ->
@@ -57,7 +147,7 @@ let bounded_count width value =
   let value = Bitvector.value_of value in
   if Z.geq value (Z.of_int width) then width else Z.to_int value
 
-let peepholes evaluate expression =
+let rec peepholes evaluate expression =
   let width = E.sizeof expression in
   let zero = zeros width and one = integer width 1 in
   let fill = constant width (Z.pred (Z.shift_left Z.one width)) in
@@ -66,9 +156,21 @@ let peepholes evaluate expression =
   | E.Unary { f = E.Not; x = E.Unary { f = E.Not; x; _ }; _ }
   | E.Unary { f = E.Minus; x = E.Unary { f = E.Minus; x; _ }; _ } -> [ x ]
   | E.Unary { f; x; _ } -> (
+      let composed =
+        match f, x with
+        | E.Uext outer, E.Unary { f = E.Uext inner; x = base; _ } ->
+            [ E.unary (E.Uext (outer + inner)) base ]
+        | E.Sext outer, E.Unary { f = E.Sext inner; x = base; _ } ->
+            [ E.unary (E.Sext (outer + inner)) base ]
+        | E.Restrict { lo = 0; hi },
+          E.Unary { f = (E.Uext _ | E.Sext _); x = base; _ }
+          when hi < E.sizeof base ->
+            [ if hi = E.sizeof base - 1 then base else E.restrict ~lo:0 ~hi base ]
+        | _ -> []
+      in
       match constant_value x with
-      | Some value -> (try [ E.constant (Term.Bv.unary f value) ] with _ -> [])
-      | None -> [])
+      | Some value -> composed @ (try [ E.constant (Term.Bv.unary f value) ] with _ -> [])
+      | None -> composed)
   | E.Binary { f; x; y; _ } ->
       let folded =
         match constant_value x, constant_value y with
@@ -152,7 +254,7 @@ let peepholes evaluate expression =
         | other, E.Unary { f = E.Minus; x; _ } -> same x other
         | _ -> false
       in
-      let null_quadratic () =
+      let null_falling_factorial () =
         let rec flatten coefficient factors = function
           | E.Binary { f = E.Mul; x; y; _ } ->
               let coefficient, factors = flatten coefficient factors x in
@@ -164,21 +266,115 @@ let peepholes evaluate expression =
               | None -> (coefficient, term :: factors))
         in
         let coefficient, factors = flatten Z.one [] expression in
-        let half = Z.shift_left Z.one (E.sizeof x - 1) in
-        let divisible = Z.equal (Z.erem coefficient half) Z.zero in
-        let pair =
-          match factors with
-          | [ first; E.Binary { f = E.Minus; x = second; y = one; _ } ]
-          | [ E.Binary { f = E.Minus; x = second; y = one; _ }; first ] ->
-              same first second && is_number Z.one one
-          | _ -> false
+        let factor = function
+          | E.Binary { f = E.Minus; x = base; y = E.Cst offset; _ } ->
+              Some (base, Z.to_int (Bitvector.value_of offset))
+          | base -> Some (base, 0)
         in
-        if divisible && pair then [ zero ] else []
+        let parsed = List.filter_map factor factors in
+        match parsed with
+        | [] -> []
+        | (base, _) :: _ ->
+            let offsets =
+              parsed
+              |> List.filter_map (fun (other, offset) -> if same base other then Some offset else None)
+              |> List.sort_uniq Int.compare
+            in
+            let degree = List.length factors in
+            let rec range from upto = if from = upto then [] else from :: range (from + 1) upto in
+            if degree < 2 || degree > 8 || offsets <> range 0 degree then []
+            else
+              let rec v2_factorial n power total =
+                if power > n then total
+                else v2_factorial n (power * 2) (total + (n / power))
+              in
+              let valuation = v2_factorial degree 2 0 in
+              let divisor = Z.shift_left Z.one (max 0 (width - valuation)) in
+              if Z.equal (Z.erem coefficient divisor) Z.zero then [ zero ] else []
+      in
+      let mask_compositions () =
+        let nested op = function
+          | E.Binary { f; x = base; y = E.Cst mask; _ } when f = op -> Some (base, mask)
+          | E.Binary { f; x = E.Cst mask; y = base; _ } when f = op -> Some (base, mask)
+          | _ -> None
+        in
+        match f, nested f x, constant_value y with
+        | E.And, Some (base, first), Some second ->
+            [ E.binary E.And base (E.constant (Bitvector.logand first second)) ]
+        | E.Or, Some (base, first), Some second ->
+            [ E.binary E.Or base (E.constant (Bitvector.logor first second)) ]
+        | E.Xor, Some (base, first), Some second ->
+            [ E.binary E.Xor base (E.constant (Bitvector.logxor first second)) ]
+        | _ -> []
+      in
+      let complementary_masks () =
+        let masked = function
+          | E.Binary { f = E.And; x = base; y = E.Cst mask; _ }
+          | E.Binary { f = E.And; x = E.Cst mask; y = base; _ } -> Some (base, mask)
+          | _ -> None
+        in
+        match masked x, masked y with
+        | Some (left, left_mask), Some (right, right_mask)
+          when same left right
+               && Bitvector.equal left_mask (Bitvector.lognot right_mask) -> [ left ]
+        | _ -> []
+      in
+      let branchless_select () =
+        let signed_condition = function
+          | E.Unary { f = E.Sext _; x = condition; _ } when E.sizeof condition = 1 ->
+              Some condition
+          | _ -> None
+        in
+        match f with
+        | E.Xor ->
+            let select masked fallback =
+              match masked with
+              | E.Binary { f = E.And; x = E.Binary { f = E.Xor; x = a; y = b; _ };
+                           y = mask; _ }
+                when same fallback b ->
+                  Option.map (fun condition -> E.ite condition a b) (signed_condition mask)
+              | _ -> None
+            in
+            List.filter_map Fun.id [ select x y; select y x ]
+        | E.Or ->
+            let masked = function
+              | E.Binary { f = E.And; x = value; y = mask; _ } -> Some (value, mask)
+              | _ -> None
+            in
+            (match masked x, masked y with
+            | Some (a, mask), Some (b, E.Unary { f = E.Not; x = other; _ })
+              when same mask other ->
+                Option.to_list (Option.map (fun c -> E.ite c a b) (signed_condition mask))
+            | _ -> [])
+        | E.Plus ->
+            let select base = function
+              | E.Binary { f = E.And; x = E.Binary { f = E.Minus; x = b; y = a; _ };
+                           y = mask; _ }
+                when same base a ->
+                  Option.map (fun c -> E.ite c b a) (signed_condition mask)
+              | _ -> None
+            in
+            List.filter_map Fun.id [ select x y; select y x ]
+        | _ -> []
+      in
+      let shift_mask () =
+        match f, x, constant_value y with
+        | E.Lsl, E.Binary { f = E.Lsr; x = base; y = amount; _ }, Some left_amount ->
+            (match constant_value amount with
+            | Some right_amount when Bitvector.equal left_amount right_amount ->
+                let count = bounded_count width left_amount in
+                if count > 0 && count < width then
+                  let low = Z.pred (Z.shift_left Z.one count) in
+                  [ E.binary E.And base (constant width (Z.lognot low)) ]
+                else []
+            | _ -> [])
+        | _ -> []
       in
       let identities =
         match f with
-        | E.Mul when null_quadratic () <> [] -> null_quadratic ()
+        | E.Mul when null_falling_factorial () <> [] -> null_falling_factorial ()
         | E.And when complements x y -> [ zero ]
+        | E.And | E.Or | E.Xor when complementary_masks () <> [] -> complementary_masks ()
         | E.Or | E.Xor when complements x y -> [ fill ]
         | E.Plus when complements x y -> [ fill ]
         | E.Plus when negates x y -> [ zero ]
@@ -258,15 +454,51 @@ let peepholes evaluate expression =
               | _ -> [])
         | _ -> []
       in
-      folded @ identities
+      folded @ mask_compositions () @ branchless_select () @ shift_mask () @ identities
   | E.Ite { c; t; e; _ } ->
       if same t e then [ t ]
       else
+        let rec substitute target replacement = function
+          | expression when same expression target -> replacement
+          | E.Unary { f; x; _ } -> E.unary f (substitute target replacement x)
+          | E.Binary { f; x; y; _ } ->
+              E.binary f (substitute target replacement x) (substitute target replacement y)
+          | E.Ite { c; t; e; _ } ->
+              E.ite (substitute target replacement c)
+                (substitute target replacement t) (substitute target replacement e)
+          | expression -> expression
+        in
+        let rec fold expression =
+          let rebuilt =
+            match expression with
+            | E.Unary { f; x; _ } -> E.unary f (fold x)
+            | E.Binary { f; x; y; _ } -> E.binary f (fold x) (fold y)
+            | E.Ite { c; t; e; _ } -> E.ite (fold c) (fold t) (fold e)
+            | expression -> expression
+          in
+          match peepholes evaluate rebuilt with candidate :: _ -> candidate | [] -> rebuilt
+        in
+        let structural =
+          match c, t, e with
+          | E.Unary { f = E.Not; x = condition; _ }, _, _ -> [ E.ite condition e t ]
+          | E.Binary { f = E.Diff; x; y; _ }, _, _ ->
+              [ E.ite (E.binary E.Eq x y) e t ]
+          | condition, E.Ite { c = nested; t = yes; _ }, _ when same condition nested ->
+              [ E.ite condition yes e ]
+          | condition, _, E.Ite { c = nested; e = no; _ } when same condition nested ->
+              [ E.ite condition t no ]
+          | E.Binary { f = E.Eq; x = variable; y = (E.Cst _ as value); _ }, _, _
+          | E.Binary { f = E.Eq; x = (E.Cst _ as value); y = variable; _ }, _, _ ->
+              let reduced = fold (substitute variable value t) in
+              if same reduced t then [] else [ E.ite c reduced e ]
+          | _ -> []
+        in
         let branch_width = E.sizeof t in
         let condition_mask =
           if E.sizeof c = 1 then Some (E.unary (E.Sext (branch_width - 1)) c)
           else None
         in
+        structural @
         (match constant_value c with
         | Some condition -> [ if Bitvector.is_zeros condition then e else t ]
         | None when branch_width = 1 && is_number Z.one t && is_number Z.zero e -> [ c ]
@@ -1004,6 +1236,109 @@ let ring_polynomial_candidate cost expression =
       if cost candidate < cost expression then Some candidate else None
   with Ring_candidate_too_complex -> None
 
+let reduce_univariate_null_polynomial cost expression =
+  let width = E.sizeof expression and maximum_degree = 8 in
+  let modulus = Z.shift_left Z.one width in
+  let normalize value =
+    let value = Z.erem value modulus in
+    if Z.sign value < 0 then Z.add value modulus else value
+  in
+  let zero_poly () = Array.make (maximum_degree + 1) Z.zero in
+  let add left right = Array.init (maximum_degree + 1)
+      (fun degree -> normalize (Z.add left.(degree) right.(degree))) in
+  let neg value = Array.map (fun coefficient -> normalize (Z.neg coefficient)) value in
+  let mul left right =
+    let result = zero_poly () in
+    for i = 0 to maximum_degree do
+      for j = 0 to maximum_degree - i do
+        result.(i + j) <- normalize
+            (Z.add result.(i + j) (Z.mul left.(i) right.(j)))
+      done
+    done;
+    result
+  in
+  let variable = ref None and invalid = ref false in
+  let rec parse = function
+    | E.Cst value -> let result = zero_poly () in result.(0) <- Bitvector.value_of value; result
+    | E.Var _ as value ->
+        (match !variable with
+        | None -> variable := Some value
+        | Some previous when E.is_equal previous value -> ()
+        | Some _ -> invalid := true);
+        let result = zero_poly () in result.(1) <- Z.one; result
+    | E.Unary { f = E.Minus; x; _ } -> neg (parse x)
+    | E.Binary { f = E.Plus; x; y; _ } -> add (parse x) (parse y)
+    | E.Binary { f = E.Minus; x; y; _ } -> add (parse x) (neg (parse y))
+    | E.Binary { f = E.Mul; x; y; _ } -> mul (parse x) (parse y)
+    | _ -> invalid := true; zero_poly ()
+  in
+  let powers = parse expression in
+  let degree = ref 0 in
+  Array.iteri (fun index coefficient -> if not (Z.equal coefficient Z.zero) then degree := index) powers;
+  match !variable with
+  | None -> None
+  | Some _ when !invalid || !degree < 2 || !degree > maximum_degree -> None
+  | Some variable ->
+      let stirling = Array.make_matrix (maximum_degree + 1) (maximum_degree + 1) Z.zero in
+      stirling.(0).(0) <- Z.one;
+      for n = 1 to maximum_degree do
+        for k = 1 to n do
+          stirling.(n).(k) <- Z.add stirling.(n - 1).(k - 1)
+              (Z.mul (Z.of_int k) stirling.(n - 1).(k))
+        done
+      done;
+      let falling_coefficients = Array.make (maximum_degree + 1) Z.zero in
+      for k = 0 to !degree do
+        for power = k to !degree do
+          falling_coefficients.(k) <- normalize
+              (Z.add falling_coefficients.(k)
+                 (Z.mul powers.(power) stirling.(power).(k)))
+        done
+      done;
+      let falling degree =
+        let rec build index result =
+          if index = degree then result
+          else
+            let factor =
+              if index = 0 then variable
+              else E.binary E.Minus variable (integer width index)
+            in
+            build (index + 1)
+              (match result with None -> Some factor
+               | Some product -> Some (E.binary E.Mul product factor))
+        in
+        Option.get (build 0 None)
+      in
+      let dropped = ref [] and kept = ref [] in
+      for k = 0 to !degree do
+        let coefficient = falling_coefficients.(k) in
+        if not (Z.equal coefficient Z.zero) then
+          let basis = if k = 0 then integer width 1 else falling k in
+          let term =
+            if Z.equal coefficient Z.one then basis
+            else E.binary E.Mul (constant width coefficient) basis
+          in
+          if k >= 2 then (
+            let rec v2 power total =
+              if power > k then total else v2 (power * 2) (total + (k / power))
+            in
+            let divisor = Z.shift_left Z.one (max 0 (width - v2 2 0)) in
+            if Z.equal (Z.erem coefficient divisor) Z.zero then dropped := term :: !dropped
+            else kept := term :: !kept)
+          else kept := term :: !kept
+      done;
+      if !dropped = [] then None
+      else
+        let sum = function
+          | [] -> zeros width
+          | head :: tail -> List.fold_left (E.binary E.Plus) head tail
+        in
+        let reduced = sum (List.rev !kept) in
+        let expanded = sum (List.rev_append !kept !dropped) in
+        if cost reduced >= cost expression then None
+        else Some (reduced, List.map (fun term -> term, zeros width) !dropped,
+                   [ expression, expanded ])
+
 let minterm_polynomial_candidate cost expression =
   Option.bind (minterm_ring_expansion expression expression)
     (fun (equalities, ring_equalities, expanded, _) ->
@@ -1564,10 +1899,16 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
         in
         candidates := proposal :: !candidates)
       (canonical_candidates expression);
-  if cost expression >= 5 then
+  if cost expression >= 5 then (
+    Option.iter
+      (fun (candidate, equalities, ring_equalities) ->
+        candidates :=
+          { expr = candidate; pass = "falling-null"; equalities; ring_equalities;
+            allow_equal_cost = false } :: !candidates)
+      (reduce_univariate_null_polynomial cost expression);
     Option.iter
       (fun candidate -> candidates := ring "ring-polynomial" candidate :: !candidates)
-      (ring_polynomial_candidate cost expression);
+      (ring_polynomial_candidate cost expression));
   Option.iter
     (fun (candidate, equalities, ring_equalities) ->
       candidates :=
@@ -1807,17 +2148,29 @@ let run expression =
                      ~equalities ~ring_equalities original candidate
                | None -> Rewrite.accepts ~pass original candidate
            in
+           let early_null =
+             match reduce_univariate_null_polynomial cost original with
+             | Some (candidate, equalities, ring_equalities)
+               when Rewrite.accepts_compositional ~pass:"falling-null"
+                      ~equalities ~ring_equalities original candidate -> Some candidate
+             | _ ->
+                 peepholes constants.eval original
+                 |> List.find_opt (fun candidate ->
+                        is_number Z.zero candidate
+                        && cost candidate < cost original
+                        && Rewrite.accepts ~pass:"falling-null" original candidate)
+           in
            let early_minterm =
-             if cost original < 11 then None
+             if Option.is_some early_null || cost original < 11 then None
              else
                Sample_evaluator.variables_of_expr original
                |> List.map (fun (name, width) -> E.var name width name)
                |> List.filter (fun candidate -> cost candidate < cost original)
                |> List.find_opt (accept_minterm "minterm-ring-mba")
            in
-           (match early_minterm with
-           | Some candidate -> current := visit candidate
-           | None ->
+           (match early_null, early_minterm with
+           | Some candidate, _ | None, Some candidate -> current := visit candidate
+           | None, None ->
                current := (match original with
                  | E.Unary { f; x; _ } -> E.unary f (visit ~allow_oracle x)
                  | E.Binary { f; x; y; _ } ->
