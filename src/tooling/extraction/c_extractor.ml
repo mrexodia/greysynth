@@ -107,20 +107,20 @@ let fold_binary op (e1 : Sexpr.Expr.t) (e2 : Sexpr.Expr.t) : Sexpr.Expr.t =
         | Sexpr.Expr.Or -> Z.logor v1 v2
         | Sexpr.Expr.Xor -> Z.logxor v1 v2
         | Sexpr.Expr.Lsl ->
-            let shift = Z.to_int v2 in
-            if shift >= size then Z.zero else Z.shift_left v1 shift
+            if Z.geq v2 (Z.of_int size) then Z.zero
+            else Z.shift_left v1 (Z.to_int v2)
         | Sexpr.Expr.Lsr ->
-            let shift = Z.to_int v2 in
-            if shift >= size then Z.zero else Z.shift_right v1 shift
+            if Z.geq v2 (Z.of_int size) then Z.zero
+            else Z.shift_right v1 (Z.to_int v2)
         | Sexpr.Expr.Asr ->
             (* Arithmetic shift right - need to handle sign bit *)
-            let shift = Z.to_int v2 in
-            if shift >= size then
+            if Z.geq v2 (Z.of_int size) then
               (* Fill with sign bit *)
               if Z.testbit v1 (size - 1) then
                 Z.sub (Z.shift_left Z.one size) Z.one (* all 1s *)
               else Z.zero
             else
+              let shift = Z.to_int v2 in
               let sign_bit = Z.testbit v1 (size - 1) in
               let shifted = Z.shift_right v1 shift in
               if sign_bit then

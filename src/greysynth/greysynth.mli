@@ -21,7 +21,7 @@
 
 (** GreySynth: simplification of obfuscated (MBA) expressions. *)
 
-val run_normalization : Sexpr.Expr.t -> Sexpr.Expr.t
+val run_normalization : ?deadline:float -> Sexpr.Expr.t -> Sexpr.Expr.t
 (** Run the configured deterministic normalizer, optionally racing the
     baseline and AC variants and returning the cheaper proved result. *)
 

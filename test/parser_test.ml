@@ -68,5 +68,9 @@ let () =
         try ignore (String_to_sexpr.parse source); false with Failure _ -> true
       in
       require rejected ("invalid input accepted: " ^ source))
-    ["x<0>"; "uext(8 x"; "restrict(1 2) x"; "restrict(7,8) x<8>"; "x && y"; "x || y"];
+    ["x<0>"; "uext(8 x"; "restrict(1 2) x"; "restrict(7,8) x<8>";
+     "uext(18446744073709551615) x";
+     "restrict(0,18446744073709551615) x";
+     "x ** 18446744073709551615"; "x ** 4097";
+     "x && y"; "x || y"];
   Printf.printf "parser: operator/name round-trips and semantic regressions passed\n"

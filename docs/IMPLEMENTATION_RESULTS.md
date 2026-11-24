@@ -479,3 +479,28 @@ unchanged. Eight-worker runs oversubscribe the host on these solver-heavy cases,
 so four workers plus isolated replay is the reproducible final protocol.
 
 All 72 PLAN checklist items are complete.
+
+## Round-18 post-audit fixes
+
+Round 18 removes every unguarded bitvector-to-host integer conversion found by
+the full audit; all 13 former PLDI Poly `Z.Overflow` cases now complete and
+independently replay. Large roots receive a proved constant check and OES-first
+scheduling, normalization has a 60%-remaining soft deadline, and cleanup yields
+to OES when less than four seconds remain. Loki 993/548/792 now reduce to size
+3, and QSynth 163/393/288 to size 1.
+
+Equal-coefficient Boolean reconstruction, bounded opaque-component partitioning,
+and complement/residual cleanup produce focused replayed results of size 7/4
+for linear 788/973, size 3/3 for nonlinear 949/911, and size 4/5 for Non-Poly
+984/938. Candidate generation remains guarded by atom count, variable count,
+root size, and cooperative traversal limits.
+
+The exact final eight-worker raw audit establishes 6,760/7,011 rows; the only
+251 errors are the known malformed Loki row and 250 raw Full-Loki rows. There
+are zero refutations, unknowns, or unresolved contention timeouts after isolated
+rerun of the affected cases. Aggregate buckets are 4,756 solved / 1,665
+meaningful / 339 weak / 251 malformed, with 1.3441x geometric output/GT quality.
+The benchmarking-only sanitized Full-Loki copy establishes 499/500 rows with
+409 solved, 53 meaningful, 37 weak, one malformed, and 1.3307x quality. The
+C-Full contention sanity cases remain proved compositional (`target_1568:
+27869 -> 19`, `target_5504: 31865 -> 3745`).

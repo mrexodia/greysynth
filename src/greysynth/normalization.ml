@@ -153,6 +153,11 @@ let rec peepholes evaluate expression =
   let fill = constant width (Z.pred (Z.shift_left Z.one width)) in
   let same = E.is_equal in
   match expression with
+  | E.Unary { f = E.Not;
+              x = E.Binary { f = E.Minus; x = base; y = one; _ }; _ }
+    when is_number Z.one one -> [ E.unary E.Minus base ]
+  | E.Unary { f = E.Not; x = E.Unary { f = E.Minus; x = base; _ }; _ } ->
+      [ E.binary E.Minus base (integer (E.sizeof base) 1) ]
   | E.Unary { f = E.Not; x = E.Unary { f = E.Not; x; _ }; _ }
   | E.Unary { f = E.Minus; x = E.Unary { f = E.Minus; x; _ }; _ } -> [ x ]
   | E.Unary { f; x; _ } -> (
@@ -254,6 +259,19 @@ let rec peepholes evaluate expression =
         | other, E.Unary { f = E.Minus; x; _ } -> same x other
         | _ -> false
       in
+      let complement_offsets () =
+        match f, x, y with
+        | E.Plus, E.Unary { f = E.Not; x = base; _ }, one
+          when is_number Z.one one -> [ E.unary E.Minus base ]
+        | E.Plus, one, E.Unary { f = E.Not; x = base; _ }
+          when is_number Z.one one -> [ E.unary E.Minus base ]
+        | E.Minus, E.Unary { f = E.Minus; x = base; _ }, one
+          when is_number Z.one one -> [ E.unary E.Not base ]
+        | E.Minus, fill, base
+          when is_number (Z.pred (Z.shift_left Z.one width)) fill ->
+            [ E.unary E.Not base ]
+        | _ -> []
+      in
       let null_falling_factorial () =
         let rec flatten coefficient factors = function
           | E.Binary { f = E.Mul; x; y; _ } ->
@@ -268,7 +286,9 @@ let rec peepholes evaluate expression =
         let coefficient, factors = flatten Z.one [] expression in
         let factor = function
           | E.Binary { f = E.Minus; x = base; y = E.Cst offset; _ } ->
-              Some (base, Z.to_int (Bitvector.value_of offset))
+              let value = Bitvector.value_of offset in
+              if Z.leq value (Z.of_int 8) then Some (base, Z.to_int value)
+              else None
           | base -> Some (base, 0)
         in
         let parsed = List.filter_map factor factors in
@@ -378,6 +398,7 @@ let rec peepholes evaluate expression =
         | E.Or | E.Xor when complements x y -> [ fill ]
         | E.Plus when complements x y -> [ fill ]
         | E.Plus when negates x y -> [ zero ]
+        | E.Plus | E.Minus when complement_offsets () <> [] -> complement_offsets ()
         | E.Plus when merge_scaled_masks () <> [] -> merge_scaled_masks ()
         | E.Plus when merge_masked_addition () <> [] -> merge_masked_addition ()
         | E.Plus when is_number Z.zero x -> [ y ]
@@ -568,10 +589,12 @@ let canonical_candidates expression =
         | E.Binary { f = E.Mul; x = E.Cst value; y; _ }
         | E.Binary { f = E.Mul; x = y; y = E.Cst value; _ } ->
             collect (Z.mul coefficient (Bitvector.value_of value)) y
-        | E.Binary { f = E.Lsl; x; y = E.Cst amount; _ }
-          when Z.lt (Bitvector.value_of amount) (Z.of_int width) ->
-            let scale = Z.shift_left Z.one (Z.to_int (Bitvector.value_of amount)) in
-            collect (Z.mul coefficient scale) x
+        | (E.Binary { f = E.Lsl; x; y = E.Cst amount; _ } as atom) ->
+            let count = bounded_count width amount in
+            if count < width then
+              let scale = Z.shift_left Z.one count in
+              collect (Z.mul coefficient scale) x
+            else add atom coefficient
         | atom -> add atom coefficient
       in
       collect Z.one expression;
@@ -653,7 +676,7 @@ let canonical_candidates expression =
         [ build_balanced E.Mul (sorted terms) ]
   | _ -> []
 
-let minterm_ring_expansion original candidate =
+let minterm_ring_expansion ?(opaque_atoms = []) original candidate =
   let width = E.sizeof original in
   if E.sizeof candidate <> width then None
   else
@@ -671,6 +694,7 @@ let minterm_ring_expansion original candidate =
       | expression -> add_atom expression
     and collect_arithmetic expression =
       if Sexpr.BvTbl.mem atom_table expression then ()
+      else if List.exists (E.is_equal expression) opaque_atoms then add_atom expression
       else
         match expression with
         | E.Cst _ -> ()
@@ -815,12 +839,12 @@ let minterm_ring_expansion original candidate =
                   Option.map (fun y -> E.binary op x y) (expand y))
           | E.Binary { f = E.Lsl; x; y; _ } ->
               (match constant_value y with
-              | Some amount when Z.lt (Bitvector.value_of amount) (Z.of_int width) ->
+              | Some amount when bounded_count width amount < width ->
                   Option.map
                     (fun expanded_x ->
                       let power =
                         constant width
-                          (Z.shift_left Z.one (Z.to_int (Bitvector.value_of amount)))
+                          (Z.shift_left Z.one (bounded_count width amount))
                       in
                       let unexpanded = E.binary E.Mul x power in
                       smt_edges := (expression, unexpanded) :: !smt_edges;
@@ -836,10 +860,10 @@ let minterm_ring_expansion original candidate =
                left, right))
             (expand candidate))
 
-let minterm_ring_proof original candidate =
+let minterm_ring_proof ?(opaque_atoms = []) original candidate =
   Option.map
     (fun (equalities, ring_equalities, _, _) -> (equalities, ring_equalities))
-    (minterm_ring_expansion original candidate)
+    (minterm_ring_expansion ~opaque_atoms original candidate)
 
 (* Break constant-scaled complements into small replayable algebraic steps.
    This avoids one monolithic bit-blasted proof for otherwise linear MBAs. *)
@@ -908,16 +932,17 @@ type form =
 
 exception Too_complex
 
-let linear_candidates cost expression =
+let linear_candidates ?(opaque_atoms = []) cost expression =
   let width = E.sizeof expression in
   let modulus = Z.shift_left Z.one width in
   let mask = Z.pred modulus in
   let normalize value = Z.logand value mask in
   let atoms = ref [] in
+  let saw_nonlinear = ref false in
   let visited = ref 0 in
   let tick () =
     incr visited;
-    let visit_limit = max 512 (8 * (1 lsl min 10 !c_normalization_max_atoms)) in
+    let visit_limit = max 4096 (16 * (1 lsl min 10 !c_normalization_max_atoms)) in
     if !visited > visit_limit then raise Too_complex;
     if !visited mod 32 = 0 then check_timeout ()
   in
@@ -938,7 +963,8 @@ let linear_candidates cost expression =
   in
   let rec linear expression =
     tick ();
-    match expression with
+    if List.exists (E.is_equal expression) opaque_atoms then atom expression
+    else match expression with
     | E.Cst value -> Number (Bitvector.value_of value)
     | E.Unary { f = E.Minus; x; _ } -> Scale (mask, linear x)
     | E.Unary { f = E.Not; x; _ } -> Not (linear x)
@@ -948,7 +974,7 @@ let linear_candidates cost expression =
         match constant_value x, constant_value y with
         | Some k, _ -> Scale (Bitvector.value_of k, linear y)
         | _, Some k -> Scale (Bitvector.value_of k, linear x)
-        | _ -> atom expression)
+        | _ -> saw_nonlinear := true; atom expression)
     | E.Binary { f = E.Lsl; x; y; _ } -> (
         match constant_value y with
         | Some count ->
@@ -959,7 +985,8 @@ let linear_candidates cost expression =
     | _ -> boolean expression
   and boolean expression =
     tick ();
-    match expression with
+    if List.exists (E.is_equal expression) opaque_atoms then atom expression
+    else match expression with
     | E.Cst value when Bitvector.is_zeros value || Bitvector.is_fill value ->
         Number (Bitvector.value_of value)
     | E.Unary { f = E.Not; x; _ } -> Not (boolean x)
@@ -1062,6 +1089,35 @@ let linear_candidates cost expression =
             offer candidate)
           (boolean_candidates truth)
     | _ -> ());
+    let rec obvious_minterm = function
+      | E.Var _ | E.Unary { f = E.Not; x = E.Var _; _ } -> true
+      | E.Binary { f = E.And; x; y; _ } -> obvious_minterm x && obvious_minterm y
+      | _ -> false
+    in
+    let rec obvious_grouped_sum = function
+      | E.Binary { f = E.Plus; x; y; _ } -> obvious_grouped_sum x && obvious_grouped_sum y
+      | E.Binary { f = E.Mul; x = E.Cst _; y; _ }
+      | E.Binary { f = E.Mul; x = y; y = E.Cst _; _ } -> obvious_minterm y
+      | term -> obvious_minterm term
+    in
+    if not !saw_nonlinear && count <= min 6 !c_normalization_max_atoms
+       && List.length distinct <= 8
+       && (cost expression >= 300 || obvious_grouped_sum expression) then (
+      let grouped =
+        distinct
+        |> List.filter (fun value -> not (Z.equal value Z.zero))
+        |> List.filter_map (fun value ->
+               let truth = Array.map (Z.equal value) target in
+               match
+                 boolean_candidates truth
+                 |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+               with
+               | boolean :: _ -> Some (scale value boolean)
+               | [] -> None)
+      in
+      match grouped with
+      | [] -> ()
+      | terms -> offer (build_balanced E.Plus terms));
     let affine candidate form =
       check_timeout ();
       let values = table form in
@@ -1127,6 +1183,89 @@ let linear_candidates cost expression =
     offer (Option.value !result ~default:(zeros width));
     !results
   with Too_complex -> []
+
+let component_linear_candidates cost expression =
+  if cost expression > 256
+     || List.length (Sample_evaluator.variables_of_expr expression) > 2
+  then []
+  else
+  let rec additive sign = function
+    | E.Binary { f = E.Plus; x; y; _ } -> additive sign x @ additive sign y
+    | E.Binary { f = E.Minus; x; y; _ } -> additive sign x @ additive (not sign) y
+    | E.Unary { f = E.Minus; x; _ } -> additive (not sign) x
+    | term -> [ if sign then term else E.unary E.Minus term ]
+  in
+  let terms = additive true expression |> Array.of_list in
+  if Array.length terms < 3 || Array.length terms > 64 then []
+  else
+    let opaque = Nodes.create 16 in
+    let arithmetic = function
+      | E.Binary { f = (E.Plus | E.Minus | E.Mul | E.Lsl); _ }
+      | E.Unary { f = E.Minus; _ } -> true
+      | _ -> false
+    in
+    let rec inspect under_bitwise term_index expression =
+      if under_bitwise && arithmetic expression then (
+        let indices = Option.value (Nodes.find_opt opaque expression) ~default:[] in
+        if not (List.mem term_index indices) then
+          Nodes.replace opaque expression (term_index :: indices))
+      else
+        match expression with
+        | E.Unary { f = E.Not; x; _ } -> inspect true term_index x
+        | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+            inspect true term_index x; inspect true term_index y
+        | E.Unary { x; _ } -> inspect under_bitwise term_index x
+        | E.Binary { x; y; _ } ->
+            inspect under_bitwise term_index x; inspect under_bitwise term_index y
+        | E.Ite { c; t; e; _ } ->
+            inspect under_bitwise term_index c;
+            inspect under_bitwise term_index t;
+            inspect under_bitwise term_index e
+        | _ -> ()
+    in
+    Array.iteri (fun index term -> inspect false index term) terms;
+    let groups =
+      Nodes.fold
+        (fun opaque_atom indices result ->
+          let indices = List.sort_uniq Int.compare indices in
+          if List.length indices >= 2 && List.length indices < Array.length terms
+          then (opaque_atom, indices) :: result else result)
+        opaque []
+      |> List.sort_uniq Stdlib.compare
+    in
+    let sum = function
+      | [] -> zeros (E.sizeof expression)
+      | head :: tail -> List.fold_left (E.binary E.Plus) head tail
+    in
+    groups
+    |> List.filter_map (fun (opaque_atom, indices) ->
+           let selected = List.map (Array.get terms) indices in
+           let component = sum selected in
+           let proposals = linear_candidates ~opaque_atoms:[ opaque_atom ] cost component in
+           match
+             proposals
+             |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+           with
+           | candidate :: _ when cost candidate < cost component ->
+               let selected_set = Hashtbl.create (List.length indices) in
+               List.iter (fun index -> Hashtbl.add selected_set index ()) indices;
+               let remainder =
+                 Array.to_list terms
+                 |> List.mapi (fun index term -> index, term)
+                 |> List.filter_map (fun (index, term) ->
+                        if Hashtbl.mem selected_set index then None else Some term)
+               in
+               let rebuilt = sum (candidate :: remainder) in
+               if cost rebuilt >= cost expression then None
+               else
+                 let equalities, component_ring =
+                   Option.value
+                     (minterm_ring_proof ~opaque_atoms:[ opaque_atom ] component candidate)
+                     ~default:([ component, candidate ], [])
+                 in
+                 Some (rebuilt, equalities,
+                       (expression, sum (component :: remainder)) :: component_ring)
+           | _ -> None)
 
 (* A first proof-decomposed polynomial identity. The direct 64-bit obligation
    routinely times out because it contains multiplication. The local Boolean
@@ -1639,6 +1778,54 @@ let rec product_partition_candidate expression =
               | _ -> None))
   | _ -> None
 
+let complement_linear_candidate cost expression =
+  let equalities = ref [] in
+  let rec rewrite expression =
+    let rebuilt =
+      match expression with
+      | E.Unary { f; x; _ } -> E.unary f (rewrite x)
+      | E.Binary { f; x; y; _ } -> E.binary f (rewrite x) (rewrite y)
+      | E.Ite { c; t; e; _ } -> E.ite (rewrite c) (rewrite t) (rewrite e)
+      | expression -> expression
+    in
+    let complement =
+      match rebuilt with
+      | E.Unary { f = E.Not;
+                  x = E.Binary { f = E.Minus; x = base; y = one; _ }; _ }
+        when is_number Z.one one -> Some (E.unary E.Minus base)
+      | E.Unary { f = E.Not; x = E.Unary { f = E.Minus; x = base; _ }; _ } ->
+          Some (E.binary E.Minus base (integer (E.sizeof base) 1))
+      | E.Binary { f = E.Plus; x = E.Unary { f = E.Not; x = base; _ }; y = one; _ }
+        when is_number Z.one one -> Some (E.unary E.Minus base)
+      | E.Binary { f = E.Plus; x = one; y = E.Unary { f = E.Not; x = base; _ }; _ }
+        when is_number Z.one one -> Some (E.unary E.Minus base)
+      | E.Binary { f = E.Minus; x = E.Unary { f = E.Minus; x = base; _ };
+                   y = one; _ }
+        when is_number Z.one one -> Some (E.unary E.Not base)
+      | _ -> None
+    in
+    match complement with
+    | Some candidate -> equalities := (rebuilt, candidate) :: !equalities; candidate
+    | None ->
+        (match product_partition_candidate rebuilt with
+        | Some (candidate, edges) when cost candidate < cost rebuilt ->
+            equalities := edges @ !equalities;
+            candidate
+        | _ -> rebuilt)
+  in
+  let transformed = rewrite expression in
+  match
+    linear_candidates cost transformed
+    |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+  with
+  | candidate :: _ when cost candidate < cost expression ->
+      let proof_equalities, ring_equalities =
+        Option.value (minterm_ring_proof transformed candidate)
+          ~default:([ transformed, candidate ], [])
+      in
+      Some (candidate, List.rev_append !equalities proof_equalities, ring_equalities)
+  | _ -> None
+
 let bitsliced_candidate cost expression =
   let width = E.sizeof expression in
   let variables = Sample_evaluator.variables_of_expr expression in
@@ -2008,6 +2195,22 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
             || Nodes.mem seen candidate.expr then false
          else (Nodes.add seen candidate.expr (); true))
 
+let linear_mba_compatible expression =
+  let width = E.sizeof expression in
+  let rec inspect = function
+    | E.Var variable -> variable.size = width
+    | E.Cst value -> Bitvector.size_of value = width
+    | E.Unary { f = (E.Not | E.Minus); x; _ } -> inspect x
+    | E.Binary { f = (E.Plus | E.Minus | E.And | E.Or | E.Xor); x; y; _ } ->
+        inspect x && inspect y
+    | E.Binary { f = E.Mul; x; y; _ } ->
+        (Option.is_some (constant_value x) && inspect y)
+        || (Option.is_some (constant_value y) && inspect x)
+    | E.Binary { f = E.Lsl; x; y = E.Cst _; _ } -> inspect x
+    | _ -> false
+  in
+  inspect expression
+
 let oracle_compatible expression =
   let width = E.sizeof expression in
   let rec inspect = function
@@ -2115,7 +2318,15 @@ let oracle_candidate expression =
           Logging._log_warn "mba-oracle" "%s" (Printexc.to_string exn);
           None
 
-let run expression =
+exception Soft_normalization_stop
+
+let run ?deadline expression =
+  let check_timeout () =
+    Config.check_timeout ();
+    match deadline with
+    | Some limit when Unix.gettimeofday () >= limit -> raise Soft_normalization_stop
+    | _ -> ()
+  in
   let results = Nodes.create 128 in
   let sizes = Nodes.create 128 in
   let constants = Sample_evaluator.make 1 in
@@ -2334,13 +2545,16 @@ let run expression =
                      current := candidate;
                      current := visit ~allow_oracle candidate
                  | None -> ())
-         with Timeout_exception -> g_has_timedout := true);
+         with
+         | Soft_normalization_stop -> ()
+         | Timeout_exception -> g_has_timedout := true);
         Nodes.replace results original !current;
         !current
   in
   let expression =
     if !c_mba_oracle = "none" || !c_mba_oracle_calls = 0 then expression
-    else oracle_visit expression
+    else
+      try oracle_visit expression with Soft_normalization_stop -> expression
   in
   let root_bitsliced =
     if cost expression > 512 then None

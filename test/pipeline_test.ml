@@ -728,6 +728,33 @@ let test_adaptive_chs () =
            && List.for_all (fun status -> String.contains status ':') statuses)
     "exhausted portfolio recorded a duplicate summary failure"
 
+let test_round18_large_dag_fast_path () =
+  let run label original expected =
+    reset ~strict:true ();
+    C.c_normalization := true;
+    C.c_oes := true;
+    C.c_egraph_extraction := true;
+    C.g_total_timeout := 5.;
+    C.g_start_time := Unix.gettimeofday ();
+    R.start_recording original;
+    let result = G.run_preprocessing_portfolio None original in
+    require (E.is_equal result expected) (label ^ ": unexpected result");
+    let certificate = P.finish (Option.get !(R.journal)) result in
+    let report = P.verify ~timeouts:[ 1.; 5. ] ~original ~candidate:result certificate in
+    require
+      (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+      (label ^ ": certificate did not replay")
+  in
+  run "constant root fast path" (E.binary E.Minus x x) zero;
+  let large =
+    let rec build count expression =
+      if count = 0 then expression else build (count - 1) (plus expression zero)
+    in
+    build 300 x
+  in
+  require (U.size_of_expr large > 512) "large-DAG fixture is too small";
+  run "large DAG OES-first" large x
+
 let test_whole_expression_extraction () =
   let replay label original result =
     let certificate = P.finish (Option.get !(R.journal)) result in
@@ -814,6 +841,7 @@ let () =
   test_oes_proof_ranking ();
   test_learned_rule_persistence ();
   test_adaptive_chs ();
+  test_round18_large_dag_fast_path ();
   test_whole_expression_extraction ();
   test_load_boundary ();
   test_oes_legacy_collision ();

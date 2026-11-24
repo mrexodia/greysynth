@@ -50,8 +50,8 @@ let check_equiv gt ~tag (verdict : equiv_t ref) e =
          verdict := Timeout)
   | _ -> verdict := Disabled
 
-let run_normalization expression =
-  if not !c_normalization_portfolio then Normalization.run expression
+let run_normalization ?deadline expression =
+  if not !c_normalization_portfolio then Normalization.run ?deadline expression
   else
     let configured = !c_ac_normalization in
     Fun.protect
@@ -66,7 +66,7 @@ let run_normalization expression =
         let initial = Option.map Rewrite_proof.checkpoint proof in
         let initial_cache = Rewrite.checkpoint_caches () in
         c_ac_normalization := false;
-        let baseline = Normalization.run expression in
+        let baseline = Normalization.run ?deadline expression in
         let baseline_proof = Option.map Rewrite_proof.checkpoint proof in
         let baseline_cache = Rewrite.checkpoint_caches () in
         if !g_has_timedout then baseline
@@ -74,7 +74,7 @@ let run_normalization expression =
           restore initial;
           Rewrite.restore_caches initial_cache;
           c_ac_normalization := true;
-          let alternative = Normalization.run expression in
+          let alternative = Normalization.run ?deadline expression in
           let alternative_proof = Option.map Rewrite_proof.checkpoint proof in
           let alternative_cache = Rewrite.checkpoint_caches () in
           let baseline_cost = size_of_expr baseline
@@ -126,7 +126,13 @@ let chs gt best =
       check_timeout ();
       let before = size_of_expr !best in
       best := simplify_with_horizon !horizon !c_synthesis_timeout !c_synthesis_repeat !best;
-      if not !g_has_timedout then best := run_cleanup !best;
+      if not !g_has_timedout then (
+        let remaining =
+          if !g_total_timeout <= 0. then infinity
+          else !g_total_timeout -. (Unix.gettimeofday () -. !g_start_time)
+        in
+        if remaining >= 4. then best := run_cleanup !best
+        else if !c_oes then best := oes_quiet !best);
       if size_of_expr !best < before then horizon := 2 else incr horizon
     with Timeout_exception -> g_has_timedout := true
   done;
@@ -184,13 +190,59 @@ let restore_preprocessing_log snapshot =
 
 let run_preprocessing gt input =
   let best = ref input in
-  let standard () =
-    if !c_normalization && not !g_has_timedout then (
-      best := run_normalization !best;
-      check_equiv gt ~tag:"normalization" log_normalization_is_equiv !best);
-    if !c_oes && not !g_has_timedout then (
+  let oes_done = ref false in
+  let normalization_deadline () =
+    if !g_total_timeout <= 0. || not (!c_oes || !c_chs) then None
+    else
+      let now = Unix.gettimeofday () in
+      let remaining = !g_total_timeout -. (now -. !g_start_time) in
+      if remaining <= 0. then None else Some (now +. (0.60 *. remaining))
+  in
+  let run_oes () =
+    if !c_oes && not !oes_done && not !g_has_timedout then (
       best := oes_with_logs !best;
+      oes_done := true;
       check_equiv gt ~tag:"OES" log_linear_is_equiv !best)
+  in
+  (match !evaluator.is_node_constant !best with
+  | Some value when (!c_oes || !c_normalization) && size_of_expr !best > 1 ->
+      let candidate = Sexpr.Expr.constant value in
+      if Rewrite.accepts ~pass:"root-constant" !best candidate then best := candidate
+  | _ -> ());
+  if size_of_expr !best >= 600
+     && List.length (Sample_evaluator.variables_of_expr !best) <= 3
+     && Normalization.linear_mba_compatible !best
+  then
+    (let root_candidates = Normalization.linear_candidates size_of_expr !best in
+    match
+       root_candidates
+       |> List.sort (fun left right -> Int.compare (size_of_expr left) (size_of_expr right))
+     with
+    | candidate :: _ ->
+        let equalities, ring_equalities =
+          Option.value (Normalization.minterm_ring_proof !best candidate)
+            ~default:([ !best, candidate ], [])
+        in
+        let configured_timeout = !c_equiv_timeout in
+        let accepted =
+          Fun.protect
+            ~finally:(fun () -> c_equiv_timeout := configured_timeout)
+            (fun () ->
+              c_equiv_timeout := max configured_timeout 3;
+              Rewrite.accepts_compositional ~pass:"root-linear-group"
+                ~equalities ~ring_equalities !best candidate)
+        in
+        if accepted then best := candidate
+    | [] -> ());
+  if size_of_expr !best > 768 then run_oes ();
+  let standard () =
+    let preserve_large_dag_budget =
+      size_of_expr input > 768 && !oes_done && size_of_expr !best > 768
+    in
+    if !c_normalization && not preserve_large_dag_budget && not !g_has_timedout then (
+      best := run_normalization ?deadline:(normalization_deadline ()) !best;
+      check_equiv gt ~tag:"normalization" log_normalization_is_equiv !best);
+    run_oes ()
   in
   if !c_egraph_extraction && not !g_has_timedout then (
     let before = !best in
@@ -465,9 +517,15 @@ let run ?proof_output obf config gt =
   let result =
     if not outside_proof_semantics && not !g_has_timedout then
       try
-        run_cleanup
-          ~whole:(!c_global_synthesis || !c_chs || size_of_expr obf <= 2048)
-          result
+        let remaining =
+          if !g_total_timeout <= 0. then infinity
+          else !g_total_timeout -. (Unix.gettimeofday () -. !g_start_time)
+        in
+        if remaining >= 4. then
+          run_cleanup
+            ~whole:(!c_global_synthesis || !c_chs || size_of_expr obf <= 2048)
+            result
+        else if !c_oes then oes_quiet result else result
       with Timeout_exception ->
         g_has_timedout := true;
         result

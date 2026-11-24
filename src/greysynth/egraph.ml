@@ -524,8 +524,108 @@ let optimize expression =
         let root_class = find graph root in
         let root_fast = ref false in
         (match best.(root_class) with
-        | Some (_, _, root_expression) when size_of_expr root_expression <= 512 ->
-            (match Normalization.bitsliced_candidate size_of_expr root_expression with
+        | Some (_, _, root_expression) when size_of_expr root_expression <= 1024 ->
+            let merge_proposal ?(deadline = local_deadline) ?(timeout_cap = 1.5) lhs
+                (proposal : Normalization.local_candidate) =
+              if verify_local ~timeout_cap ~local_deadline:deadline proposal
+                   lhs proposal.expr then (
+                let root_id = add_expr graph lhs in
+                let candidate_id = add_expr graph proposal.expr in
+                if union graph root_id candidate_id
+                     (Proof
+                        { lhs; rhs = proposal.expr;
+                          smt_edges = proposal.equalities;
+                          ring_edges = proposal.ring_equalities;
+                          pass = proposal.pass })
+                then changed := true;
+                true)
+              else false
+            in
+            if size_of_expr root_expression >= 600
+               && Normalization.linear_mba_compatible root_expression then
+              (match
+                 Normalization.linear_candidates size_of_expr root_expression
+                 |> List.sort (fun left right ->
+                        Int.compare (size_of_expr left) (size_of_expr right))
+               with
+              | candidate :: _ ->
+                  let equalities, ring_equalities =
+                    Option.value
+                      (Normalization.minterm_ring_proof root_expression candidate)
+                      ~default:([ root_expression, candidate ], [])
+                  in
+                  if
+                    merge_proposal
+                      ~deadline:(max local_deadline (Unix.gettimeofday () +. 4.0))
+                      ~timeout_cap:3.0 root_expression
+                      { expr = candidate; pass = "egraph-root-linear";
+                        equalities; ring_equalities; allow_equal_cost = false }
+                  then root_fast := size_of_expr candidate <= 10
+              | [] -> ());
+            let root_bitsliced =
+              if !root_fast then None
+              else Normalization.bitsliced_candidate size_of_expr root_expression
+            in
+            let root_components =
+              Normalization.component_linear_candidates size_of_expr root_expression
+              |> List.sort
+                   (fun (left, _, _) (right, _, _) ->
+                     Int.compare (size_of_expr left) (size_of_expr right))
+            in
+            (match
+               if root_components = []
+                  && List.length (Sample_evaluator.variables_of_expr root_expression) <= 2
+               then Normalization.complement_linear_candidate size_of_expr root_expression
+               else None
+             with
+            | Some (candidate, equalities, ring_equalities)
+              when Option.fold ~none:true
+                     ~some:(fun bitsliced -> size_of_expr candidate < size_of_expr bitsliced)
+                     root_bitsliced ->
+                if
+                  merge_proposal root_expression
+                    { expr = candidate; pass = "egraph-root-complement-linear";
+                      equalities; ring_equalities; allow_equal_cost = false }
+                then (
+                  root_fast := size_of_expr candidate <= 6;
+                  match Normalization.factor_group_candidate size_of_expr candidate with
+                  | Some (factored, equalities, ring_equalities) ->
+                      if
+                        merge_proposal candidate
+                          { expr = factored; pass = "egraph-root-complement-factor";
+                            equalities; ring_equalities; allow_equal_cost = false }
+                      then root_fast := !root_fast || size_of_expr factored <= 6
+                  | None -> ())
+            | _ -> ());
+            (match root_components with
+            | (candidate, equalities, ring_equalities) :: _
+              when Option.fold ~none:true
+                     ~some:(fun bitsliced ->
+                       size_of_expr candidate < size_of_expr bitsliced)
+                     root_bitsliced ->
+                if
+                  merge_proposal root_expression
+                    { expr = candidate; pass = "egraph-root-component";
+                      equalities; ring_equalities; allow_equal_cost = false }
+                then
+                  (match
+                     Normalization.linear_candidates size_of_expr candidate
+                     |> List.sort (fun left right ->
+                            Int.compare (size_of_expr left) (size_of_expr right))
+                   with
+                  | simplified :: _ ->
+                      let equalities, ring_equalities =
+                        Option.value
+                          (Normalization.minterm_ring_proof candidate simplified)
+                          ~default:([ candidate, simplified ], [])
+                      in
+                      ignore
+                        (merge_proposal candidate
+                           { expr = simplified; pass = "egraph-root-component-linear";
+                             equalities; ring_equalities; allow_equal_cost = false })
+                  | [] -> ())
+            | _ -> ());
+            (match root_bitsliced with
             | Some candidate ->
                 let proposal : Normalization.local_candidate =
                   let equalities, ring_equalities =
@@ -536,18 +636,8 @@ let optimize expression =
                   { expr = candidate; pass = "egraph-root-bitsliced"; equalities;
                     ring_equalities; allow_equal_cost = false }
                 in
-                if verify_local ~timeout_cap:1.5 ~local_deadline proposal
-                     root_expression candidate then (
-                  let root_id = add_expr graph root_expression in
-                  let candidate_id = add_expr graph candidate in
-                  if union graph root_id candidate_id
-                       (Proof
-                          { lhs = root_expression; rhs = candidate;
-                            smt_edges = proposal.equalities;
-                            ring_edges = proposal.ring_equalities;
-                            pass = proposal.pass })
-                  then changed := true;
-                  root_fast := true)
+                if merge_proposal root_expression proposal then
+                  root_fast := !root_fast || size_of_expr candidate <= 5
             | None -> ())
         | _ -> ());
         if not !root_fast then (

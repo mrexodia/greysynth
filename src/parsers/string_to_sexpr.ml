@@ -185,12 +185,17 @@ module Lexer = struct
     in
     scan ()
 
+  let bounded_nonnegative_int context value =
+    if Z.sign value < 0 || not (Z.fits_int value) then
+      failwith (context ^ " must fit a non-negative host integer")
+    else Z.to_int value
+
   let read_operator_argument buf name =
     skip_whitespace buf;
     if peek buf <> Some '(' then failwith (name ^ " requires (...)");
     advance buf;
     skip_whitespace buf;
-    let value = Z.to_int (read_number buf) in
+    let value = bounded_nonnegative_int name (read_number buf) in
     skip_whitespace buf;
     if peek buf <> Some ')' then failwith (name ^ " requires a closing )");
     advance buf;
@@ -288,12 +293,12 @@ module Lexer = struct
             if peek buf <> Some '(' then failwith "restrict requires (...)";
             advance buf;
             skip_whitespace buf;
-            let lo = Z.to_int (read_number buf) in
+            let lo = bounded_nonnegative_int "restrict lower bound" (read_number buf) in
             skip_whitespace buf;
             if peek buf <> Some ',' then failwith "restrict requires a comma";
             advance buf;
             skip_whitespace buf;
-            let hi = Z.to_int (read_number buf) in
+            let hi = bounded_nonnegative_int "restrict upper bound" (read_number buf) in
             skip_whitespace buf;
             if peek buf <> Some ')' then failwith "restrict requires a closing )";
             advance buf;
@@ -498,9 +503,13 @@ module Parser = struct
             (* General case: exponent must be a constant *)
             (match right with
             | Const (exp_z, _, _) ->
-                let exp = Z.to_int exp_z in
-                if exp < 0 then
-                  raise (Failure "Power exponent must be non-negative")
+                let exp =
+                  if Z.sign exp_z < 0 || not (Z.fits_int exp_z) then
+                    raise (Failure "Power exponent must fit a non-negative host integer")
+                  else Z.to_int exp_z
+                in
+                if exp > 4096 then
+                  raise (Failure "Power exponent exceeds the bounded expansion limit")
                 else if exp = 0 then
                   Power (left, 0)
                 else if exp = 1 then

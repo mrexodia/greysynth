@@ -607,6 +607,64 @@ let test_round15_canonicalization () =
             composition variable)
     [ 8; 16; 32; 64 ]
 
+let test_round18_regressions () =
+  let replay label original result maximum =
+    require (U.size_of_expr result <= maximum)
+      (Printf.sprintf "%s: expected cost <= %d, got %d" label maximum
+         (U.size_of_expr result));
+    let certificate = P.finish (Option.get !(R.journal)) result in
+    let report = P.verify ~timeouts:[ 1.; 5. ] ~original ~candidate:result certificate in
+    require
+      (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+      (label ^ ": certificate did not replay")
+  in
+  let optimize label text maximum =
+    reset ();
+    C.c_egraph_extraction := true;
+    C.c_ac_normalization := true;
+    C.c_egraph_max_enodes := 2048;
+    C.c_egraph_max_iters := 4;
+    C.c_normalization := true;
+    C.c_oes := true;
+    C.g_total_timeout := 0.;
+    let original = String_to_sexpr.parse text in
+    R.start_recording original;
+    let result = G.run_cleanup original |> G.run_cleanup in
+    replay label original result maximum
+  in
+  let x = var 64 "overflow_x" and y = var 64 "overflow_y" in
+  let overflow = mul y (minus x (E.constant (Bitvector.create (Z.pred (Z.shift_left Z.one 64)) 64))) in
+  reset ();
+  R.start_recording overflow;
+  replay "unsigned offset does not overflow" overflow (N.run overflow) 5;
+  reset ();
+  C.c_egraph_extraction := true;
+  R.start_recording overflow;
+  replay "egraph unsigned offset does not overflow" overflow (EG.optimize overflow) 5;
+  let v0 = var 64 "group_v0" and v1 = var 64 "group_v1" and v2 = var 64 "group_v2" in
+  let atoms = [| v0; v1; v2 |] in
+  let minterm assignment =
+    List.init 3 (fun index ->
+        if assignment land (1 lsl index) = 0 then E.unary E.Not atoms.(index)
+        else atoms.(index))
+    |> function head :: tail -> List.fold_left band head tail | [] -> assert false
+  in
+  let grouped_source =
+    List.init 7 (fun index -> mul (c 64 11) (minterm (index + 1)))
+    |> function head :: tail -> List.fold_left plus head tail | [] -> assert false
+  in
+  reset ();
+  R.start_recording grouped_source;
+  replay "equal coefficient minterm grouping" grouped_source (N.run grouped_source) 7;
+  optimize "opaque component nonlinear 949"
+    "8*((1*~(x^y))&(-11*~(x&~y)))-10*((1*~(x^y))&~(-11*~(x&~y)))+11*~((1*~(x^y))&(-11*~(x&~y)))-6*~((1*~(x^y))&~(-11*~(x&~y)))-5*~((1*~(x^y))|(-11*~(x&~y)))-4*~((1*~(x^y))|~(-11*~(x&~y)))+1*~(x&y)+5*(x^y)-11*(x|y)-1*x+2*~(x&~x)-1*(x|~y)+8*~(x|y)+20*~(x|~y)+5*(x&~y)+27*(x&y)" 3;
+  optimize "opaque component nonlinear 911"
+    "1*((-2*(x|~y))&~(7*~(x^y)))+2*(7*~(x^y))-2*~((-2*(x|~y))|(7*~(x^y)))-3*~((-2*(x|~y))|~(7*~(x^y)))+2*~(-2*(x|~y))-2*~(x&y)+4*(x^y)+7*~x-6*x-5*(x|y)-10*~(x|y)+7*~(x|~y)+11*(x&~y)+17*(x&y)" 3;
+  optimize "complement residual nonpoly 984"
+    "~(((x&y)*(x|y)+(x&~y)*(~x&y))-1)-1*y-2*~x+~y-1*(x^y)-1*(~(x&~x))+2*(~(x&~y))-1*(~(x&y))+3*(~(x^y))-1*(x|y)-2*(~(x|y))+5*(~(x|~y))+2*(x&~y)-3*(x&y)" 6;
+  optimize "complement residual nonpoly 938"
+    "~(~(((y&x)*(y|x)+(y&~x)*(~y&x))-1))+1+~x-5*(~(x&~x))+(~(x^y))-4*(x|y)+(x|~y)-1*(x^y)-1*(~(x&~y))-2*x+3*(~(x|y))+7*(~(x|~y))+11*(x&~y)+7*(x&y)" 7
+
 let test_egraph_round14_regressions () =
   let check label text maximum =
     reset ();
@@ -694,6 +752,7 @@ let () =
     test_egraph_legacy_cast_cycle ();
     test_egraph_child_replay ();
     test_round15_canonicalization ();
+    test_round18_regressions ();
     test_egraph_round14_regressions ();
     test_preprocessing_portfolio ();
     test_nonlinear_is_opaque ();
