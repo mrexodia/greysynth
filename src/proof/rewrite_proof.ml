@@ -19,7 +19,7 @@ type graph = {
   intern : (int * shape, int) Hashtbl.t;
   expressions : (E.t, int) Hashtbl.t;
 }
-type proof_rule = Smt | Ring_mod2w
+type proof_rule = Smt | Ring_mod2w | Poly_mod2w
 type edge = { left : int; right : int; pass : string; rule : proof_rule }
 type builder = {
   graph : graph;
@@ -195,6 +195,9 @@ let record builder ~pass left right =
 let record_ring builder ~pass left right =
   record_with_rule builder ~pass ~rule:Ring_mod2w left right
 
+let record_poly builder ~pass left right =
+  record_with_rule builder ~pass ~rule:Poly_mod2w left right
+
 let ints xs = `List (List.map (fun x -> `Int x) xs)
 let node_json node =
   let fields = match node.shape with
@@ -218,7 +221,9 @@ let finish builder candidate =
     "equalities", `List (List.rev_map (fun edge -> `Assoc [
       "lhs", `Int edge.left; "rhs", `Int edge.right;
       "pass", `String edge.pass;
-      "rule", `String (match edge.rule with Smt -> "smt" | Ring_mod2w -> "ring_mod2w")
+      "rule", `String
+        (match edge.rule with
+        | Smt -> "smt" | Ring_mod2w -> "ring_mod2w" | Poly_mod2w -> "poly_mod2w")
     ]) builder.edges);
   ]
 
@@ -371,6 +376,7 @@ let load certificate =
       match J.member "rule" json with
       | `Null | `String "smt" -> Smt
       | `String "ring_mod2w" -> Ring_mod2w
+      | `String "poly_mod2w" -> Poly_mod2w
       | _ -> fail "unknown equality proof rule"
     in
     { left; right; pass = "untrusted"; rule }) encoded_edges in
@@ -492,6 +498,139 @@ let ring_equal g left right =
       else Ring_not_equal
     with Ring_limit -> Ring_limit_exceeded
 
+module PowerMonomial = struct
+  type t = (int * int) list
+  let compare = Stdlib.compare
+end
+module PowerPolynomial = Map.Make (PowerMonomial)
+
+let poly_equal g left right =
+  let width = (node g left).width in
+  if width <> (node g right).width then Ring_not_equal
+  else if width > 128 then Ring_limit_exceeded
+  else
+    let max_degree = 66 and max_monomials = 8192 and max_ops = 1_000_000 in
+    let operations = ref 0 in
+    let modulus = Z.shift_left Z.one width in
+    let normalize value =
+      let value = Z.erem value modulus in
+      if Z.sign value < 0 then Z.add value modulus else value
+    in
+    let tick () = incr operations; if !operations > max_ops then raise Ring_limit in
+    let degree monomial = List.fold_left (fun total (_, exponent) -> total + exponent) 0 monomial in
+    let add_term monomial coefficient polynomial =
+      tick ();
+      if degree monomial > max_degree
+         || List.exists (fun (_, exponent) -> exponent < 1 || exponent > max_degree) monomial
+      then raise Ring_limit;
+      let coefficient = normalize coefficient in
+      let old = Option.value (PowerPolynomial.find_opt monomial polynomial) ~default:Z.zero in
+      let value = normalize (Z.add old coefficient) in
+      let result =
+        if Z.equal value Z.zero then PowerPolynomial.remove monomial polynomial
+        else PowerPolynomial.add monomial value polynomial
+      in
+      if PowerPolynomial.cardinal result > max_monomials then raise Ring_limit;
+      result
+    in
+    let add left right = PowerPolynomial.fold add_term left right in
+    let neg polynomial =
+      PowerPolynomial.fold
+        (fun monomial coefficient result -> add_term monomial (Z.neg coefficient) result)
+        polynomial PowerPolynomial.empty
+    in
+    let merge_monomials left right =
+      let counts = Hashtbl.create (List.length left + List.length right) in
+      List.iter
+        (fun (atom, exponent) ->
+          Hashtbl.replace counts atom
+            (exponent + Option.value (Hashtbl.find_opt counts atom) ~default:0))
+        (left @ right);
+      Hashtbl.fold (fun atom exponent result -> (atom, exponent) :: result) counts []
+      |> List.sort (fun (left, _) (right, _) -> Int.compare left right)
+    in
+    let mul left right =
+      PowerPolynomial.fold
+        (fun left_monomial left_coefficient result ->
+          PowerPolynomial.fold
+            (fun right_monomial right_coefficient result ->
+              add_term (merge_monomials left_monomial right_monomial)
+                (Z.mul left_coefficient right_coefficient) result)
+            right result)
+        left PowerPolynomial.empty
+    in
+    let memo = Hashtbl.create 128 in
+    let rec polynomial id =
+      match Hashtbl.find_opt memo id with
+      | Some result -> result
+      | None ->
+          let current = node g id in
+          let opaque () = PowerPolynomial.singleton [ id, 1 ] Z.one in
+          let result =
+            match current.shape, current.expr with
+            | Value _, E.Cst value ->
+                add_term [] (Bitvector.value_of value) PowerPolynomial.empty
+            | Unary ("bvneg", [], child), _ -> neg (polynomial child)
+            | Binary ("bvadd", x, y), _ -> add (polynomial x) (polynomial y)
+            | Binary ("bvsub", x, y), _ -> add (polynomial x) (neg (polynomial y))
+            | Binary ("bvmul", x, y), _ -> mul (polynomial x) (polynomial y)
+            | _ -> opaque ()
+          in
+          Hashtbl.add memo id result;
+          result
+    in
+    let v2_factorial n =
+      let rec loop power total =
+        if power > n then total else loop (power * 2) (total + (n / power))
+      in
+      loop 2 0
+    in
+    try
+      let difference = add (polynomial left) (neg (polynomial right)) in
+      if PowerPolynomial.is_empty difference then Ring_equal
+      else
+        let stirling = Array.make_matrix (max_degree + 1) (max_degree + 1) Z.zero in
+        stirling.(0).(0) <- Z.one;
+        for exponent = 1 to max_degree do
+          for k = 1 to exponent do
+            stirling.(exponent).(k) <- normalize
+                (Z.add stirling.(exponent - 1).(k - 1)
+                   (Z.mul (Z.of_int k) stirling.(exponent - 1).(k)))
+          done
+        done;
+        let falling =
+          PowerPolynomial.fold
+            (fun monomial coefficient result ->
+              let rec expand result partial scale = function
+                | [] -> add_term (List.rev partial) (Z.mul coefficient scale) result
+                | (atom, exponent) :: rest ->
+                    let accumulated = ref result in
+                    for k = 1 to exponent do
+                      let factor = stirling.(exponent).(k) in
+                      if not (Z.equal factor Z.zero) then
+                        accumulated := expand !accumulated ((atom, k) :: partial)
+                            (normalize (Z.mul scale factor)) rest
+                    done;
+                    !accumulated
+              in
+              if monomial = [] then add_term [] coefficient result
+              else expand result [] Z.one monomial)
+            difference PowerPolynomial.empty
+        in
+        let valid =
+          PowerPolynomial.for_all
+            (fun monomial coefficient ->
+              let valuation =
+                List.fold_left
+                  (fun total (_, k) -> total + v2_factorial k) 0 monomial
+              in
+              let bits = max 0 (width - valuation) in
+              bits = 0 || Z.equal (Z.erem coefficient (Z.shift_left Z.one bits)) Z.zero)
+            falling
+        in
+        if valid then Ring_equal else Ring_not_equal
+    with Ring_limit -> Ring_limit_exceeded
+
 let is_connected builder candidate =
   let candidate = of_expr builder.graph candidate in
   congruent builder.graph builder.edges builder.original candidate
@@ -499,7 +638,7 @@ let is_connected builder candidate =
 let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
   let started = Unix.gettimeofday () in
   let checked = ref 0 and proved = ref 0 and unknown = ref 0 and timed_out = ref 0 in
-  let abstract = ref 0 and direct = ref 0 and ring = ref 0 in
+  let abstract = ref 0 and direct = ref 0 and ring = ref 0 and poly = ref 0 in
   let ring_limits = ref 0 in
   let nodes = ref 0 and edges_count = ref 0 in
   let result verification reason = `Assoc [
@@ -510,7 +649,8 @@ let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
     "nodes", `Int !nodes; "provided_equalities", `Int !edges_count;
     "checked_equalities", `Int !checked; "proved_equalities", `Int !proved;
     "abstract_proofs", `Int !abstract; "direct_proofs", `Int !direct;
-    "ring_proofs", `Int !ring; "ring_limit_equalities", `Int !ring_limits;
+    "ring_proofs", `Int !ring; "poly_proofs", `Int !poly;
+    "ring_limit_equalities", `Int !ring_limits;
     "unknown_equalities", `Int !unknown; "timeout_equalities", `Int !timed_out;
   ] in
   try
@@ -545,6 +685,11 @@ let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
               | Ring_equal -> U.Yes, "ring_mod2w"
               | Ring_not_equal -> U.No, "ring_not_equal"
               | Ring_limit_exceeded -> U.Unknown, "ring_limit_exceeded")
+          | Poly_mod2w ->
+              (match poly_equal g edge.left edge.right with
+              | Ring_equal -> U.Yes, "poly_mod2w"
+              | Ring_not_equal -> U.No, "poly_not_equal"
+              | Ring_limit_exceeded -> U.Unknown, "poly_limit_exceeded")
           | Smt -> attempt timeouts
         in
         match verdict with
@@ -552,18 +697,22 @@ let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
             incr proved;
             if method_ = "abstract" then incr abstract
             else if method_ = "ring_mod2w" then incr ring
+            else if method_ = "poly_mod2w" then incr poly
             else incr direct;
             established := edge :: !established
         | U.No ->
             fail
               (Printf.sprintf
                  "a local %s equality was refuted: %s != %s; this does not refute the final output"
-                 (match edge.rule with Smt -> "smt" | Ring_mod2w -> "ring_mod2w")
+                 (match edge.rule with
+                 | Smt -> "smt" | Ring_mod2w -> "ring_mod2w"
+                 | Poly_mod2w -> "poly_mod2w")
                  (U.pp (node g edge.left).expr) (U.pp (node g edge.right).expr))
         | U.Timeout -> incr timed_out
         | U.Unknown | U.Disabled ->
             incr unknown;
-            if method_ = "ring_limit_exceeded" then incr ring_limits) obligations;
+            if method_ = "ring_limit_exceeded" || method_ = "poly_limit_exceeded"
+            then incr ring_limits) obligations;
       if congruent g !established input_id output_id then
         result "proved_compositional" "smt_equalities_and_congruence"
       else if !ring_limits > 0 then result "unknown" "ring_limit_exceeded"

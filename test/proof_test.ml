@@ -18,6 +18,10 @@ let ring_certificate original candidate =
   let builder = P.create original in
   P.record_ring builder ~pass:"ring-test" original candidate;
   P.finish builder candidate
+let poly_certificate original candidate =
+  let builder = P.create original in
+  P.record_poly builder ~pass:"poly-test" original candidate;
+  P.finish builder candidate
 let update name value = function
   | `Assoc fields -> `Assoc ((name, value) :: List.remove_assoc name fields)
   | _ -> failwith "object expected"
@@ -126,12 +130,53 @@ let () =
   expect "unknown" limited;
   require (field "reason" limited = `String "ring_limit_exceeded")
     "ring degree limit was not reported explicitly";
+  let falling variable degree =
+    let result = ref variable in
+    for offset = 1 to degree - 1 do
+      result := E.binary E.Mul !result (E.binary E.Minus variable (c (E.sizeof variable) offset))
+    done;
+    !result
+  in
+  List.iter
+    (fun (width, degree) ->
+      let variable = var (Printf.sprintf "poly_%d_%d" width degree) width in
+      let rec v2 n power total =
+        if power > n then total else v2 n (power * 2) (total + (n / power))
+      in
+      let coefficient = Z.shift_left Z.one (max 0 (width - v2 degree 2 0)) in
+      let lhs = E.binary E.Mul (E.constant (Bitvector.create coefficient width))
+          (falling variable degree) in
+      let rhs = c width 0 in
+      let report = P.verify ~original:lhs ~candidate:rhs (poly_certificate lhs rhs) in
+      expect "proved_compositional" report;
+      require (field "poly_proofs" report = `Int 1) "poly proof was not reported")
+    [ 8, 4; 16, 6; 32, 20; 64, 20 ];
+  let px = var "poly_x" 8 and py = var "poly_y" 8 in
+  let multi = E.binary E.Mul (c 8 64)
+      (E.binary E.Mul (falling px 3) (falling py 3)) in
+  expect "proved_compositional"
+    (P.verify ~original:multi ~candidate:(c 8 0) (poly_certificate multi (c 8 0)));
+  let off_by_one = E.binary E.Mul (c 8 32)
+      (E.binary E.Mul (falling px 3) (falling py 3)) in
+  expect "error"
+    (P.verify ~original:off_by_one ~candidate:(c 8 0)
+       (poly_certificate off_by_one (c 8 0)));
+  let px16 = var "poly_x16" 16 and py16 = var "poly_y16" 16 in
+  let off_by_one16 = E.binary E.Mul (c 16 8192)
+      (E.binary E.Mul (falling px16 3) (falling py16 3)) in
+  expect "error"
+    (P.verify ~original:off_by_one16 ~candidate:(c 16 0)
+       (poly_certificate off_by_one16 (c 16 0)));
   Printf.printf "proof_test: typed DAG, ring kernel, endpoint binding and incomplete-derivation regressions passed\n";
   if not available then (
     if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
       failwith "proof_test: solver required but unavailable";
     Printf.printf "proof_test: solver-dependent tests unavailable\n")
   else (
+    let negative_verdict, _, _ = U.are_equivalent off_by_one (c 8 0) (Some 2) in
+    let negative_verdict16, _, _ = U.are_equivalent off_by_one16 (c 16 0) (Some 2) in
+    require (negative_verdict = U.No && negative_verdict16 = U.No)
+      "off-by-one poly threshold was not refuted by SMT";
     let complete = certificate original candidate [n1, n2; n2, n3] in
     expect "proved_compositional" (P.verify ~original ~candidate complete);
     let bad = certificate x (c 8 0) [x, c 8 0] in

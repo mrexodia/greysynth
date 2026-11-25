@@ -23,6 +23,7 @@ type proof = {
   rhs : E.t;
   smt_edges : (E.t * E.t) list;
   ring_edges : (E.t * E.t) list;
+  poly_edges : (E.t * E.t) list;
   pass : string;
 }
 
@@ -191,8 +192,9 @@ let verify_local ?(timeout_cap = 0.5) ~local_deadline
                  (min local_remaining global_remaining))
     in
     let direct =
-      match candidate.ring_equalities, candidate.equalities with
-      | [], [ (left, right) ] ->
+      match candidate.poly_equalities, candidate.ring_equalities,
+            candidate.equalities with
+      | [], [], [ (left, right) ] ->
           (E.is_equal left lhs && E.is_equal right rhs)
           || (E.is_equal left rhs && E.is_equal right lhs)
       | _ -> false
@@ -233,7 +235,12 @@ let verify_local ?(timeout_cap = 0.5) ~local_deadline
       (fun (left, right) ->
         Rewrite_proof.record_ring builder ~pass:candidate.pass left right)
       candidate.ring_equalities;
-    if candidate.equalities = [] && candidate.ring_equalities = [] then
+    List.iter
+      (fun (left, right) ->
+        Rewrite_proof.record_poly builder ~pass:candidate.pass left right)
+      candidate.poly_equalities;
+    if candidate.equalities = [] && candidate.ring_equalities = []
+       && candidate.poly_equalities = [] then
       Rewrite_proof.record builder ~pass:candidate.pass lhs rhs;
     let certificate = Rewrite_proof.finish builder rhs in
       let report =
@@ -292,6 +299,7 @@ let semantic_merge ~local_deadline graph =
                      pass = "egraph-oes";
                      equalities;
                      ring_equalities;
+                     poly_equalities = [];
                      allow_equal_cost = true;
                    }
                  in
@@ -303,6 +311,7 @@ let semantic_merge ~local_deadline graph =
                               rhs = expression;
                               smt_edges = equalities;
                               ring_edges = ring_equalities;
+                              poly_edges = [];
                               pass = candidate.pass;
                             })
                  then changed := true
@@ -484,7 +493,11 @@ let emit_minimal_proofs graph original target =
                        List.iter
                          (fun (lhs, rhs) ->
                            Rewrite_proof.record_ring journal ~pass:proof.pass lhs rhs)
-                         proof.ring_edges)
+                         proof.ring_edges;
+                       List.iter
+                         (fun (lhs, rhs) ->
+                           Rewrite_proof.record_poly journal ~pass:proof.pass lhs rhs)
+                         proof.poly_edges)
                      !(Rewrite.journal))
              | Congruence ->
                  let left_children = (node graph left).raw_children
@@ -536,6 +549,7 @@ let optimize expression =
                         { lhs; rhs = proposal.expr;
                           smt_edges = proposal.equalities;
                           ring_edges = proposal.ring_equalities;
+                          poly_edges = proposal.poly_equalities;
                           pass = proposal.pass })
                 then changed := true;
                 true)
@@ -559,7 +573,8 @@ let optimize expression =
                       ~deadline:(max local_deadline (Unix.gettimeofday () +. 4.0))
                       ~timeout_cap:3.0 root_expression
                       { expr = candidate; pass = "egraph-root-linear";
-                        equalities; ring_equalities; allow_equal_cost = false }
+                        equalities; ring_equalities; poly_equalities = [];
+                        allow_equal_cost = false }
                   then root_fast := size_of_expr candidate <= 10
               | [] -> ());
             let root_bitsliced =
@@ -585,7 +600,8 @@ let optimize expression =
                 if
                   merge_proposal root_expression
                     { expr = candidate; pass = "egraph-root-complement-linear";
-                      equalities; ring_equalities; allow_equal_cost = false }
+                      equalities; ring_equalities; poly_equalities = [];
+                      allow_equal_cost = false }
                 then (
                   root_fast := size_of_expr candidate <= 6;
                   match Normalization.factor_group_candidate size_of_expr candidate with
@@ -593,7 +609,8 @@ let optimize expression =
                       if
                         merge_proposal candidate
                           { expr = factored; pass = "egraph-root-complement-factor";
-                            equalities; ring_equalities; allow_equal_cost = false }
+                            equalities; ring_equalities; poly_equalities = [];
+                            allow_equal_cost = false }
                       then root_fast := !root_fast || size_of_expr factored <= 6
                   | None -> ())
             | _ -> ());
@@ -606,7 +623,8 @@ let optimize expression =
                 if
                   merge_proposal root_expression
                     { expr = candidate; pass = "egraph-root-component";
-                      equalities; ring_equalities; allow_equal_cost = false }
+                      equalities; ring_equalities; poly_equalities = [];
+                      allow_equal_cost = false }
                 then
                   (match
                      Normalization.linear_candidates size_of_expr candidate
@@ -622,7 +640,8 @@ let optimize expression =
                       ignore
                         (merge_proposal candidate
                            { expr = simplified; pass = "egraph-root-component-linear";
-                             equalities; ring_equalities; allow_equal_cost = false })
+                             equalities; ring_equalities; poly_equalities = [];
+                             allow_equal_cost = false })
                   | [] -> ())
             | _ -> ());
             (match root_bitsliced with
@@ -634,7 +653,7 @@ let optimize expression =
                       ~default:([ root_expression, candidate ], [])
                   in
                   { expr = candidate; pass = "egraph-root-bitsliced"; equalities;
-                    ring_equalities; allow_equal_cost = false }
+                    ring_equalities; poly_equalities = []; allow_equal_cost = false }
                 in
                 if merge_proposal root_expression proposal then
                   root_fast := !root_fast || size_of_expr candidate <= 5
@@ -706,6 +725,7 @@ let optimize expression =
                                   rhs = candidate.expr;
                                   smt_edges = candidate.equalities;
                                   ring_edges = candidate.ring_equalities;
+                                  poly_edges = candidate.poly_equalities;
                                   pass = candidate.pass;
                                 })
                          in

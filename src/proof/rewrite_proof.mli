@@ -16,6 +16,10 @@ val record_ring : builder -> pass:string -> Sexpr.Expr.t -> Sexpr.Expr.t -> unit
 (** [record_ring] requests exact formal commutative-ring normalization modulo
     the common bit width. Non-ring subterms are opaque indeterminates. *)
 
+val record_poly : builder -> pass:string -> Sexpr.Expr.t -> Sexpr.Expr.t -> unit
+(** [record_poly] additionally permits modular null-polynomial reduction using
+    bounded multivariate falling-factorial divisibility. *)
+
 val is_connected : builder -> Sexpr.Expr.t -> bool
 (** Structural congruence check over already-established builder edges; performs
     no SMT queries. *)

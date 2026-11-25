@@ -1478,6 +1478,214 @@ let reduce_univariate_null_polynomial cost expression =
         else Some (reduced, List.map (fun term -> term, zeros width) !dropped,
                    [ expression, expanded ])
 
+module ModularMonomial = struct
+  type t = (E.t * int) list
+  let compare left right =
+    List.compare
+      (fun (left_atom, left_exponent) (right_atom, right_exponent) ->
+        let order = E.compare left_atom right_atom in
+        if order <> 0 then order else Int.compare left_exponent right_exponent)
+      left right
+end
+module ModularPolynomial = Map.Make (ModularMonomial)
+
+let reduce_modular_polynomial cost expression =
+  let rec pure_ring = function
+    | E.Var _ | E.Cst _ -> true
+    | E.Unary { f = E.Minus; x; _ } -> pure_ring x
+    | E.Binary { f = (E.Plus | E.Minus | E.Mul); x; y; _ } ->
+        pure_ring x && pure_ring y
+    | _ -> false
+  in
+  let width = E.sizeof expression in
+  let allow_opaque =
+    cost expression > 2000
+    && List.length (Sample_evaluator.variables_of_expr expression) <= 2
+  in
+  if width > 128 || (not (pure_ring expression) && not allow_opaque) then None
+  else
+    let max_degree = 66 and max_monomials = 8192 and max_ops = 1_000_000 in
+    let operations = ref 0 in
+    let modulus = Z.shift_left Z.one width in
+    let normalize value =
+      let value = Z.erem value modulus in
+      if Z.sign value < 0 then Z.add value modulus else value
+    in
+    let tick () =
+      incr operations;
+      if !operations > max_ops then raise Ring_candidate_too_complex;
+      if !operations mod 256 = 0 then check_timeout ()
+    in
+    let total_degree monomial =
+      List.fold_left (fun total (_, exponent) -> total + exponent) 0 monomial
+    in
+    let add_term monomial coefficient polynomial =
+      tick ();
+      if total_degree monomial > max_degree
+         || List.exists (fun (_, exponent) -> exponent < 1 || exponent > max_degree) monomial
+      then raise Ring_candidate_too_complex;
+      let coefficient = normalize coefficient in
+      let old = Option.value (ModularPolynomial.find_opt monomial polynomial) ~default:Z.zero in
+      let value = normalize (Z.add old coefficient) in
+      let result =
+        if Z.equal value Z.zero then ModularPolynomial.remove monomial polynomial
+        else ModularPolynomial.add monomial value polynomial
+      in
+      if ModularPolynomial.cardinal result > max_monomials then
+        raise Ring_candidate_too_complex;
+      result
+    in
+    let add left right = ModularPolynomial.fold add_term left right in
+    let neg polynomial =
+      ModularPolynomial.fold
+        (fun monomial coefficient result -> add_term monomial (Z.neg coefficient) result)
+        polynomial ModularPolynomial.empty
+    in
+    let merge_monomials left right =
+      let atoms = Nodes.create (List.length left + List.length right) in
+      List.iter
+        (fun (atom, exponent) ->
+          Nodes.replace atoms atom
+            (exponent + Option.value (Nodes.find_opt atoms atom) ~default:0))
+        (left @ right);
+      Nodes.fold (fun atom exponent result -> (atom, exponent) :: result) atoms []
+      |> List.sort (fun (left, _) (right, _) -> E.compare left right)
+    in
+    let mul left right =
+      ModularPolynomial.fold
+        (fun left_monomial left_coefficient result ->
+          ModularPolynomial.fold
+            (fun right_monomial right_coefficient result ->
+              add_term (merge_monomials left_monomial right_monomial)
+                (Z.mul left_coefficient right_coefficient) result)
+            right result)
+        left ModularPolynomial.empty
+    in
+    let memo = Nodes.create 128 in
+    let has_non_variable_atom = ref false in
+    let rec parse expression =
+      match Nodes.find_opt memo expression with
+      | Some result -> result
+      | None ->
+          let result =
+            match expression with
+            | E.Cst value ->
+                add_term [] (Bitvector.value_of value) ModularPolynomial.empty
+            | E.Unary { f = E.Minus; x; _ } -> neg (parse x)
+            | E.Binary { f = E.Plus; x; y; _ } -> add (parse x) (parse y)
+            | E.Binary { f = E.Minus; x; y; _ } -> add (parse x) (neg (parse y))
+            | E.Binary { f = E.Mul; x; y; _ } -> mul (parse x) (parse y)
+            | (E.Var _ as atom) -> ModularPolynomial.singleton [ atom, 1 ] Z.one
+            | atom ->
+                has_non_variable_atom := true;
+                ModularPolynomial.singleton [ atom, 1 ] Z.one
+          in
+          Nodes.add memo expression result;
+          result
+    in
+    let v2_factorial n =
+      let rec loop power total =
+        if power > n then total else loop (power * 2) (total + (n / power))
+      in loop 2 0
+    in
+    try
+      let power = parse expression in
+      let observed_degree =
+        ModularPolynomial.fold
+          (fun monomial _ maximum -> max maximum (total_degree monomial))
+          power 0
+      in
+      let opaque_allowed =
+        not !has_non_variable_atom
+        || (cost expression > 2000
+            && List.length (Sample_evaluator.variables_of_expr expression) <= 2)
+      in
+      if observed_degree < 8 || not opaque_allowed then None
+      else if ModularPolynomial.is_empty power then
+        Some (zeros width, [], [ expression, zeros width ])
+      else
+        let stirling2 = Array.make_matrix (max_degree + 1) (max_degree + 1) Z.zero in
+        let stirling1 = Array.make_matrix (max_degree + 1) (max_degree + 1) Z.zero in
+        stirling2.(0).(0) <- Z.one;
+        stirling1.(0).(0) <- Z.one;
+        for n = 1 to max_degree do
+          for k = 1 to n do
+            stirling2.(n).(k) <- normalize
+                (Z.add stirling2.(n - 1).(k - 1)
+                   (Z.mul (Z.of_int k) stirling2.(n - 1).(k)));
+            stirling1.(n).(k) <- normalize
+                (Z.sub stirling1.(n - 1).(k - 1)
+                   (Z.mul (Z.of_int (n - 1)) stirling1.(n - 1).(k)))
+          done
+        done;
+        let expand_basis table polynomial =
+          ModularPolynomial.fold
+            (fun monomial coefficient result ->
+              let rec expand result partial scale = function
+                | [] -> add_term (List.rev partial) (Z.mul coefficient scale) result
+                | (atom, exponent) :: rest ->
+                    let accumulated = ref result in
+                    for degree = 1 to exponent do
+                      let factor = table.(exponent).(degree) in
+                      if not (Z.equal factor Z.zero) then
+                        accumulated := expand !accumulated ((atom, degree) :: partial)
+                            (normalize (Z.mul scale factor)) rest
+                    done;
+                    !accumulated
+              in
+              if monomial = [] then add_term [] coefficient result
+              else expand result [] Z.one monomial)
+            polynomial ModularPolynomial.empty
+        in
+        let falling = expand_basis stirling2 power in
+        let reduced_falling =
+          ModularPolynomial.fold
+            (fun monomial coefficient result ->
+              let valuation =
+                List.fold_left
+                  (fun total (_, degree) -> total + v2_factorial degree) 0 monomial
+              in
+              let bits = max 0 (width - valuation) in
+              let reduced =
+                if bits = 0 then Z.zero
+                else Z.erem coefficient (Z.shift_left Z.one bits)
+              in
+              add_term monomial reduced result)
+            falling ModularPolynomial.empty
+        in
+        let reduced_power = expand_basis stirling1 reduced_falling in
+        let rec power_expression atom exponent =
+          if exponent = 1 then atom
+          else if exponent mod 2 = 0 then
+            let half = power_expression atom (exponent / 2) in E.binary E.Mul half half
+          else E.binary E.Mul atom (power_expression atom (exponent - 1))
+        in
+        let terms =
+          ModularPolynomial.bindings reduced_power
+          |> List.map (fun (monomial, coefficient) ->
+                 let body =
+                   match monomial with
+                   | [] -> None
+                   | terms ->
+                       terms
+                       |> List.map (fun (atom, exponent) -> power_expression atom exponent)
+                       |> function head :: tail -> Some (List.fold_left (E.binary E.Mul) head tail)
+                                   | [] -> None
+                 in
+                 match body with
+                 | None -> constant width coefficient
+                 | Some body when Z.equal coefficient Z.one -> body
+                 | Some body when Z.equal coefficient (Z.pred modulus) -> E.unary E.Minus body
+                 | Some body -> E.binary E.Mul (constant width coefficient) body)
+        in
+        let candidate =
+          match terms with [] -> zeros width | _ -> build_balanced E.Plus terms
+        in
+        if cost candidate < cost expression then
+          Some (candidate, [], [ expression, candidate ])
+        else None
+    with Ring_candidate_too_complex -> None
+
 let minterm_polynomial_candidate cost expression =
   Option.bind (minterm_ring_expansion expression expression)
     (fun (equalities, ring_equalities, expanded, _) ->
@@ -2043,6 +2251,7 @@ type local_candidate = {
   pass : string;
   equalities : (E.t * E.t) list;
   ring_equalities : (E.t * E.t) list;
+  poly_equalities : (E.t * E.t) list;
   allow_equal_cost : bool;
 }
 
@@ -2050,11 +2259,12 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
     ?(heavy_additive = true) ~ac expression =
   let direct pass ?(allow_equal_cost = false) candidate =
     { expr = candidate; pass; equalities = [ expression, candidate ];
-      ring_equalities = []; allow_equal_cost }
+      ring_equalities = []; poly_equalities = []; allow_equal_cost }
   in
   let ring pass ?(allow_equal_cost = false) candidate =
     { expr = candidate; pass; equalities = [];
-      ring_equalities = [ expression, candidate ]; allow_equal_cost }
+      ring_equalities = [ expression, candidate ]; poly_equalities = [];
+      allow_equal_cost }
   in
   let candidates = ref [] in
   let bitsliced_fast =
@@ -2069,7 +2279,7 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
       in
       candidates :=
         { expr = candidate; pass = "bitsliced"; equalities; ring_equalities;
-          allow_equal_cost = false } :: !candidates)
+          poly_equalities = []; allow_equal_cost = false } :: !candidates)
     bitsliced_fast;
   if Option.is_none bitsliced_fast then (
   List.iter (fun candidate -> candidates := direct "peephole" candidate :: !candidates)
@@ -2091,7 +2301,7 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
       (fun (candidate, equalities, ring_equalities) ->
         candidates :=
           { expr = candidate; pass = "falling-null"; equalities; ring_equalities;
-            allow_equal_cost = false } :: !candidates)
+            poly_equalities = []; allow_equal_cost = false } :: !candidates)
       (reduce_univariate_null_polynomial cost expression);
     Option.iter
       (fun candidate -> candidates := ring "ring-polynomial" candidate :: !candidates)
@@ -2100,19 +2310,19 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
     (fun (candidate, equalities, ring_equalities) ->
       candidates :=
         { expr = candidate; pass = "factor-group"; equalities; ring_equalities;
-          allow_equal_cost = false } :: !candidates)
+          poly_equalities = []; allow_equal_cost = false } :: !candidates)
     (factor_group_candidate cost expression);
   Option.iter
     (fun (candidate, equalities, ring_equalities) ->
       candidates :=
         { expr = candidate; pass = "minterm-polynomial"; equalities; ring_equalities;
-          allow_equal_cost = false } :: !candidates)
+          poly_equalities = []; allow_equal_cost = false } :: !candidates)
     (minterm_polynomial_candidate cost expression);
   Option.iter
     (fun (candidate, equalities) ->
       candidates :=
         { expr = candidate; pass = "product-partition"; equalities;
-          ring_equalities = []; allow_equal_cost = false } :: !candidates)
+          ring_equalities = []; poly_equalities = []; allow_equal_cost = false } :: !candidates)
     (product_partition_candidate expression);
   Option.iter
     (fun candidate ->
@@ -2123,7 +2333,7 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
       in
       candidates :=
         { expr = candidate; pass = "bitsliced"; equalities; ring_equalities;
-          allow_equal_cost = false } :: !candidates)
+          poly_equalities = []; allow_equal_cost = false } :: !candidates)
     (bitsliced_candidate cost expression);
   if cost expression >= 4 then
     List.iter
@@ -2140,7 +2350,7 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
         in
         candidates :=
           { expr = candidate; pass = "linear-mba"; equalities; ring_equalities;
-            allow_equal_cost = false } :: !candidates)
+            poly_equalities = []; allow_equal_cost = false } :: !candidates)
       (linear_candidates cost expression));
   );
   let offer_nonmonotonic ?(ring_rule = true) pass candidate =

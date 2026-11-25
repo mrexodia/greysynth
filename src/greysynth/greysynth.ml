@@ -204,6 +204,15 @@ let run_preprocessing gt input =
       oes_done := true;
       check_equiv gt ~tag:"OES" log_linear_is_equiv !best)
   in
+  (match
+     if size_of_expr !best >= 200
+     then Normalization.reduce_modular_polynomial size_of_expr !best
+     else None
+   with
+  | Some (candidate, equalities, poly_equalities)
+    when Rewrite.accepts_compositional ~pass:"root-poly-mod2w"
+           ~equalities ~poly_equalities !best candidate -> best := candidate
+  | _ -> ());
   (match !evaluator.is_node_constant !best with
   | Some value when (!c_oes || !c_normalization) && size_of_expr !best > 1 ->
       let candidate = Sexpr.Expr.constant value in

@@ -607,6 +607,40 @@ let test_round15_canonicalization () =
             composition variable)
     [ 8; 16; 32; 64 ]
 
+let test_round19_modular_polynomials () =
+  let falling variable degree =
+    let result = ref variable in
+    for offset = 1 to degree - 1 do
+      result := mul !result (minus variable (c (E.sizeof variable) offset))
+    done;
+    !result
+  in
+  let check label original expected =
+    match N.reduce_modular_polynomial U.size_of_expr original with
+    | None -> failwith (label ^ ": no modular polynomial candidate")
+    | Some (candidate, equalities, poly_equalities) ->
+        require (E.is_equal candidate expected) (label ^ ": unexpected candidate");
+        let builder = P.create original in
+        List.iter (fun (left, right) -> P.record builder ~pass:label left right) equalities;
+        List.iter (fun (left, right) -> P.record_poly builder ~pass:label left right)
+          poly_equalities;
+        let certificate = P.finish builder candidate in
+        let report = P.verify ~original ~candidate certificate in
+        require
+          (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+          (label ^ ": certificate did not replay")
+  in
+  let x = var 64 "poly19_x" and y = var 64 "poly19_y" in
+  let linear = mul (c 64 37) x in
+  let null20 = mul (E.constant (Bitvector.create (Z.shift_left Z.one 46) 64))
+      (falling x 20) in
+  check "univariate poly_mod2w" (plus linear null20) linear;
+  let multi_null =
+    mul (E.constant (Bitvector.create (Z.shift_left Z.one 58) 64))
+      (mul (falling x 4) (falling y 4))
+  in
+  check "multivariate poly_mod2w" (plus linear multi_null) linear
+
 let test_round18_regressions () =
   let replay label original result maximum =
     require (U.size_of_expr result <= maximum)
@@ -752,6 +786,7 @@ let () =
     test_egraph_legacy_cast_cycle ();
     test_egraph_child_replay ();
     test_round15_canonicalization ();
+    test_round19_modular_polynomials ();
     test_round18_regressions ();
     test_egraph_round14_regressions ();
     test_preprocessing_portfolio ();

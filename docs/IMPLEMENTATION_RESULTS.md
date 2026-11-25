@@ -504,3 +504,35 @@ The benchmarking-only sanitized Full-Loki copy establishes 499/500 rows with
 409 solved, 53 meaningful, 37 weak, one malformed, and 1.3307x quality. The
 C-Full contention sanity cases remain proved compositional (`target_1568:
 27869 -> 19`, `target_5504: 31865 -> 3745`).
+
+## Round-19 high-degree modular polynomial engine
+
+Round 19 adds the independent `poly_mod2w` certificate rule. It parses compact
+sparse exponent vectors, enforces width/degree/monomial/operation caps, converts
+the polynomial difference to the multivariate falling-factorial basis with
+exact Stirling coefficients, and checks each coefficient against its exact
+2-adic factorial divisibility threshold. Eight- and sixteen-bit one-bit-below
+threshold negatives are rejected by both the kernel and Bitwuzla; positive
+univariate/multivariate tests through 64 bits replay compositionally.
+
+The producer reducer performs the same bounded transform, reduces coefficients
+modulo their exact null thresholds, converts back with signed Stirling numbers,
+and rebuilds powers compactly. The fast root pass runs before OES/e-graph size
+guards; low-degree/non-polynomial expressions remain excluded to preserve MBA
+phase behavior.
+
+Full zero-limit results:
+
+| Dataset | established | solved | strict / unchanged | geomean output/GT | median compression |
+|---|---:|---:|---:|---:|---:|
+| Univariate64 | 1,000/1,000 | 1,000 | 1,000 / 0 | 1.0000x | 84.79x |
+| Multivariate64 | 1,000/1,000 | 1,000 | 994 / 6 | 1.0000x | 631.27x |
+| Permutation64 | 13/13 | 3 | 11 / 2 | 25.1508x | 1.51x |
+
+Univariate64 improves from 1 solved / 84.24x and Multivariate64 from 6 solved /
+628.57x to exact ground-truth quality across every row. Permutation64 improves
+from 27.30x but remains limited by correlations among opaque bitwise atoms;
+those identities are intentionally outside the independent-polynomial theorem.
+The five 100-case MBA suites retain 500/500 established outputs with zero
+refutations/errors (minor stochastic quality variance remains under the shared
+five-second CHS budget).
