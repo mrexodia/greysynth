@@ -204,10 +204,46 @@ let run_preprocessing gt input =
       oes_done := true;
       check_equiv gt ~tag:"OES" log_linear_is_equiv !best)
   in
+  let run_root_complementary_atoms () =
+    match Normalization.pair_complementary_atoms size_of_expr !best with
+    | Some (candidate, ring_equalities, linear_mba_equalities)
+      when Rewrite.accepts_compositional ~pass:"root-complementary-atoms"
+             ~equalities:[] ~ring_equalities ~linear_mba_equalities
+             !best candidate -> best := candidate
+    | _ -> ()
+  in
+  let run_root_correlated_null () =
+    match Normalization.correlated_null_candidate size_of_expr !best with
+    | Some (candidate, ring_equalities, linear_mba_equalities)
+      when Rewrite.accepts_compositional ~pass:"root-correlated-null"
+             ~equalities:[] ~ring_equalities ~linear_mba_equalities
+             !best candidate -> best := candidate
+    | _ -> ()
+  in
+  let run_root_linear_group () =
+    let root_variable_count =
+      List.length (Sample_evaluator.variables_of_expr !best)
+    in
+    if size_of_expr !best >= 20
+       && (root_variable_count >= 3 || size_of_expr !best >= 300)
+       && root_variable_count <= 8
+       && Normalization.linear_mba_compatible !best
+    then
+      match
+        Normalization.linear_candidates ~max_atoms:8 size_of_expr !best
+        |> List.sort (fun left right ->
+               Int.compare (size_of_expr left) (size_of_expr right))
+      with
+      | candidate :: _
+        when Rewrite.accepts_compositional ~pass:"root-linear-group"
+               ~equalities:[] ~linear_mba_equalities:[ !best, candidate ]
+               !best candidate -> best := candidate
+      | _ -> ()
+  in
   let run_root_minterm_poly () =
     match
       if size_of_expr !best > 256
-      then Normalization.minterm_ring_poly_candidate size_of_expr !best
+      then Normalization.nonlinear_poly_candidate size_of_expr !best
       else None
     with
     | Some (candidate, linear_mba_equalities, ring_equalities,
@@ -219,16 +255,25 @@ let run_preprocessing gt input =
     | _ -> ()
   in
   run_root_minterm_poly ();
+  if size_of_expr !best <= 10_000
+     || size_of_expr !best < size_of_expr input / 4
+  then run_root_linear_group ();
+  run_root_complementary_atoms ();
+  run_root_correlated_null ();
   let input_dag_size = dag_size_of_expr !best in
   if (size_of_expr !best > 768 || input_dag_size > 128) && input_dag_size <= 1024
   then (
     let rounds = ref 0 and improving = ref true in
     while !rounds < 4 && !improving && not !g_has_timedout do
       incr rounds;
-      let before = size_of_expr !best in
+      let before_size = size_of_expr !best
+      and before_dag = dag_size_of_expr !best in
       best := Normalization.dag_bottom_up_simplify !best;
-      improving := size_of_expr !best < before
+      improving :=
+        size_of_expr !best < before_size || dag_size_of_expr !best < before_dag
     done);
+  run_root_complementary_atoms ();
+  run_root_correlated_null ();
   run_root_minterm_poly ();
   (match
      if size_of_expr !best >= 200
@@ -244,27 +289,7 @@ let run_preprocessing gt input =
       let candidate = Sexpr.Expr.constant value in
       if Rewrite.accepts ~pass:"root-constant" !best candidate then best := candidate
   | _ -> ());
-  let root_variable_count = List.length (Sample_evaluator.variables_of_expr !best) in
-  if size_of_expr !best >= 20
-     && (root_variable_count >= 3 || size_of_expr !best >= 300)
-     && root_variable_count <= 8
-     && Normalization.linear_mba_compatible !best
-  then
-    (let root_candidates =
-       Normalization.linear_candidates ~max_atoms:8 size_of_expr !best
-     in
-    match
-       root_candidates
-       |> List.sort (fun left right -> Int.compare (size_of_expr left) (size_of_expr right))
-     with
-    | candidate :: _ ->
-        let accepted =
-          Rewrite.accepts_compositional ~pass:"root-linear-group"
-            ~equalities:[] ~linear_mba_equalities:[ !best, candidate ]
-            !best candidate
-        in
-        if accepted then best := candidate
-    | [] -> ());
+  run_root_linear_group ();
   if size_of_expr !best > 768 then run_oes ();
   let standard () =
     let preserve_large_dag_budget =

@@ -745,6 +745,61 @@ let test_preprocessing_portfolio () =
   require (U.size_of_expr selected = expected)
     "preprocessing portfolio did not retain the cheaper complete branch"
 
+let test_round23_constructive_layers () =
+  let check label original expected maximum =
+    reset ();
+    R.start_recording original;
+    let result = N.run (N.dag_bottom_up_simplify original) in
+    require (U.size_of_expr result <= maximum)
+      (Printf.sprintf "%s: expected size <= %d, got %d: %s" label maximum
+         (U.size_of_expr result) (U.pp result));
+    let whole, _, _ = U.are_equivalent result expected (Some 5) in
+    require (whole = U.Yes) (label ^ ": result does not match expected expression");
+    let certificate = P.finish (Option.get !(R.journal)) result in
+    let report = P.verify ~timeouts:[ 1.; 5. ] ~original ~candidate:result certificate in
+    require
+      (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+      (label ^ ": certificate did not replay")
+  in
+  let x = var 16 "r23_x" and y = var 16 "r23_y" in
+  let xm1 = minus x (c 16 1) in
+  let not_xm1 = E.unary E.Not xm1 in
+  let liu =
+    plus
+      (mul (band not_xm1 y) (bor not_xm1 y))
+      (mul (band not_xm1 (E.unary E.Not y))
+         (band (E.unary E.Not not_xm1) y))
+  in
+  check "Liu Eq.40 complementary atoms" liu
+    (mul (E.unary E.Minus x) y) 7;
+  let a = E.unary E.Minus (E.unary E.Not x) in
+  let b = E.unary E.Not a in
+  let recursive = plus (bor a b) (band a b) in
+  check "MBA-Obfuscator Mode 2 complement recursion" recursive (c 16 (-1)) 1;
+  let null_vector =
+    band (E.unary E.Not x)
+      (band (E.unary E.Not y)
+         (E.unary E.Minus
+            (bor (bor x y) (minus (band x y) (plus x y)))))
+  in
+  let union = bor x y in
+  let exposed_null =
+    band (E.unary E.Not x)
+      (band (E.unary E.Not y)
+         (E.unary E.Minus (bor union (E.unary E.Minus union))))
+  in
+  (match N.correlated_null_candidate U.size_of_expr exposed_null with
+  | None -> failwith "RUMBA exposed null-vector producer returned no candidate"
+  | Some (candidate, ring_edges, linear_edges) ->
+      let proof = P.create exposed_null in
+      List.iter (fun (left, right) -> P.record_ring proof ~pass:"r23" left right) ring_edges;
+      List.iter (fun (left, right) -> P.record_linear_mba proof ~pass:"r23" left right) linear_edges;
+      let report = P.verify ~original:exposed_null ~candidate (P.finish proof candidate) in
+      require
+        (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+        ("RUMBA exposed null-vector proof failed: " ^ Yojson.Basic.to_string report));
+  check "RUMBA correlated null vector" null_vector (c 16 0) 1
+
 let test_nonlinear_is_opaque () =
   reset ();
   let x = var 8 "x" and y = var 8 "y" in
@@ -791,8 +846,9 @@ let () =
     test_round18_regressions ();
     test_egraph_round14_regressions ();
     test_preprocessing_portfolio ();
+    test_round23_constructive_layers ();
     test_nonlinear_is_opaque ();
-    print_endline "normalization_test: 64 solver-backed normalization regressions passed")
+    print_endline "normalization_test: solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
     failwith "normalization_test requires an installed SMT solver"
   else print_endline "normalization_test: proof regressions skipped (no solver installed)"

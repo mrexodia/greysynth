@@ -192,6 +192,52 @@ let () =
   expect "proved_compositional" linear_report;
   require (field "linear_mba_proofs" linear_report = `Int 1)
     "linear MBA proof was not reported";
+  let wide_linear_identity count prefix =
+    let variables =
+      List.init count (fun index -> var (prefix ^ string_of_int index) 8)
+    in
+    let rec pairs = function
+      | left :: right :: rest ->
+          E.binary E.Or left right :: E.binary E.And left right :: pairs rest
+      | [] -> []
+      | _ -> assert false
+    in
+    sum (pairs variables), sum variables
+  in
+  List.iter
+    (fun count ->
+      let left, right = wide_linear_identity count (Printf.sprintf "wide%d_" count) in
+      let started = Unix.gettimeofday () in
+      let report = P.verify ~original:left ~candidate:right
+          (linear_mba_certificate left right) in
+      expect "proved_compositional" report;
+      require (Unix.gettimeofday () -. started < 0.1)
+        (Printf.sprintf "%d-atom sparse linear MBA replay was unexpectedly slow" count))
+    [ 10; 12 ];
+  let wide_vars = List.init 10 (fun index -> var ("wide_bad" ^ string_of_int index) 8) in
+  let wide_sum = sum wide_vars in
+  let wide_off_by_one = E.binary E.Plus wide_sum (c 8 1) in
+  expect "error"
+    (P.verify ~original:wide_off_by_one ~candidate:wide_sum
+       (linear_mba_certificate wide_off_by_one wide_sum));
+  let wide_mask_left =
+    sum (E.binary E.And (List.hd wide_vars) (c 8 5) :: List.tl wide_vars)
+  in
+  expect "error"
+    (P.verify ~original:wide_mask_left ~candidate:wide_sum
+       (linear_mba_certificate wide_mask_left wide_sum));
+  let wx0 = List.nth wide_vars 0 and wx1 = List.nth wide_vars 1
+  and wx2 = List.nth wide_vars 2 in
+  let wide_arithmetic_left =
+    sum (E.binary E.And (E.binary E.Plus wx0 wx1) wx2
+         :: List.filteri (fun index _ -> index >= 3) wide_vars)
+  and wide_arithmetic_right =
+    sum (E.binary E.And wx0 wx2 :: E.binary E.And wx1 wx2
+         :: List.filteri (fun index _ -> index >= 3) wide_vars)
+  in
+  expect "error"
+    (P.verify ~original:wide_arithmetic_left ~candidate:wide_arithmetic_right
+       (linear_mba_certificate wide_arithmetic_left wide_arithmetic_right));
   let lx = var "lmx" 8 and ly = var "lmy" 8 and lz = var "lmz" 8 in
   let product = E.binary E.Mul lx ly in
   let correlated_left = E.binary E.Plus (E.binary E.And product lz)
@@ -230,7 +276,9 @@ let () =
       (fun (left, right) ->
         let verdict, _, _ = U.are_equivalent left right (Some 2) in
         require (verdict = U.No) "linear MBA negative was not refuted by SMT")
-      [ bad_mask, lx; bad_partition, c 8 (-1); bad_distribution, distributed ];
+      [ bad_mask, lx; bad_partition, c 8 (-1); bad_distribution, distributed;
+        wide_off_by_one, wide_sum; wide_mask_left, wide_sum;
+        wide_arithmetic_left, wide_arithmetic_right ];
     let negative_verdict, _, _ = U.are_equivalent off_by_one (c 8 0) (Some 2) in
     let negative_verdict16, _, _ = U.are_equivalent off_by_one16 (c 16 0) (Some 2) in
     require (negative_verdict = U.No && negative_verdict16 = U.No)

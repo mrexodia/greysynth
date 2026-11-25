@@ -45,3 +45,13 @@
  (modules proof_test)
  (libraries greysynth.proof greysynth.utils binsec.smt binsec.sse.term yojson)
  (flags (:standard -open Binsec -open Libsse -open Libterm)))
+
+(test
+ (name round23_test)
+ (modules round23_test)
+ (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
+            greysynth.string_to_sexpr binsec.smt binsec.sse.term yojson unix)
+ (flags (:standard -open Binsec -open Libsse -open Libterm))
+ (deps ../datasets/greysynth/mba_obfuscator/mba_info/target_366.json)
+ (action
+  (run %{test} %{dep:../datasets/greysynth/mba_obfuscator/mba_info/target_366.json})))

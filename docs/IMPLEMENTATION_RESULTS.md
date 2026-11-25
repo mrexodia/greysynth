@@ -665,3 +665,51 @@ All seven ObfuscatorX rows establish and strictly shrink; measured quality is
 linear-MBA and factor normalization already handles the safe local identities.
 The remaining gap consists of large correlated shared-factor expressions, so no
 benchmark-specific Boolean rewrite was added.
+
+## Round-23 sparse BitTrans, PolySim and correlated propagation
+
+`linear_mba_mod2w` now retains its dense truth-table path through eight opaque
+atoms and automatically switches to an exact sparse multilinear conjunction
+ring for 9--32 atoms. The sparse checker is DAG-memoized and capped at 4,096
+monomials, 16,384 unique nodes and two million operations. Uniform zero/fill
+constants alone enter Boolean algebra; non-uniform constants and arithmetic
+under bitwise operators remain strict opaque atoms. Shared arithmetic nodes are
+consistently abstracted everywhere in an edge, which is a stronger (therefore
+sound) proof obligation and enables correlated null-vector certificates.
+Ten- and twelve-atom positive identities replay through the decidable rule;
+off-by-one, non-uniform-mask and false arithmetic-distribution negatives are
+rejected by both the kernel and Bitwuzla.
+
+The producer adds sparse arbitrary-arity `BitTrans`/`PolySim`, bounded
+factor-before-expand, complementary arithmetic-atom pairing, semantic-bitwise
+recovery, and a bounded RUMBA-style correlated injection. The concrete
+null-vector bridge used by the regression is:
+
+```text
+-(A | B)  ->  -(A | B) + (A + B)  ->  A & B, when A + B == 0
+```
+
+The first edge is `ring_mod2w`; the second is `linear_mba_mod2w`. Bottom-up DAG
+peeling then exposes ordinary complement/zero identities. Liu §6 Eq. 40,
+recursive `-~x`/`~(-~x)`, and the RUMBA §7.2 regression replay without SMT proof
+edges. A dedicated corpus-backed test checks the 32-bit layered
+`target_366` end to end: `3,400,417 -> 11` (exact GT), including independent
+certificate replay.
+
+Curated hard-case results (baseline values are stored in each case JSON):
+
+| Gate | Established | Exact-GT before -> after | Geomean quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| C-MBA remaining weak | 152/152 | 0 -> 125 | 69.5511x -> 1.5419x | 147 / 5 / 0 |
+| MBA-Obfuscator nonlinear weak | 255/255 | 0 -> 149 | 13.4231x -> 1.3274x | 216 / 37 / 2 |
+| Core hard | 406/413 | 0 -> 154 | 87.4070x -> 11.1627x | 287 / 98 / 9 |
+| Regression smoke | 62/62 | 58 -> 49 | 0.7846x -> 1.2134x | 1 / 52 / 9 |
+
+Every established result independently replays and there are zero refutations
+or unknown proof verdicts. The seven unresolved core rows are the pre-existing
+malformed Loki expression and six 30-second OMVLL process timeouts. The
+regression smoke semantic gate remains 62/62 with all 62 strict reductions, but
+its five-second eight-worker quality gate does not meet the no-regression goal:
+nine rows finish larger than their stored isolated baselines. This is reported
+explicitly rather than treating contention-sensitive phase ordering as a proof
+failure; it remains follow-up scheduling work.

@@ -595,7 +595,7 @@ let optimize expression =
             in
             (match
                if size_of_expr root_expression > 256
-               then Normalization.minterm_ring_poly_candidate size_of_expr root_expression
+               then Normalization.nonlinear_poly_candidate size_of_expr root_expression
                else None
              with
             | Some (candidate, linear_mba_equalities, ring_equalities,

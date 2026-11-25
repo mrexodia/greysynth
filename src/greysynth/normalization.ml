@@ -933,7 +933,7 @@ type form =
 exception Too_complex
 
 let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_atoms)
-    cost expression =
+    ?(semantic_bitwise = false) cost expression =
   let width = E.sizeof expression in
   let modulus = Z.shift_left Z.one width in
   let mask = Z.pred modulus in
@@ -1076,6 +1076,22 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
     let distinct =
       Array.to_list target |> List.sort_uniq Z.compare
     in
+    if semantic_bitwise && count <= min 6 !c_normalization_max_atoms then (
+      let zero = Z.zero and one = Z.one
+      and minus_one = mask and minus_two = normalize (Z.of_int (-2)) in
+      if Z.equal target.(0) zero
+         && Array.for_all (fun value -> Z.equal value zero || Z.equal value one) target
+      then
+        let truth = Array.map (Z.equal one) target in
+        List.iter offer (boolean_candidates truth)
+      else if Z.equal target.(0) minus_one
+              && Array.for_all
+                   (fun value -> Z.equal value minus_one || Z.equal value minus_two)
+                   target
+      then
+        let low_truth = Array.map (Z.equal minus_two) target in
+        List.iter (fun boolean -> offer (E.unary E.Not boolean))
+          (boolean_candidates low_truth));
     (match distinct with
     | [ low; high ] when count <= min 6 !c_normalization_max_atoms ->
         let truth = Array.map (Z.equal high) target in
@@ -1185,6 +1201,19 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
     !results
   with Too_complex -> []
 
+let is_semantically_bitwise cost expression =
+  let rec pure = function
+    | E.Var _ -> true
+    | E.Cst value -> Bitvector.is_zeros value || Bitvector.is_fill value
+    | E.Unary { f = E.Not; x; _ } -> pure x
+    | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } -> pure x && pure y
+    | _ -> false
+  in
+  linear_candidates ~max_atoms:6 ~semantic_bitwise:true cost expression
+  |> List.filter pure
+  |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+  |> function candidate :: _ -> Some candidate | [] -> None
+
 let component_linear_candidates cost expression =
   if cost expression > 256
      || List.length (Sample_evaluator.variables_of_expr expression) > 2
@@ -1281,7 +1310,8 @@ module RingPolynomial = Map.Make (RingMonomial)
 
 exception Ring_candidate_too_complex
 
-let ring_polynomial_candidate cost expression =
+let ring_polynomial_candidate ?(max_operations = 50_000)
+    ?(max_monomials = 256) ?(max_degree = 8) cost expression =
   let width = E.sizeof expression in
   let modulus = Z.shift_left Z.one width in
   let normalize value =
@@ -1291,7 +1321,7 @@ let ring_polynomial_candidate cost expression =
   let operations = ref 0 in
   let add_term monomial coefficient polynomial =
     incr operations;
-    if !operations > 50_000 || List.length monomial > 8 then
+    if !operations > max_operations || List.length monomial > max_degree then
       raise Ring_candidate_too_complex;
     let old = Option.value (RingPolynomial.find_opt monomial polynomial) ~default:Z.zero in
     let value = normalize (Z.add old coefficient) in
@@ -1299,7 +1329,7 @@ let ring_polynomial_candidate cost expression =
       if Z.equal value Z.zero then RingPolynomial.remove monomial polynomial
       else RingPolynomial.add monomial value polynomial
     in
-    if RingPolynomial.cardinal result > 256 then raise Ring_candidate_too_complex;
+    if RingPolynomial.cardinal result > max_monomials then raise Ring_candidate_too_complex;
     result
   in
   let add left right = RingPolynomial.fold add_term left right in
@@ -1505,6 +1535,382 @@ let minterm_ring_poly_candidate cost expression =
               (candidate, List.rev !linear_edges,
                [ substituted, polynomial ],
                if E.is_equal compact polynomial then [] else [ polynomial, compact ])
+
+module AndPolynomial = Map.Make (Int)
+
+let polysim_candidate cost expression =
+  let rec has_nonlinear_product = function
+    | E.Binary { f = E.Mul; x; y; _ }
+      when Option.is_none (constant_value x) && Option.is_none (constant_value y) -> true
+    | E.Unary { x; _ } -> has_nonlinear_product x
+    | E.Binary { x; y; _ } -> has_nonlinear_product x || has_nonlinear_product y
+    | E.Ite { c; t; e; _ } ->
+        has_nonlinear_product c || has_nonlinear_product t || has_nonlinear_product e
+    | _ -> false
+  in
+  if not (has_nonlinear_product expression) then None else
+  let width = E.sizeof expression in
+  let modulus = Z.shift_left Z.one width in
+  let normalize value =
+    let value = Z.erem value modulus in
+    if Z.sign value < 0 then Z.add value modulus else value
+  in
+  let atoms_table = Nodes.create 32 in
+  let rec collect_bitwise = function
+    | E.Cst value when Bitvector.is_zeros value || Bitvector.is_fill value -> ()
+    | E.Unary { f = E.Not; x; _ } -> collect_bitwise x
+    | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+        collect_bitwise x; collect_bitwise y
+    | atom -> Nodes.replace atoms_table atom ()
+  and collect_ring = function
+    | E.Unary { f = E.Minus; x; _ } -> collect_ring x
+    | E.Binary { f = (E.Plus | E.Minus | E.Mul); x; y; _ } ->
+        collect_ring x; collect_ring y
+    | (E.Unary { f = E.Not; _ }
+      | E.Binary { f = (E.And | E.Or | E.Xor); _ }) as bitwise ->
+        collect_bitwise bitwise
+    | E.Cst _ -> ()
+    | atom -> Nodes.replace atoms_table atom ()
+  in
+  collect_ring expression;
+  let atoms =
+    Nodes.fold (fun atom () result -> atom :: result) atoms_table []
+    |> List.sort E.compare |> Array.of_list
+  in
+  let atom_count = Array.length atoms in
+  if atom_count < 2 || atom_count > 32
+     || Array.exists (fun atom -> E.sizeof atom <> width) atoms
+     || Greysynth_utils.Utils.dag_size_bounded ~limit:2048 expression > 2048
+  then None
+  else
+    let atom_index expression =
+      let rec find index =
+        if index = atom_count then None
+        else if E.is_equal atoms.(index) expression then Some index
+        else find (index + 1)
+      in
+      find 0
+    in
+    let rec pure_bitwise expression =
+      match atom_index expression with
+      | Some _ -> true
+      | None ->
+          match expression with
+          | E.Cst value -> Bitvector.is_zeros value || Bitvector.is_fill value
+          | E.Unary { f = E.Not; x; _ } -> pure_bitwise x
+          | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+              pure_bitwise x && pure_bitwise y
+          | _ -> false
+    in
+    let operations = ref 0 and total_monomials = ref 0 in
+    let tick () =
+      incr operations;
+      if !operations > 1_000_000 then raise Ring_candidate_too_complex
+    in
+    let add_term monomial coefficient polynomial =
+      tick ();
+      let coefficient = normalize coefficient in
+      let old = Option.value (AndPolynomial.find_opt monomial polynomial) ~default:Z.zero in
+      let coefficient = normalize (Z.add old coefficient) in
+      let result =
+        if Z.equal coefficient Z.zero then AndPolynomial.remove monomial polynomial
+        else AndPolynomial.add monomial coefficient polynomial
+      in
+      if AndPolynomial.cardinal result > 64 then raise Ring_candidate_too_complex;
+      result
+    in
+    let poly_constant value = add_term 0 value AndPolynomial.empty in
+    let add left right = AndPolynomial.fold add_term left right in
+    let neg polynomial =
+      AndPolynomial.fold
+        (fun monomial coefficient result -> add_term monomial (Z.neg coefficient) result)
+        polynomial AndPolynomial.empty
+    in
+    let sub left right = add left (neg right) in
+    let scale coefficient polynomial =
+      AndPolynomial.fold
+        (fun monomial value result -> add_term monomial (Z.mul coefficient value) result)
+        polynomial AndPolynomial.empty
+    in
+    let mul left right =
+      AndPolynomial.fold
+        (fun left_monomial left_coefficient result ->
+          AndPolynomial.fold
+            (fun right_monomial right_coefficient result ->
+              add_term (left_monomial lor right_monomial)
+                (Z.mul left_coefficient right_coefficient) result)
+            right result)
+        left AndPolynomial.empty
+    in
+    let memo = Nodes.create 64 in
+    let rec transform expression =
+      match Nodes.find_opt memo expression with
+      | Some result -> result
+      | None ->
+          let result =
+            match atom_index expression with
+            | Some index -> add_term (1 lsl index) Z.one AndPolynomial.empty
+            | None ->
+                match expression with
+                | E.Cst value when Bitvector.is_zeros value -> AndPolynomial.empty
+                | E.Cst value when Bitvector.is_fill value -> poly_constant Z.one
+                | E.Unary { f = E.Not; x; _ } -> sub (poly_constant Z.one) (transform x)
+                | E.Binary { f = E.And; x; y; _ } -> mul (transform x) (transform y)
+                | E.Binary { f = E.Or; x; y; _ } ->
+                    let x = transform x and y = transform y in
+                    sub (add x y) (mul x y)
+                | E.Binary { f = E.Xor; x; y; _ } ->
+                    let x = transform x and y = transform y in
+                    sub (add x y) (scale (Z.of_int 2) (mul x y))
+                | _ -> raise Ring_candidate_too_complex
+          in
+          Nodes.add memo expression result;
+          result
+    in
+    let conjunction monomial =
+      let terms = ref [] in
+      for index = 0 to atom_count - 1 do
+        if monomial land (1 lsl index) <> 0 then terms := atoms.(index) :: !terms
+      done;
+      match List.rev !terms with
+      | head :: tail -> List.fold_left (E.binary E.And) head tail
+      | [] -> constant width (Z.pred modulus)
+    in
+    let scaled coefficient term =
+      if Z.equal coefficient Z.one then term
+      else if Z.equal coefficient (Z.pred modulus) then E.unary E.Minus term
+      else E.binary E.Mul (constant width coefficient) term
+    in
+    let expansion expression =
+      let polynomial = transform expression in
+      total_monomials := !total_monomials + AndPolynomial.cardinal polynomial;
+      if !total_monomials > 2048 then raise Ring_candidate_too_complex;
+      let terms =
+        AndPolynomial.fold
+          (fun monomial coefficient result ->
+            let coefficient = if monomial = 0 then normalize (Z.neg coefficient)
+              else coefficient in
+            if Z.equal coefficient Z.zero then result
+            else
+              let term =
+                if monomial = 0 then constant width coefficient
+                else scaled coefficient (conjunction monomial)
+              in
+              term :: result)
+          polynomial []
+      in
+      match List.sort E.compare terms with
+      | [] -> zeros width
+      | terms -> build_balanced E.Plus terms
+    in
+    let replacements = Nodes.create 64 in
+    let linear_edges = ref [] and ring_edges = ref [] and nonlinear = ref false in
+    let simplify_factor factor =
+      match ring_polynomial_candidate cost factor with
+      | Some candidate when cost candidate < cost factor ->
+          ring_edges := (factor, candidate) :: !ring_edges;
+          candidate
+      | _ -> factor
+    in
+    let rec substitute expression =
+      match Nodes.find_opt replacements expression with
+      | Some result -> result
+      | None ->
+          let result =
+            if pure_bitwise expression then (
+              let result = expansion expression in
+              if not (E.is_equal expression result) then
+                linear_edges := (expression, result) :: !linear_edges;
+              result)
+            else
+              match expression with
+              | E.Unary { f; x; _ } -> E.unary f (substitute x)
+              | E.Binary { f = E.Mul; x; y; _ } ->
+                  let x = simplify_factor (substitute x)
+                  and y = simplify_factor (substitute y) in
+                  if Option.is_none (constant_value x) && Option.is_none (constant_value y)
+                  then nonlinear := true;
+                  E.binary E.Mul x y
+              | E.Binary { f; x; y; _ } -> E.binary f (substitute x) (substitute y)
+              | E.Ite { c; t; e; _ } -> E.ite (substitute c) (substitute t) (substitute e)
+              | node -> node
+          in
+          Nodes.add replacements expression result;
+          result
+    in
+    try
+      let substituted = substitute expression in
+      if not !nonlinear || List.length !linear_edges > 64 then None
+      else
+        match
+          ring_polynomial_candidate ~max_operations:200_000
+            ~max_monomials:4096 ~max_degree:16 cost substituted
+        with
+        | None -> None
+        | Some polynomial ->
+            let compact =
+              if atom_count <= 8 then
+                linear_candidates ~max_atoms:8 cost polynomial
+                |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+                |> function head :: _ -> head | [] -> polynomial
+              else polynomial
+            in
+            if cost compact >= cost expression then None
+            else
+              Some
+                (compact, List.rev !linear_edges,
+                 List.rev ((substituted, polynomial) :: !ring_edges),
+                 if E.is_equal compact polynomial then [] else [ polynomial, compact ])
+    with Ring_candidate_too_complex -> None
+
+let nonlinear_poly_candidate cost expression =
+  match minterm_ring_poly_candidate cost expression with
+  | Some _ as candidate -> candidate
+  | None ->
+      if cost expression <= 2048
+         && Greysynth_utils.Utils.dag_size_bounded ~limit:256 expression <= 256
+      then polysim_candidate cost expression
+      else None
+
+let pair_complementary_atoms cost expression =
+  if cost expression > 4096 then None else
+  let width = E.sizeof expression in
+  let atoms = Nodes.create 16 in
+  let rec bitwise = function
+    | E.Cst value when Bitvector.is_zeros value || Bitvector.is_fill value -> ()
+    | E.Unary { f = E.Not; x; _ } -> bitwise x
+    | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } -> bitwise x; bitwise y
+    | atom -> Nodes.replace atoms atom ()
+  and inspect = function
+    | E.Unary { f = E.Not; _ } as value -> bitwise value
+    | E.Binary { f = (E.And | E.Or | E.Xor); _ } as value -> bitwise value
+    | E.Unary { x; _ } -> inspect x
+    | E.Binary { x; y; _ } -> inspect x; inspect y
+    | E.Ite { c; t; e; _ } -> inspect c; inspect t; inspect e
+    | _ -> ()
+  in
+  inspect expression;
+  let atoms = Nodes.fold (fun atom () result -> atom :: result) atoms []
+    |> List.filter (fun atom -> E.sizeof atom = width)
+    |> List.sort E.compare |> Array.of_list in
+  if Array.length atoms < 2 || Array.length atoms > 12
+     || Greysynth_utils.Utils.dag_size_bounded ~limit:512 expression > 512
+  then None
+  else
+    let replacements = Nodes.create 8 and ring_edges = ref []
+    and linear_edges = ref [] in
+    let fill = constant width (Z.pred (Z.shift_left Z.one width)) in
+    let complement atom = E.unary E.Not atom in
+    let negative atom = E.binary E.Minus (E.unary E.Minus atom) (integer width 1) in
+    let pair left right =
+      if Nodes.mem replacements left || Nodes.mem replacements right then ()
+      else
+        let sum = E.binary E.Plus left right in
+        match ring_polynomial_candidate cost sum with
+        | Some candidate when E.is_equal candidate fill ->
+            let source, base =
+              if cost right > cost (complement left) then right, left
+              else if cost left > cost (complement right) then left, right
+              else if E.compare left right <= 0 then right, left else left, right
+            in
+            let algebraic = negative base and replacement = complement base in
+            Nodes.add replacements source replacement;
+            ring_edges := (source, algebraic) :: !ring_edges;
+            linear_edges := (algebraic, replacement) :: !linear_edges
+        | _ -> ()
+    in
+    for i = 0 to Array.length atoms - 1 do
+      for j = i + 1 to Array.length atoms - 1 do
+        pair atoms.(i) atoms.(j)
+      done
+    done;
+    if Nodes.length replacements = 0 then None
+    else
+      let memo = Nodes.create 64 in
+      let rec rewrite node =
+        match Nodes.find_opt replacements node with
+        | Some result -> result
+        | None ->
+            match Nodes.find_opt memo node with
+            | Some result -> result
+            | None ->
+                let result =
+                  match node with
+                  | E.Unary { f; x; _ } -> E.unary f (rewrite x)
+                  | E.Binary { f; x; y; _ } -> E.binary f (rewrite x) (rewrite y)
+                  | E.Ite { c; t; e; _ } -> E.ite (rewrite c) (rewrite t) (rewrite e)
+                  | value -> value
+                in
+                Nodes.add memo node result;
+                result
+      in
+      let candidate = rewrite expression in
+      if cost candidate >= cost expression then None
+      else Some (candidate, List.rev !ring_edges, List.rev !linear_edges)
+
+let correlated_null_candidate cost expression =
+  if cost expression > 4096
+     || Greysynth_utils.Utils.dag_size_bounded ~limit:512 expression > 512
+  then None else
+  let ring_edges = ref [] and linear_edges = ref [] and changed = ref false in
+  let canonical_memo = Nodes.create 32 in
+  let rec canonical_ac node =
+    match Nodes.find_opt canonical_memo node with
+    | Some result -> result
+    | None ->
+        let result =
+          match node with
+          | E.Unary { f; x; _ } -> E.unary f (canonical_ac x)
+          | E.Binary { f = (E.Plus | E.Mul | E.And | E.Or | E.Xor as f); x; y; _ } ->
+              let x = canonical_ac x and y = canonical_ac y in
+              if E.compare x y <= 0 then E.binary f x y else E.binary f y x
+          | E.Binary { f; x; y; _ } -> E.binary f (canonical_ac x) (canonical_ac y)
+          | value -> value
+        in
+        Nodes.add canonical_memo node result;
+        result
+  in
+  let memo = Nodes.create 64 in
+  let rec rewrite node =
+    match Nodes.find_opt memo node with
+    | Some result -> result
+    | None ->
+        let rebuilt =
+          match node with
+          | E.Unary { f; x; _ } -> E.unary f (rewrite x)
+          | E.Binary { f; x; y; _ } -> E.binary f (rewrite x) (rewrite y)
+          | E.Ite { c; t; e; _ } -> E.ite (rewrite c) (rewrite t) (rewrite e)
+          | value -> value
+        in
+        let result =
+          match rebuilt with
+          | E.Unary { f = E.Minus;
+                      x = E.Binary { f = E.Or; x = left; y = right; _ }; _ } ->
+              let original_left = left and original_right = right in
+              let left = canonical_ac left and right = canonical_ac right in
+              let relation = E.binary E.Plus left right in
+              (match ring_polynomial_candidate cost relation with
+              | Some zero when E.is_equal zero (zeros (E.sizeof node)) ->
+                  let normalized = E.unary E.Minus (E.binary E.Or left right) in
+                  let injected = E.binary E.Plus normalized relation in
+                  let candidate = E.binary E.And left right in
+                  if not (E.is_equal original_left left) then
+                    linear_edges := (original_left, left) :: !linear_edges;
+                  if not (E.is_equal original_right right) then
+                    linear_edges := (original_right, right) :: !linear_edges;
+                  ring_edges := (normalized, injected) :: !ring_edges;
+                  linear_edges := (injected, candidate) :: !linear_edges;
+                  changed := true;
+                  candidate
+              | _ -> rebuilt)
+          | _ -> rebuilt
+        in
+        Nodes.add memo node result;
+        result
+  in
+  let candidate = rewrite expression in
+  if not !changed || cost candidate >= cost expression then None
+  else Some (candidate, List.rev !ring_edges, List.rev !linear_edges)
 
 let reduce_univariate_null_polynomial cost expression =
   let width = E.sizeof expression and maximum_degree = 8 in
@@ -2439,7 +2845,7 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
             ring_equalities; poly_equalities = [];
             linear_mba_equalities = linear_mba_equalities @ final_linear_equalities;
             allow_equal_cost = false } :: !candidates)
-      (if cost expression > 256 then minterm_ring_poly_candidate cost expression else None);
+      (if cost expression > 256 then nonlinear_poly_candidate cost expression else None);
     Option.iter
       (fun (candidate, equalities, ring_equalities) ->
         candidates :=
@@ -2450,6 +2856,20 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
     Option.iter
       (fun candidate -> candidates := ring "ring-polynomial" candidate :: !candidates)
       (ring_polynomial_candidate cost expression));
+  Option.iter
+    (fun (candidate, ring_equalities, linear_mba_equalities) ->
+      candidates :=
+        { expr = candidate; pass = "complementary-atoms"; equalities = [];
+          ring_equalities; poly_equalities = []; linear_mba_equalities;
+          allow_equal_cost = false } :: !candidates)
+    (pair_complementary_atoms cost expression);
+  Option.iter
+    (fun (candidate, ring_equalities, linear_mba_equalities) ->
+      candidates :=
+        { expr = candidate; pass = "correlated-null"; equalities = [];
+          ring_equalities; poly_equalities = []; linear_mba_equalities;
+          allow_equal_cost = false } :: !candidates)
+    (correlated_null_candidate cost expression);
   Option.iter
     (fun (candidate, equalities, ring_equalities) ->
       candidates :=
@@ -2591,15 +3011,38 @@ let dag_bottom_up_simplify expression =
     | Some result -> result
     | None ->
         check_timeout ();
+        let semantic_child child =
+          match is_semantically_bitwise cost child with
+          | Some candidate
+            when Rewrite.accepts_compositional ~pass:"dag-semantic-bitwise"
+                   ~equalities:[] ~linear_mba_equalities:[ child, candidate ]
+                   child candidate -> candidate
+          | _ -> child
+        in
         let rebuilt =
           match node with
+          | E.Unary { f = E.Not; x; _ } -> E.unary E.Not (semantic_child (visit x))
           | E.Unary { f; x; _ } -> E.unary f (visit x)
+          | E.Binary { f = (E.And | E.Or | E.Xor as f); x; y; _ } ->
+              E.binary f (semantic_child (visit x)) (semantic_child (visit y))
           | E.Binary { f; x; y; _ } -> E.binary f (visit x) (visit y)
           | E.Ite { c; t; e; _ } -> E.ite (visit c) (visit t) (visit e)
           | _ -> node
         in
         let result = ref rebuilt in
-        (match minterm_ring_poly_candidate cost !result with
+        (match pair_complementary_atoms cost !result with
+        | Some (candidate, ring_equalities, linear_mba_equalities)
+          when Rewrite.accepts_compositional ~pass:"dag-complementary-atoms"
+                 ~equalities:[] ~ring_equalities ~linear_mba_equalities
+                 !result candidate -> result := candidate
+        | _ -> ());
+        (match correlated_null_candidate cost !result with
+        | Some (candidate, ring_equalities, linear_mba_equalities)
+          when Rewrite.accepts_compositional ~pass:"dag-correlated-null"
+                 ~equalities:[] ~ring_equalities ~linear_mba_equalities
+                 !result candidate -> result := candidate
+        | _ -> ());
+        (match nonlinear_poly_candidate cost !result with
         | Some (candidate, linear_mba_equalities, ring_equalities,
                 final_linear_equalities)
           when Rewrite.accepts_compositional ~pass:"dag-minterm-ring-poly"

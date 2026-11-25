@@ -636,12 +636,15 @@ let poly_equal g left right =
         if valid then Ring_equal else Ring_not_equal
     with Ring_limit -> Ring_limit_exceeded
 
+module SparseMultilinear = Map.Make (Int)
+
 let linear_mba_equal g left right =
   let width = (node g left).width in
   if width <> (node g right).width then Ring_not_equal
   else if width > 128 then Ring_limit_exceeded
   else
-    let max_atoms = 8 and max_visited = 16_384 and max_ops = 2_000_000 in
+    let max_atoms = 32 and max_monomials = 4096
+    and max_visited = 16_384 and max_ops = 2_000_000 in
     let visited = Array.make g.count false and visited_count = ref 0 in
     let seen_linear = Array.make g.count false and seen_bitwise = Array.make g.count false in
     let atoms = Hashtbl.create 16 and operations = ref 0 in
@@ -697,6 +700,121 @@ let linear_mba_equal g left right =
         |> List.sort Int.compare |> Array.of_list in
       let atom_index = Hashtbl.create (Array.length atom_ids) in
       Array.iteri (fun index id -> Hashtbl.add atom_index id index) atom_ids;
+      if Array.length atom_ids > 8 then (
+        let add_term monomial coefficient polynomial =
+          tick 1;
+          let coefficient = normalize coefficient in
+          let previous =
+            Option.value (SparseMultilinear.find_opt monomial polynomial)
+              ~default:Z.zero
+          in
+          let coefficient = normalize (Z.add previous coefficient) in
+          let result =
+            if Z.equal coefficient Z.zero
+            then SparseMultilinear.remove monomial polynomial
+            else SparseMultilinear.add monomial coefficient polynomial
+          in
+          if SparseMultilinear.cardinal result > max_monomials then raise Ring_limit;
+          result
+        in
+        let constant value = add_term 0 value SparseMultilinear.empty in
+        let atom id =
+          let index = Hashtbl.find atom_index id in
+          add_term (1 lsl index) Z.one SparseMultilinear.empty
+        in
+        let add left right = SparseMultilinear.fold add_term left right in
+        let neg polynomial =
+          SparseMultilinear.fold
+            (fun monomial coefficient result ->
+              add_term monomial (Z.neg coefficient) result)
+            polynomial SparseMultilinear.empty
+        in
+        let sub left right = add left (neg right) in
+        let scale coefficient polynomial =
+          SparseMultilinear.fold
+            (fun monomial value result ->
+              add_term monomial (Z.mul coefficient value) result)
+            polynomial SparseMultilinear.empty
+        in
+        let mul left right =
+          SparseMultilinear.fold
+            (fun left_monomial left_coefficient result ->
+              SparseMultilinear.fold
+                (fun right_monomial right_coefficient result ->
+                  add_term (left_monomial lor right_monomial)
+                    (Z.mul left_coefficient right_coefficient) result)
+                right result)
+            left SparseMultilinear.empty
+        in
+        let bitwise_memo = Hashtbl.create 128 in
+        let rec bitwise id =
+          match Hashtbl.find_opt bitwise_memo id with
+          | Some result -> result
+          | None ->
+              let result =
+                match uniform_constant id, (node g id).shape with
+                | Some false, _ -> SparseMultilinear.empty
+                | Some true, _ -> constant Z.one
+                | None, Unary ("bvnot", [], child) ->
+                    sub (constant Z.one) (bitwise child)
+                | None, Binary ("bvand", x, y) -> mul (bitwise x) (bitwise y)
+                | None, Binary ("bvor", x, y) ->
+                    let x = bitwise x and y = bitwise y in
+                    sub (add x y) (mul x y)
+                | None, Binary ("bvxor", x, y) ->
+                    let x = bitwise x and y = bitwise y in
+                    sub (add x y) (scale (Z.of_int 2) (mul x y))
+                | _ -> atom id
+              in
+              Hashtbl.add bitwise_memo id result;
+              result
+        in
+        let bitwise_as_linear id =
+          SparseMultilinear.fold
+            (fun monomial coefficient result ->
+              add_term monomial
+                (if monomial = 0 then Z.neg coefficient else coefficient)
+                result)
+            (bitwise id) SparseMultilinear.empty
+        in
+        let linear_memo = Hashtbl.create 128 in
+        let rec linear id =
+          match Hashtbl.find_opt linear_memo id with
+          | Some result -> result
+          | None ->
+              let result =
+                if Hashtbl.mem atom_index id then atom id
+                else match (node g id).shape, (node g id).expr with
+                | Value _, E.Cst value -> constant (Bitvector.value_of value)
+                | Unary ("bvneg", [], child), _ -> neg (linear child)
+                | Unary ("bvnot", [], child), _ ->
+                    sub (constant (Z.neg Z.one)) (linear child)
+                | Binary ("bvadd", x, y), _ -> add (linear x) (linear y)
+                | Binary ("bvsub", x, y), _ -> sub (linear x) (linear y)
+                | Binary ("bvmul", x, y), _ ->
+                    (match (node g x).expr, (node g y).expr with
+                    | E.Cst value, _ ->
+                        scale (Bitvector.value_of value) (linear y)
+                    | _, E.Cst value ->
+                        scale (Bitvector.value_of value) (linear x)
+                    | _ -> atom id)
+                | Binary ("bvshl", x, y), _ ->
+                    (match (node g y).expr with
+                    | E.Cst value ->
+                        let count = Bitvector.value_of value in
+                        if Z.geq count (Z.of_int width) then SparseMultilinear.empty
+                        else scale (Z.shift_left Z.one (Z.to_int count)) (linear x)
+                    | _ -> atom id)
+                | Binary (("bvand" | "bvor" | "bvxor"), _, _), _ ->
+                    bitwise_as_linear id
+                | _ -> atom id
+              in
+              Hashtbl.add linear_memo id result;
+              result
+        in
+        if SparseMultilinear.equal Z.equal (linear left) (linear right)
+        then Ring_equal else Ring_not_equal)
+      else (
       let assignments = 1 lsl Array.length atom_ids in
       let indicator id =
         let index = Hashtbl.find atom_index id in
@@ -737,7 +855,9 @@ let linear_mba_equal g left right =
         | Some result -> result
         | None ->
             let result =
-              match (node g id).shape, (node g id).expr with
+              if Hashtbl.mem atom_index id then
+                Z.zero, Array.map (fun value -> if value then Z.one else Z.zero) (indicator id)
+              else match (node g id).shape, (node g id).expr with
               | Value _, E.Cst value -> Bitvector.value_of value, zero ()
               | Unary ("bvneg", [], child), _ ->
                   let constant, terms = linear child in normalize (Z.neg constant), scale (Z.neg Z.one) terms
@@ -782,7 +902,7 @@ let linear_mba_equal g left right =
       in
       let left_c, left_t = canonical left and right_c, right_t = canonical right in
       if Z.equal left_c right_c && Array.for_all2 Z.equal left_t right_t
-      then Ring_equal else Ring_not_equal
+      then Ring_equal else Ring_not_equal)
     with Ring_limit -> Ring_limit_exceeded
 
 let is_connected builder candidate =

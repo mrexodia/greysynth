@@ -21,7 +21,9 @@ val record_poly : builder -> pass:string -> Sexpr.Expr.t -> Sexpr.Expr.t -> unit
     bounded multivariate falling-factorial divisibility. *)
 
 val record_linear_mba : builder -> pass:string -> Sexpr.Expr.t -> Sexpr.Expr.t -> unit
-(** [record_linear_mba] checks exact bounded linear-MBA canonical forms. *)
+(** [record_linear_mba] checks exact bounded linear-MBA canonical forms. Up to
+    eight atoms use the dense truth-table path; 9--32 atoms use the sparse
+    multilinear conjunction ring with strict opaque-subterm handling. *)
 
 val is_connected : builder -> Sexpr.Expr.t -> bool
 (** Structural congruence check over already-established builder edges; performs
