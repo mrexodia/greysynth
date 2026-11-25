@@ -218,28 +218,24 @@ let run_preprocessing gt input =
       let candidate = Sexpr.Expr.constant value in
       if Rewrite.accepts ~pass:"root-constant" !best candidate then best := candidate
   | _ -> ());
-  if size_of_expr !best >= 600
-     && List.length (Sample_evaluator.variables_of_expr !best) <= 3
+  let root_variable_count = List.length (Sample_evaluator.variables_of_expr !best) in
+  if size_of_expr !best >= 20
+     && (root_variable_count >= 3 || size_of_expr !best >= 300)
+     && root_variable_count <= 8
      && Normalization.linear_mba_compatible !best
   then
-    (let root_candidates = Normalization.linear_candidates size_of_expr !best in
+    (let root_candidates =
+       Normalization.linear_candidates ~max_atoms:8 size_of_expr !best
+     in
     match
        root_candidates
        |> List.sort (fun left right -> Int.compare (size_of_expr left) (size_of_expr right))
      with
     | candidate :: _ ->
-        let equalities, ring_equalities =
-          Option.value (Normalization.minterm_ring_proof !best candidate)
-            ~default:([ !best, candidate ], [])
-        in
-        let configured_timeout = !c_equiv_timeout in
         let accepted =
-          Fun.protect
-            ~finally:(fun () -> c_equiv_timeout := configured_timeout)
-            (fun () ->
-              c_equiv_timeout := max configured_timeout 3;
-              Rewrite.accepts_compositional ~pass:"root-linear-group"
-                ~equalities ~ring_equalities !best candidate)
+          Rewrite.accepts_compositional ~pass:"root-linear-group"
+            ~equalities:[] ~linear_mba_equalities:[ !best, candidate ]
+            !best candidate
         in
         if accepted then best := candidate
     | [] -> ());

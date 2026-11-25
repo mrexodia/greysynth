@@ -932,7 +932,8 @@ type form =
 
 exception Too_complex
 
-let linear_candidates ?(opaque_atoms = []) cost expression =
+let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_atoms)
+    cost expression =
   let width = E.sizeof expression in
   let modulus = Z.shift_left Z.one width in
   let mask = Z.pred modulus in
@@ -951,7 +952,7 @@ let linear_candidates ?(opaque_atoms = []) cost expression =
     let expression, complemented = canonical_bitwise_atom expression in
     let rec lookup index = function
       | [] ->
-          if index >= !c_normalization_max_atoms then raise Too_complex;
+          if index >= max_atoms then raise Too_complex;
           atoms := !atoms @ [ expression ];
           Atom index
       | previous :: rest ->
@@ -2252,6 +2253,7 @@ type local_candidate = {
   equalities : (E.t * E.t) list;
   ring_equalities : (E.t * E.t) list;
   poly_equalities : (E.t * E.t) list;
+  linear_mba_equalities : (E.t * E.t) list;
   allow_equal_cost : bool;
 }
 
@@ -2259,12 +2261,13 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
     ?(heavy_additive = true) ~ac expression =
   let direct pass ?(allow_equal_cost = false) candidate =
     { expr = candidate; pass; equalities = [ expression, candidate ];
-      ring_equalities = []; poly_equalities = []; allow_equal_cost }
+      ring_equalities = []; poly_equalities = []; linear_mba_equalities = [];
+      allow_equal_cost }
   in
   let ring pass ?(allow_equal_cost = false) candidate =
     { expr = candidate; pass; equalities = [];
       ring_equalities = [ expression, candidate ]; poly_equalities = [];
-      allow_equal_cost }
+      linear_mba_equalities = []; allow_equal_cost }
   in
   let candidates = ref [] in
   let bitsliced_fast =
@@ -2279,7 +2282,8 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
       in
       candidates :=
         { expr = candidate; pass = "bitsliced"; equalities; ring_equalities;
-          poly_equalities = []; allow_equal_cost = false } :: !candidates)
+          poly_equalities = []; linear_mba_equalities = [];
+          allow_equal_cost = false } :: !candidates)
     bitsliced_fast;
   if Option.is_none bitsliced_fast then (
   List.iter (fun candidate -> candidates := direct "peephole" candidate :: !candidates)
@@ -2301,7 +2305,8 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
       (fun (candidate, equalities, ring_equalities) ->
         candidates :=
           { expr = candidate; pass = "falling-null"; equalities; ring_equalities;
-            poly_equalities = []; allow_equal_cost = false } :: !candidates)
+            poly_equalities = []; linear_mba_equalities = [];
+            allow_equal_cost = false } :: !candidates)
       (reduce_univariate_null_polynomial cost expression);
     Option.iter
       (fun candidate -> candidates := ring "ring-polynomial" candidate :: !candidates)
@@ -2310,19 +2315,22 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
     (fun (candidate, equalities, ring_equalities) ->
       candidates :=
         { expr = candidate; pass = "factor-group"; equalities; ring_equalities;
-          poly_equalities = []; allow_equal_cost = false } :: !candidates)
+          poly_equalities = []; linear_mba_equalities = [];
+          allow_equal_cost = false } :: !candidates)
     (factor_group_candidate cost expression);
   Option.iter
     (fun (candidate, equalities, ring_equalities) ->
       candidates :=
         { expr = candidate; pass = "minterm-polynomial"; equalities; ring_equalities;
-          poly_equalities = []; allow_equal_cost = false } :: !candidates)
+          poly_equalities = []; linear_mba_equalities = [];
+          allow_equal_cost = false } :: !candidates)
     (minterm_polynomial_candidate cost expression);
   Option.iter
     (fun (candidate, equalities) ->
       candidates :=
         { expr = candidate; pass = "product-partition"; equalities;
-          ring_equalities = []; poly_equalities = []; allow_equal_cost = false } :: !candidates)
+          ring_equalities = []; poly_equalities = []; linear_mba_equalities = [];
+          allow_equal_cost = false } :: !candidates)
     (product_partition_candidate expression);
   Option.iter
     (fun candidate ->
@@ -2333,24 +2341,29 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
       in
       candidates :=
         { expr = candidate; pass = "bitsliced"; equalities; ring_equalities;
-          poly_equalities = []; allow_equal_cost = false } :: !candidates)
+          poly_equalities = []; linear_mba_equalities = [];
+          allow_equal_cost = false } :: !candidates)
     (bitsliced_candidate cost expression);
   if cost expression >= 4 then
     List.iter
       (fun candidate ->
-        let equalities, ring_equalities =
-          if not (Rewrite.samples_agree expression candidate) then
-            ([ expression, candidate ], [])
+        let variable_count =
+          List.length (Sample_evaluator.variables_of_expr expression)
+        in
+        let equalities, ring_equalities, linear_mba_equalities =
+          if variable_count >= 3 then [], [], [ expression, candidate ]
           else
-            match minterm_ring_proof expression candidate with
-            | Some proof -> proof
-            | None ->
-                Option.value (complement_product_steps expression candidate)
-                  ~default:([ expression, candidate ], [])
+            let equalities, ring_equalities =
+              Option.value (minterm_ring_proof expression candidate)
+                ~default:(Option.value (complement_product_steps expression candidate)
+                            ~default:([ expression, candidate ], []))
+            in
+            equalities, ring_equalities, []
         in
         candidates :=
-          { expr = candidate; pass = "linear-mba"; equalities; ring_equalities;
-            poly_equalities = []; allow_equal_cost = false } :: !candidates)
+          { expr = candidate; pass = "linear-mba"; equalities;
+            ring_equalities; poly_equalities = []; linear_mba_equalities;
+            allow_equal_cost = false } :: !candidates)
       (linear_candidates cost expression));
   );
   let offer_nonmonotonic ?(ring_rule = true) pass candidate =
@@ -2740,7 +2753,14 @@ let run ?deadline expression =
                          else Rewrite.accepts ~pass:"normalize" !current candidate
                      | None -> Rewrite.accepts ~pass:"normalize" !current candidate
                    in
-                   if not (Rewrite.samples_agree !current candidate) then
+                   if List.length (Sample_evaluator.variables_of_expr !current) >= 3
+                      && linear_mba_compatible !current
+                      && Rewrite.accepts_compositional ~pass:"linear-mba-mod2w"
+                           ~equalities:[]
+                           ~linear_mba_equalities:[ !current, candidate ]
+                           !current candidate
+                   then true
+                   else if not (Rewrite.samples_agree !current candidate) then
                      Rewrite.accepts ~pass:"normalize" !current candidate
                    else
                      match minterm_ring_proof !current candidate with

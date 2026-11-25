@@ -22,6 +22,10 @@ let poly_certificate original candidate =
   let builder = P.create original in
   P.record_poly builder ~pass:"poly-test" original candidate;
   P.finish builder candidate
+let linear_mba_certificate original candidate =
+  let builder = P.create original in
+  P.record_linear_mba builder ~pass:"linear-mba-test" original candidate;
+  P.finish builder candidate
 let update name value = function
   | `Assoc fields -> `Assoc ((name, value) :: List.remove_assoc name fields)
   | _ -> failwith "object expected"
@@ -167,12 +171,58 @@ let () =
   expect "error"
     (P.verify ~original:off_by_one16 ~candidate:(c 16 0)
        (poly_certificate off_by_one16 (c 16 0)));
+  let linear_vars = List.init 8 (fun index -> var ("lm" ^ string_of_int index) 8) in
+  let sum = function
+    | head :: tail -> List.fold_left (E.binary E.Plus) head tail
+    | [] -> assert false
+  in
+  let linear_left = sum linear_vars and linear_right = sum (List.rev linear_vars) in
+  let linear_report =
+    P.verify ~original:linear_left ~candidate:linear_right
+      (linear_mba_certificate linear_left linear_right)
+  in
+  expect "proved_compositional" linear_report;
+  require (field "linear_mba_proofs" linear_report = `Int 1)
+    "linear MBA proof was not reported";
+  let lx = var "lmx" 8 and ly = var "lmy" 8 and lz = var "lmz" 8 in
+  let product = E.binary E.Mul lx ly in
+  let correlated_left = E.binary E.Plus (E.binary E.And product lz)
+      (E.binary E.Or product lz) in
+  let correlated_right = E.binary E.Plus product lz in
+  expect "proved_compositional"
+    (P.verify ~original:correlated_left ~candidate:correlated_right
+       (linear_mba_certificate correlated_left correlated_right));
+  let not_sum = E.unary E.Not (E.binary E.Plus lx ly) in
+  let negated = E.binary E.Minus
+      (E.binary E.Minus (c 8 (-1)) lx) ly in
+  expect "proved_compositional"
+    (P.verify ~original:not_sum ~candidate:negated
+       (linear_mba_certificate not_sum negated));
+  let bad_mask = E.binary E.And lx (c 8 5) in
+  expect "error"
+    (P.verify ~original:bad_mask ~candidate:lx
+       (linear_mba_certificate bad_mask lx));
+  let bad_partition = E.binary E.Plus (E.binary E.And lx (c 8 1))
+      (E.binary E.And (E.unary E.Not lx) (c 8 1)) in
+  expect "error"
+    (P.verify ~original:bad_partition ~candidate:(c 8 (-1))
+       (linear_mba_certificate bad_partition (c 8 (-1))));
+  let bad_distribution = E.binary E.And (E.binary E.Plus lx ly) lz in
+  let distributed = E.binary E.Plus (E.binary E.And lx lz) (E.binary E.And ly lz) in
+  expect "error"
+    (P.verify ~original:bad_distribution ~candidate:distributed
+       (linear_mba_certificate bad_distribution distributed));
   Printf.printf "proof_test: typed DAG, ring kernel, endpoint binding and incomplete-derivation regressions passed\n";
   if not available then (
     if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
       failwith "proof_test: solver required but unavailable";
     Printf.printf "proof_test: solver-dependent tests unavailable\n")
   else (
+    List.iter
+      (fun (left, right) ->
+        let verdict, _, _ = U.are_equivalent left right (Some 2) in
+        require (verdict = U.No) "linear MBA negative was not refuted by SMT")
+      [ bad_mask, lx; bad_partition, c 8 (-1); bad_distribution, distributed ];
     let negative_verdict, _, _ = U.are_equivalent off_by_one (c 8 0) (Some 2) in
     let negative_verdict16, _, _ = U.are_equivalent off_by_one16 (c 16 0) (Some 2) in
     require (negative_verdict = U.No && negative_verdict16 = U.No)

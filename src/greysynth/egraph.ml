@@ -24,6 +24,7 @@ type proof = {
   smt_edges : (E.t * E.t) list;
   ring_edges : (E.t * E.t) list;
   poly_edges : (E.t * E.t) list;
+  linear_mba_edges : (E.t * E.t) list;
   pass : string;
 }
 
@@ -192,9 +193,9 @@ let verify_local ?(timeout_cap = 0.5) ~local_deadline
                  (min local_remaining global_remaining))
     in
     let direct =
-      match candidate.poly_equalities, candidate.ring_equalities,
-            candidate.equalities with
-      | [], [], [ (left, right) ] ->
+      match candidate.linear_mba_equalities, candidate.poly_equalities,
+            candidate.ring_equalities, candidate.equalities with
+      | [], [], [], [ (left, right) ] ->
           (E.is_equal left lhs && E.is_equal right rhs)
           || (E.is_equal left rhs && E.is_equal right lhs)
       | _ -> false
@@ -239,8 +240,12 @@ let verify_local ?(timeout_cap = 0.5) ~local_deadline
       (fun (left, right) ->
         Rewrite_proof.record_poly builder ~pass:candidate.pass left right)
       candidate.poly_equalities;
+    List.iter
+      (fun (left, right) ->
+        Rewrite_proof.record_linear_mba builder ~pass:candidate.pass left right)
+      candidate.linear_mba_equalities;
     if candidate.equalities = [] && candidate.ring_equalities = []
-       && candidate.poly_equalities = [] then
+       && candidate.poly_equalities = [] && candidate.linear_mba_equalities = [] then
       Rewrite_proof.record builder ~pass:candidate.pass lhs rhs;
     let certificate = Rewrite_proof.finish builder rhs in
       let report =
@@ -300,6 +305,7 @@ let semantic_merge ~local_deadline graph =
                      equalities;
                      ring_equalities;
                      poly_equalities = [];
+                     linear_mba_equalities = [];
                      allow_equal_cost = true;
                    }
                  in
@@ -312,6 +318,7 @@ let semantic_merge ~local_deadline graph =
                               smt_edges = equalities;
                               ring_edges = ring_equalities;
                               poly_edges = [];
+                              linear_mba_edges = [];
                               pass = candidate.pass;
                             })
                  then changed := true
@@ -497,7 +504,11 @@ let emit_minimal_proofs graph original target =
                        List.iter
                          (fun (lhs, rhs) ->
                            Rewrite_proof.record_poly journal ~pass:proof.pass lhs rhs)
-                         proof.poly_edges)
+                         proof.poly_edges;
+                       List.iter
+                         (fun (lhs, rhs) ->
+                           Rewrite_proof.record_linear_mba journal ~pass:proof.pass lhs rhs)
+                         proof.linear_mba_edges)
                      !(Rewrite.journal))
              | Congruence ->
                  let left_children = (node graph left).raw_children
@@ -550,30 +561,32 @@ let optimize expression =
                           smt_edges = proposal.equalities;
                           ring_edges = proposal.ring_equalities;
                           poly_edges = proposal.poly_equalities;
+                          linear_mba_edges = proposal.linear_mba_equalities;
                           pass = proposal.pass })
                 then changed := true;
                 true)
               else false
             in
-            if size_of_expr root_expression >= 600
+            let root_variable_count =
+              List.length (Sample_evaluator.variables_of_expr root_expression)
+            in
+            if size_of_expr root_expression >= 20
+               && (root_variable_count >= 3 || size_of_expr root_expression >= 300)
+               && root_variable_count <= 8
                && Normalization.linear_mba_compatible root_expression then
               (match
-                 Normalization.linear_candidates size_of_expr root_expression
+                 Normalization.linear_candidates ~max_atoms:8 size_of_expr root_expression
                  |> List.sort (fun left right ->
                         Int.compare (size_of_expr left) (size_of_expr right))
                with
               | candidate :: _ ->
-                  let equalities, ring_equalities =
-                    Option.value
-                      (Normalization.minterm_ring_proof root_expression candidate)
-                      ~default:([ root_expression, candidate ], [])
-                  in
                   if
                     merge_proposal
                       ~deadline:(max local_deadline (Unix.gettimeofday () +. 4.0))
                       ~timeout_cap:3.0 root_expression
                       { expr = candidate; pass = "egraph-root-linear";
-                        equalities; ring_equalities; poly_equalities = [];
+                        equalities = []; ring_equalities = []; poly_equalities = [];
+                        linear_mba_equalities = [ root_expression, candidate ];
                         allow_equal_cost = false }
                   then root_fast := size_of_expr candidate <= 10
               | [] -> ());
@@ -601,7 +614,7 @@ let optimize expression =
                   merge_proposal root_expression
                     { expr = candidate; pass = "egraph-root-complement-linear";
                       equalities; ring_equalities; poly_equalities = [];
-                      allow_equal_cost = false }
+                      linear_mba_equalities = []; allow_equal_cost = false }
                 then (
                   root_fast := size_of_expr candidate <= 6;
                   match Normalization.factor_group_candidate size_of_expr candidate with
@@ -610,7 +623,7 @@ let optimize expression =
                         merge_proposal candidate
                           { expr = factored; pass = "egraph-root-complement-factor";
                             equalities; ring_equalities; poly_equalities = [];
-                            allow_equal_cost = false }
+                            linear_mba_equalities = []; allow_equal_cost = false }
                       then root_fast := !root_fast || size_of_expr factored <= 6
                   | None -> ())
             | _ -> ());
@@ -624,7 +637,7 @@ let optimize expression =
                   merge_proposal root_expression
                     { expr = candidate; pass = "egraph-root-component";
                       equalities; ring_equalities; poly_equalities = [];
-                      allow_equal_cost = false }
+                      linear_mba_equalities = []; allow_equal_cost = false }
                 then
                   (match
                      Normalization.linear_candidates size_of_expr candidate
@@ -641,7 +654,7 @@ let optimize expression =
                         (merge_proposal candidate
                            { expr = simplified; pass = "egraph-root-component-linear";
                              equalities; ring_equalities; poly_equalities = [];
-                             allow_equal_cost = false })
+                             linear_mba_equalities = []; allow_equal_cost = false })
                   | [] -> ())
             | _ -> ());
             (match root_bitsliced with
@@ -653,7 +666,8 @@ let optimize expression =
                       ~default:([ root_expression, candidate ], [])
                   in
                   { expr = candidate; pass = "egraph-root-bitsliced"; equalities;
-                    ring_equalities; poly_equalities = []; allow_equal_cost = false }
+                    ring_equalities; poly_equalities = []; linear_mba_equalities = [];
+                    allow_equal_cost = false }
                 in
                 if merge_proposal root_expression proposal then
                   root_fast := !root_fast || size_of_expr candidate <= 5
@@ -726,6 +740,7 @@ let optimize expression =
                                   smt_edges = candidate.equalities;
                                   ring_edges = candidate.ring_equalities;
                                   poly_edges = candidate.poly_equalities;
+                                  linear_mba_edges = candidate.linear_mba_equalities;
                                   pass = candidate.pass;
                                 })
                          in

@@ -19,7 +19,7 @@ type graph = {
   intern : (int * shape, int) Hashtbl.t;
   expressions : (E.t, int) Hashtbl.t;
 }
-type proof_rule = Smt | Ring_mod2w | Poly_mod2w
+type proof_rule = Smt | Ring_mod2w | Poly_mod2w | Linear_mba_mod2w
 type edge = { left : int; right : int; pass : string; rule : proof_rule }
 type builder = {
   graph : graph;
@@ -198,6 +198,9 @@ let record_ring builder ~pass left right =
 let record_poly builder ~pass left right =
   record_with_rule builder ~pass ~rule:Poly_mod2w left right
 
+let record_linear_mba builder ~pass left right =
+  record_with_rule builder ~pass ~rule:Linear_mba_mod2w left right
+
 let ints xs = `List (List.map (fun x -> `Int x) xs)
 let node_json node =
   let fields = match node.shape with
@@ -223,7 +226,8 @@ let finish builder candidate =
       "pass", `String edge.pass;
       "rule", `String
         (match edge.rule with
-        | Smt -> "smt" | Ring_mod2w -> "ring_mod2w" | Poly_mod2w -> "poly_mod2w")
+        | Smt -> "smt" | Ring_mod2w -> "ring_mod2w" | Poly_mod2w -> "poly_mod2w"
+        | Linear_mba_mod2w -> "linear_mba_mod2w")
     ]) builder.edges);
   ]
 
@@ -377,6 +381,7 @@ let load certificate =
       | `Null | `String "smt" -> Smt
       | `String "ring_mod2w" -> Ring_mod2w
       | `String "poly_mod2w" -> Poly_mod2w
+      | `String "linear_mba_mod2w" -> Linear_mba_mod2w
       | _ -> fail "unknown equality proof rule"
     in
     { left; right; pass = "untrusted"; rule }) encoded_edges in
@@ -631,6 +636,150 @@ let poly_equal g left right =
         if valid then Ring_equal else Ring_not_equal
     with Ring_limit -> Ring_limit_exceeded
 
+let linear_mba_equal g left right =
+  let width = (node g left).width in
+  if width <> (node g right).width then Ring_not_equal
+  else if width > 128 then Ring_limit_exceeded
+  else
+    let max_atoms = 8 and max_visited = 16_384 and max_ops = 2_000_000 in
+    let visited = Array.make g.count false and visited_count = ref 0 in
+    let atoms = Hashtbl.create 16 and operations = ref 0 in
+    let mask = Z.pred (Z.shift_left Z.one width) in
+    let normalize value = Z.logand value mask in
+    let tick amount =
+      operations := !operations + amount;
+      if !operations > max_ops then raise Ring_limit
+    in
+    let see id =
+      if not visited.(id) then (
+        visited.(id) <- true; incr visited_count;
+        if !visited_count > max_visited then raise Ring_limit)
+    in
+    let add_atom id =
+      Hashtbl.replace atoms id ();
+      if Hashtbl.length atoms > max_atoms then raise Ring_limit
+    in
+    let uniform_constant id =
+      match (node g id).expr with
+      | E.Cst value when Bitvector.is_zeros value -> Some false
+      | E.Cst value when Bitvector.is_fill value -> Some true
+      | _ -> None
+    in
+    let rec collect_bitwise id =
+      see id;
+      match uniform_constant id, (node g id).shape with
+      | Some _, _ -> ()
+      | None, Unary ("bvnot", [], child) -> collect_bitwise child
+      | None, Binary (("bvand" | "bvor" | "bvxor"), x, y) ->
+          collect_bitwise x; collect_bitwise y
+      | _ -> add_atom id
+    and collect_linear id =
+      see id;
+      match (node g id).shape, (node g id).expr with
+      | Value _, E.Cst _ -> ()
+      | Unary (("bvneg" | "bvnot"), [], child), _ -> collect_linear child
+      | Binary (("bvadd" | "bvsub"), x, y), _ -> collect_linear x; collect_linear y
+      | Binary ("bvmul", x, y), _ ->
+          (match (node g x).expr, (node g y).expr with
+          | E.Cst _, _ -> collect_linear y
+          | _, E.Cst _ -> collect_linear x
+          | _ -> add_atom id)
+      | Binary ("bvshl", x, y), _ ->
+          (match (node g y).expr with E.Cst _ -> collect_linear x | _ -> add_atom id)
+      | Binary (("bvand" | "bvor" | "bvxor"), _, _), _ -> collect_bitwise id
+      | _ -> add_atom id
+    in
+    try
+      collect_linear left; collect_linear right;
+      let atom_ids = Hashtbl.fold (fun id () result -> id :: result) atoms []
+        |> List.sort Int.compare |> Array.of_list in
+      let atom_index = Hashtbl.create (Array.length atom_ids) in
+      Array.iteri (fun index id -> Hashtbl.add atom_index id index) atom_ids;
+      let assignments = 1 lsl Array.length atom_ids in
+      let indicator id =
+        let index = Hashtbl.find atom_index id in
+        Array.init assignments (fun assignment -> assignment land (1 lsl index) <> 0)
+      in
+      let bitwise_memo = Hashtbl.create 128 in
+      let rec bitwise id =
+        match Hashtbl.find_opt bitwise_memo id with
+        | Some result -> result
+        | None ->
+            tick assignments;
+            let result =
+              match uniform_constant id, (node g id).shape with
+              | Some value, _ -> Array.make assignments value
+              | None, Unary ("bvnot", [], child) -> Array.map not (bitwise child)
+              | None, Binary (op, x, y) when op = "bvand" || op = "bvor" || op = "bvxor" ->
+                  let x = bitwise x and y = bitwise y in
+                  Array.init assignments (fun index ->
+                    if op = "bvand" then x.(index) && y.(index)
+                    else if op = "bvor" then x.(index) || y.(index)
+                    else x.(index) <> y.(index))
+              | _ -> indicator id
+            in
+            Hashtbl.add bitwise_memo id result; result
+      in
+      let zero () = Array.make assignments Z.zero in
+      let scale coefficient values = Array.map (fun value -> normalize (Z.mul coefficient value)) values in
+      let combine operation left right =
+        tick assignments;
+        Array.init assignments (fun index -> normalize (operation left.(index) right.(index)))
+      in
+      let linear_memo = Hashtbl.create 128 in
+      let rec linear id =
+        match Hashtbl.find_opt linear_memo id with
+        | Some result -> result
+        | None ->
+            let result =
+              match (node g id).shape, (node g id).expr with
+              | Value _, E.Cst value -> Bitvector.value_of value, zero ()
+              | Unary ("bvneg", [], child), _ ->
+                  let constant, terms = linear child in normalize (Z.neg constant), scale (Z.neg Z.one) terms
+              | Unary ("bvnot", [], child), _ ->
+                  let constant, terms = linear child in
+                  normalize (Z.sub (Z.neg Z.one) constant), scale (Z.neg Z.one) terms
+              | Binary ("bvadd", x, y), _ ->
+                  let cx, tx = linear x and cy, ty = linear y in
+                  normalize (Z.add cx cy), combine Z.add tx ty
+              | Binary ("bvsub", x, y), _ ->
+                  let cx, tx = linear x and cy, ty = linear y in
+                  normalize (Z.sub cx cy), combine Z.sub tx ty
+              | Binary ("bvmul", x, y), _ ->
+                  (match (node g x).expr, (node g y).expr with
+                  | E.Cst value, _ ->
+                      let c, t = linear y in
+                      let k = Bitvector.value_of value in normalize (Z.mul k c), scale k t
+                  | _, E.Cst value ->
+                      let c, t = linear x in
+                      let k = Bitvector.value_of value in normalize (Z.mul k c), scale k t
+                  | _ -> Z.zero, Array.map (fun value -> if value then Z.one else Z.zero) (indicator id))
+              | Binary ("bvshl", x, y), _ ->
+                  (match (node g y).expr with
+                  | E.Cst value ->
+                      let count = Bitvector.value_of value in
+                      if Z.geq count (Z.of_int width) then Z.zero, zero ()
+                      else
+                        let k = Z.shift_left Z.one (Z.to_int count) in
+                        let c, t = linear x in normalize (Z.mul k c), scale k t
+                  | _ -> Z.zero, Array.map (fun value -> if value then Z.one else Z.zero) (indicator id))
+              | Binary (("bvand" | "bvor" | "bvxor"), _, _), _ ->
+                  Z.zero, Array.map (fun value -> if value then Z.one else Z.zero) (bitwise id)
+              | _ -> Z.zero, Array.map (fun value -> if value then Z.one else Z.zero) (indicator id)
+            in
+            Hashtbl.add linear_memo id result; result
+      in
+      let canonical id =
+        let constant, terms = linear id in
+        let base = terms.(0) in
+        normalize (Z.sub constant base),
+        Array.mapi (fun index value -> if index = 0 then Z.zero else normalize (Z.sub value base)) terms
+      in
+      let left_c, left_t = canonical left and right_c, right_t = canonical right in
+      if Z.equal left_c right_c && Array.for_all2 Z.equal left_t right_t
+      then Ring_equal else Ring_not_equal
+    with Ring_limit -> Ring_limit_exceeded
+
 let is_connected builder candidate =
   let candidate = of_expr builder.graph candidate in
   congruent builder.graph builder.edges builder.original candidate
@@ -638,7 +787,8 @@ let is_connected builder candidate =
 let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
   let started = Unix.gettimeofday () in
   let checked = ref 0 and proved = ref 0 and unknown = ref 0 and timed_out = ref 0 in
-  let abstract = ref 0 and direct = ref 0 and ring = ref 0 and poly = ref 0 in
+  let abstract = ref 0 and direct = ref 0 and ring = ref 0 and poly = ref 0
+  and linear_mba = ref 0 in
   let ring_limits = ref 0 in
   let nodes = ref 0 and edges_count = ref 0 in
   let result verification reason = `Assoc [
@@ -650,6 +800,7 @@ let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
     "checked_equalities", `Int !checked; "proved_equalities", `Int !proved;
     "abstract_proofs", `Int !abstract; "direct_proofs", `Int !direct;
     "ring_proofs", `Int !ring; "poly_proofs", `Int !poly;
+    "linear_mba_proofs", `Int !linear_mba;
     "ring_limit_equalities", `Int !ring_limits;
     "unknown_equalities", `Int !unknown; "timeout_equalities", `Int !timed_out;
   ] in
@@ -690,6 +841,11 @@ let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
               | Ring_equal -> U.Yes, "poly_mod2w"
               | Ring_not_equal -> U.No, "poly_not_equal"
               | Ring_limit_exceeded -> U.Unknown, "poly_limit_exceeded")
+          | Linear_mba_mod2w ->
+              (match linear_mba_equal g edge.left edge.right with
+              | Ring_equal -> U.Yes, "linear_mba_mod2w"
+              | Ring_not_equal -> U.No, "linear_mba_not_equal"
+              | Ring_limit_exceeded -> U.Unknown, "linear_mba_limit_exceeded")
           | Smt -> attempt timeouts
         in
         match verdict with
@@ -698,6 +854,7 @@ let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
             if method_ = "abstract" then incr abstract
             else if method_ = "ring_mod2w" then incr ring
             else if method_ = "poly_mod2w" then incr poly
+            else if method_ = "linear_mba_mod2w" then incr linear_mba
             else incr direct;
             established := edge :: !established
         | U.No ->
@@ -706,12 +863,14 @@ let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
                  "a local %s equality was refuted: %s != %s; this does not refute the final output"
                  (match edge.rule with
                  | Smt -> "smt" | Ring_mod2w -> "ring_mod2w"
-                 | Poly_mod2w -> "poly_mod2w")
+                 | Poly_mod2w -> "poly_mod2w"
+                 | Linear_mba_mod2w -> "linear_mba_mod2w")
                  (U.pp (node g edge.left).expr) (U.pp (node g edge.right).expr))
         | U.Timeout -> incr timed_out
         | U.Unknown | U.Disabled ->
             incr unknown;
             if method_ = "ring_limit_exceeded" || method_ = "poly_limit_exceeded"
+               || method_ = "linear_mba_limit_exceeded"
             then incr ring_limits) obligations;
       if congruent g !established input_id output_id then
         result "proved_compositional" "smt_equalities_and_congruence"

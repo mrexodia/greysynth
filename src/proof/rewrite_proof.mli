@@ -20,6 +20,9 @@ val record_poly : builder -> pass:string -> Sexpr.Expr.t -> Sexpr.Expr.t -> unit
 (** [record_poly] additionally permits modular null-polynomial reduction using
     bounded multivariate falling-factorial divisibility. *)
 
+val record_linear_mba : builder -> pass:string -> Sexpr.Expr.t -> Sexpr.Expr.t -> unit
+(** [record_linear_mba] checks exact bounded linear-MBA canonical forms. *)
+
 val is_connected : builder -> Sexpr.Expr.t -> bool
 (** Structural congruence check over already-established builder edges; performs
     no SMT queries. *)

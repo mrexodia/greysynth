@@ -536,3 +536,43 @@ those identities are intentionally outside the independent-polynomial theorem.
 The five 100-case MBA suites retain 500/500 established outputs with zero
 refutations/errors (minor stochastic quality variance remains under the shared
 five-second CHS budget).
+
+## Round-20 variable-scalable linear MBA engine
+
+Round 20 adds the `linear_mba_mod2w` certificate rule. Replay collects at most
+eight strict opaque atoms over the typed DAG, treats every non-uniform constant
+and arithmetic-under-bitwise subtree as opaque, memoizes bitwise and arithmetic
+canonical forms, and compares exact `(constant, minterm coefficients)` forms
+under width/node/operation caps. Positive 8-atom and correlated nonlinear-atom
+identities replay instantly; non-uniform-mask and arithmetic-distribution traps
+are rejected by both the kernel and Bitwuzla.
+
+Root linear normalization now supports up to eight atoms and uses one
+`linear_mba_mod2w` edge instead of exponential SMT/minterm obligations. The
+existing reconstruction then becomes practical on four- and five-variable
+SiMBA expressions; lower-variable legacy paths retain their prior proof strategy
+to avoid phase-ordering regressions.
+
+Targeted full-audit results:
+
+| Suite | solved before -> after | quality before -> after | wall before -> after |
+|---|---:|---:|---:|
+| e1 4-var | 529 -> 966 | 9.5254x -> 1.1485x | 1209s -> 402s |
+| e1 5-var | 0 -> 1,000 | 936.1771x -> 1.0000x | 1079s -> 417s |
+| e2 4-var | 14 -> 1,000 | 320.2662x -> 1.0000x | 1225s -> 505s |
+| e3 4-var | 7 -> 1,000 | 70.0359x -> 1.0000x | 1172s -> 411s |
+| e4 4-var | 7 -> 1,000 | 50.1479x -> 1.0000x | 1165s -> 521s |
+| e5 4-var | 534 -> 1,000 | 8.0875x -> 1.0000x | 1237s -> 362s |
+| e5 3-var | 885 -> 1,000 | 1.2720x -> 1.0000x | 424s -> 302s |
+
+All 7,000 SiMBA outputs establish and strictly reduce. MBA-Flatten improves
+from 1,979 to 2,058 solved (1.1060x -> 0.9976x). The first 1,000 Neureduce cases
+improve from 606 to 737 solved and 129 to 53 weak (1.1629x -> 0.9996x).
+Permutation64 remains 3/13 solved: its remaining correlation identities require
+a specialized post-polynomial Boolean/permutation pass rather than a linear-MBA
+proof rule.
+
+The five 100-case MBA gates remain fully established with zero refutations or
+errors; one eight-worker QSynth contention timeout proves on isolated rerun.
+Quality varies slightly with stochastic CHS scheduling, so no quality-improvement
+claim is made for those unrelated suites.
