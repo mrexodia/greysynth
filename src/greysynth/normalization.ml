@@ -1376,6 +1376,136 @@ let ring_polynomial_candidate cost expression =
       if cost candidate < cost expression then Some candidate else None
   with Ring_candidate_too_complex -> None
 
+let minterm_ring_poly_candidate cost expression =
+  let width = E.sizeof expression in
+  let atom_table = Nodes.create 8 in
+  let rec collect_bitwise = function
+    | E.Cst value when Bitvector.is_zeros value || Bitvector.is_fill value -> ()
+    | E.Unary { f = E.Not; x; _ } -> collect_bitwise x
+    | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+        collect_bitwise x; collect_bitwise y
+    | atom -> Nodes.replace atom_table atom ()
+  and collect_ring = function
+    | E.Unary { f = E.Minus; x; _ } -> collect_ring x
+    | E.Binary { f = (E.Plus | E.Minus | E.Mul); x; y; _ } ->
+        collect_ring x; collect_ring y
+    | (E.Unary { f = E.Not; _ }
+      | E.Binary { f = (E.And | E.Or | E.Xor); _ }) as bitwise ->
+        collect_bitwise bitwise
+    | E.Cst _ -> ()
+    | atom -> Nodes.replace atom_table atom ()
+  in
+  collect_ring expression;
+  let variables =
+    Nodes.fold (fun atom () result -> atom :: result) atom_table []
+    |> List.sort E.compare |> Array.of_list
+  in
+  let count = Array.length variables in
+  if count < 2 || count > 3
+     || Greysynth_utils.Utils.dag_size_bounded ~limit:1024 expression > 1024
+  then None
+  else
+    let variable_index node =
+      let rec find index =
+        if index = count then None
+        else if E.is_equal variables.(index) node then Some index else find (index + 1)
+      in find 0
+    in
+    let rec pure_bitwise expression =
+      match variable_index expression with
+      | Some _ -> true
+      | None ->
+        match expression with
+        | E.Cst value -> Bitvector.is_zeros value || Bitvector.is_fill value
+        | E.Unary { f = E.Not; x; _ } -> pure_bitwise x
+        | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+            pure_bitwise x && pure_bitwise y
+        | _ -> false
+    in
+    let rec truth assignment expression =
+      match variable_index expression with
+      | Some index -> assignment land (1 lsl index) <> 0
+      | None ->
+          match expression with
+          | E.Cst value -> Bitvector.is_fill value
+          | E.Unary { f = E.Not; x; _ } -> not (truth assignment x)
+          | E.Binary { f; x; y; _ } ->
+              let x = truth assignment x and y = truth assignment y in
+              if f = E.And then x && y else if f = E.Or then x || y else x <> y
+          | _ -> false
+    in
+    let minterms =
+      Array.init (1 lsl count) (fun assignment ->
+          List.init count (fun index ->
+              if assignment land (1 lsl index) = 0 then E.unary E.Not variables.(index)
+              else variables.(index))
+          |> function
+             | head :: tail -> List.fold_left (E.binary E.And) head tail
+             | [] -> constant width (Z.pred (Z.shift_left Z.one width)))
+    in
+    let sum = function
+      | [] -> zeros width
+      | head :: tail -> build_balanced E.Plus (head :: tail)
+    in
+    let expansion expression =
+      if truth 0 expression then
+        let excluded =
+          List.init ((1 lsl count) - 1) (fun index -> index + 1)
+          |> List.filter (fun assignment -> not (truth assignment expression))
+          |> List.map (Array.get minterms)
+        in
+        List.fold_left (E.binary E.Minus)
+          (constant width (Z.pred (Z.shift_left Z.one width))) excluded
+      else
+        List.init ((1 lsl count) - 1) (fun index -> index + 1)
+        |> List.filter (fun assignment -> truth assignment expression)
+        |> List.map (Array.get minterms) |> sum
+    in
+    let replacements = Nodes.create 32 and linear_edges = ref [] in
+    let nonlinear = ref false in
+    let rec substitute expression =
+      match Nodes.find_opt replacements expression with
+      | Some result -> result
+      | None ->
+          let result =
+            if pure_bitwise expression then (
+              let result = expansion expression in
+              if not (E.is_equal expression result) then
+                linear_edges := (expression, result) :: !linear_edges;
+              result)
+            else
+              match expression with
+              | E.Unary { f; x; _ } -> E.unary f (substitute x)
+              | E.Binary { f = E.Mul; x; y; _ } ->
+                  if Option.is_none (constant_value x) && Option.is_none (constant_value y)
+                  then nonlinear := true;
+                  E.binary E.Mul (substitute x) (substitute y)
+              | E.Binary { f; x; y; _ } -> E.binary f (substitute x) (substitute y)
+              | E.Ite { c; t; e; _ } -> E.ite (substitute c) (substitute t) (substitute e)
+              | node -> node
+          in
+          Nodes.add replacements expression result;
+          result
+    in
+    let substituted = substitute expression in
+    if not !nonlinear || List.length !linear_edges > 24 then None
+    else
+      match ring_polynomial_candidate cost substituted with
+      | None -> None
+      | Some polynomial ->
+          let compact =
+            linear_candidates ~max_atoms:8 cost polynomial
+            |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+            |> function head :: _ -> head | [] -> polynomial
+          in
+          let candidate = compact in
+          if cost candidate >= cost expression then None
+          else
+            Some
+              (candidate, List.rev !linear_edges,
+               [ substituted, polynomial ],
+               if E.is_equal compact polynomial then [] else [ polynomial, compact ])
+
 let reduce_univariate_null_polynomial cost expression =
   let width = E.sizeof expression and maximum_degree = 8 in
   let modulus = Z.shift_left Z.one width in
@@ -2302,6 +2432,15 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
       (canonical_candidates expression);
   if cost expression >= 5 then (
     Option.iter
+      (fun (candidate, linear_mba_equalities, ring_equalities,
+            final_linear_equalities) ->
+        candidates :=
+          { expr = candidate; pass = "minterm-ring-poly"; equalities = [];
+            ring_equalities; poly_equalities = [];
+            linear_mba_equalities = linear_mba_equalities @ final_linear_equalities;
+            allow_equal_cost = false } :: !candidates)
+      (if cost expression > 256 then minterm_ring_poly_candidate cost expression else None);
+    Option.iter
       (fun (candidate, equalities, ring_equalities) ->
         candidates :=
           { expr = candidate; pass = "falling-null"; equalities; ring_equalities;
@@ -2420,19 +2559,88 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
 
 let linear_mba_compatible expression =
   let width = E.sizeof expression in
-  let rec inspect = function
-    | E.Var variable -> variable.size = width
-    | E.Cst value -> Bitvector.size_of value = width
-    | E.Unary { f = (E.Not | E.Minus); x; _ } -> inspect x
-    | E.Binary { f = (E.Plus | E.Minus | E.And | E.Or | E.Xor); x; y; _ } ->
-        inspect x && inspect y
-    | E.Binary { f = E.Mul; x; y; _ } ->
-        (Option.is_some (constant_value x) && inspect y)
-        || (Option.is_some (constant_value y) && inspect x)
-    | E.Binary { f = E.Lsl; x; y = E.Cst _; _ } -> inspect x
-    | _ -> false
+  let memo = Nodes.create 128 in
+  let rec inspect node =
+    match Nodes.find_opt memo node with
+    | Some result -> result
+    | None ->
+        let result =
+          match node with
+          | E.Var variable -> variable.size = width
+          | E.Cst value -> Bitvector.size_of value = width
+          | E.Unary { f = (E.Not | E.Minus); x; _ } -> inspect x
+          | E.Binary { f = (E.Plus | E.Minus | E.And | E.Or | E.Xor); x; y; _ } ->
+              inspect x && inspect y
+          | E.Binary { f = E.Mul; x; y; _ } ->
+              (Option.is_some (constant_value x) && inspect y)
+              || (Option.is_some (constant_value y) && inspect x)
+          | E.Binary { f = E.Lsl; x; y = E.Cst _; _ } -> inspect x
+          | _ -> false
+        in
+        Nodes.add memo node result;
+        result
   in
   inspect expression
+
+let dag_bottom_up_simplify expression =
+  let memo = Nodes.create 256 in
+  let constants = Sample_evaluator.make 1 in
+  let cost = Greysynth_utils.Utils.size_of_expr in
+  let rec visit node =
+    match Nodes.find_opt memo node with
+    | Some result -> result
+    | None ->
+        check_timeout ();
+        let rebuilt =
+          match node with
+          | E.Unary { f; x; _ } -> E.unary f (visit x)
+          | E.Binary { f; x; y; _ } -> E.binary f (visit x) (visit y)
+          | E.Ite { c; t; e; _ } -> E.ite (visit c) (visit t) (visit e)
+          | _ -> node
+        in
+        let result = ref rebuilt in
+        (match minterm_ring_poly_candidate cost !result with
+        | Some (candidate, linear_mba_equalities, ring_equalities,
+                final_linear_equalities)
+          when Rewrite.accepts_compositional ~pass:"dag-minterm-ring-poly"
+                 ~equalities:[] ~ring_equalities
+                 ~linear_mba_equalities:(linear_mba_equalities @ final_linear_equalities)
+                 !result candidate -> result := candidate
+        | _ -> ());
+        let accept_linear candidate =
+          Rewrite.accepts_compositional ~pass:"dag-linear-mba"
+            ~equalities:[] ~linear_mba_equalities:[ !result, candidate ]
+            !result candidate
+        in
+        if cost !result >= 3
+           && List.length (Sample_evaluator.variables_of_expr !result) <= 8
+           && linear_mba_compatible !result
+        then
+          (match
+             linear_candidates ~max_atoms:8 cost !result
+             |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+           with
+          | candidate :: _ when accept_linear candidate -> result := candidate
+          | _ -> ());
+        (match reduce_modular_polynomial cost !result with
+        | Some (candidate, equalities, poly_equalities)
+          when Rewrite.accepts_compositional ~pass:"dag-poly-mod2w"
+                 ~equalities ~poly_equalities !result candidate -> result := candidate
+        | _ -> ());
+        (match ring_polynomial_candidate cost !result with
+        | Some candidate
+          when Rewrite.accepts_compositional ~pass:"dag-ring-mod2w"
+                 ~equalities:[] ~ring_equalities:[ !result, candidate ]
+                 !result candidate -> result := candidate
+        | _ -> ());
+        (match peepholes constants.eval !result with
+        | candidate :: _ when Rewrite.accepts ~pass:"dag-peephole" !result candidate ->
+            result := candidate
+        | _ -> ());
+        Nodes.add memo node !result;
+        !result
+  in
+  visit expression
 
 let oracle_compatible expression =
   let width = E.sizeof expression in

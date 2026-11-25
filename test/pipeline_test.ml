@@ -632,6 +632,22 @@ let test_logging_reset () =
     "fast simplification equivalence metric survived reset";
   require (!(L.log_final_is_equiv) = U.Disabled) "equivalence metrics survived reset"
 
+let test_dag_accounting () =
+  let rec shared depth node =
+    if depth = 0 then node else
+      let next = plus node node in
+      shared (depth - 1) next
+  in
+  let expression = shared 30 x in
+  require (U.dag_size_of_expr expression = 31)
+    "DAG size counted shared children as a tree";
+  require (U.dag_size_bounded ~limit:16 expression = 17)
+    "bounded DAG size did not stop at the limit";
+  require (U.cost_of_expr U.Legacy expression = U.max_cost)
+    "tree extraction cost did not saturate";
+  require (O.proof_complexity expression = U.max_cost)
+    "proof complexity did not saturate on a shared DAG"
+
 let test_oes_proof_ranking () =
   let easy = plus x y in
   let nonlinear = E.binary E.Mul x y in
@@ -838,6 +854,7 @@ let test_config_reporting () =
 
 let () =
   test_config_reporting ();
+  test_dag_accounting ();
   test_oes_proof_ranking ();
   test_learned_rule_persistence ();
   test_adaptive_chs ();

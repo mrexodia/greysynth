@@ -576,3 +576,42 @@ The five 100-case MBA gates remain fully established with zero refutations or
 errors; one eight-worker QSynth contention timeout proves on isolated rerun.
 Quality varies slightly with stochastic CHS scheduling, so no quality-improvement
 claim is made for those unrelated suites.
+
+## Round-21 DAG-native and nonlinear minterm-ring simplification
+
+Round 21 adds saturating extraction costs, bounded unique-DAG sizing, DAG-aware
+e-graph admission/headroom, memoized OES/sample-variable/compatibility walks,
+and a memoized bottom-up preprocessing pass. Shared million-node trees are no
+longer rejected merely because their expanded tree cost exceeds the enode cap.
+The linear-MBA proof kernel also bounds array work in scaling operations.
+
+The nonlinear minterm-ring pass identifies two/three opaque bitwise atoms,
+substitutes maximal bitwise factors with exact minterm expansions certified by
+`linear_mba_mod2w`, cancels the substituted polynomial with `ring_mod2w`, and
+reconstructs compact linear residuals with another linear-MBA edge. The focused
+`mba_obfuscator/target_3218` certificate now replays at `54904 -> 5` (exact GT)
+without SMT obligations. `target_366` improves `3400417 -> 28112`, but its
+three-variable/layered residual remains open.
+
+Targeted corpus results:
+
+| Suite | Coverage | Solved | Quality | Strict / unchanged | Wall |
+|---|---:|---:|---:|---:|---:|
+| C-MBA-Obfuscator full | 500/500 | 205 | 9.5753x | 494 / 6 | 525s |
+| Tigress L5 full | 1,000/1,000 | 381 | 8.5253x | 984 / 16 | 835s |
+| Tigress L8 first 200 | 199/200 | 35 | 294.5860x | 196 / 4 | 731s |
+| OMVLL first 200 | 200/200 | 81 | 12.2422x | 190 / 10 | 419s |
+| Loki first 200 | 200/200 | 167 | 1.6544x | 200 / 0 | 83s |
+
+C-MBA improves from 17 solved / 143.16x to 205 solved / 9.58x. The DAG changes
+also recover all three persistent Tigress-L6 timeout cases and establish the
+Tigress-L8 target 4174 under an isolated 30-second process cap, although its
+7.18M-node tree only shrinks by 216 nodes. Two of nine persistent OMVLL timeout
+cases now establish; seven still exceed 30 seconds. Tigress L5 quality improves
+modestly but solved count and wall time regress, showing that large-DAG
+saturation still needs a proof-aware whole-pipeline portfolio and tighter local
+deadline scheduling.
+
+All five 100-case MBA suites remain 500/500 established with zero refutations or
+errors. MBA-Obfuscator nonlinear improves to 0.7284x in the measured run; other
+quality measurements retain stochastic CHS variance.

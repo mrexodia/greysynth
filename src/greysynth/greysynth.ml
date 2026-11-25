@@ -204,6 +204,32 @@ let run_preprocessing gt input =
       oes_done := true;
       check_equiv gt ~tag:"OES" log_linear_is_equiv !best)
   in
+  let run_root_minterm_poly () =
+    match
+      if size_of_expr !best > 256
+      then Normalization.minterm_ring_poly_candidate size_of_expr !best
+      else None
+    with
+    | Some (candidate, linear_mba_equalities, ring_equalities,
+            final_linear_equalities)
+      when Rewrite.accepts_compositional ~pass:"root-minterm-ring-poly"
+             ~equalities:[] ~ring_equalities
+             ~linear_mba_equalities:(linear_mba_equalities @ final_linear_equalities)
+             !best candidate -> best := candidate
+    | _ -> ()
+  in
+  run_root_minterm_poly ();
+  let input_dag_size = dag_size_of_expr !best in
+  if (size_of_expr !best > 768 || input_dag_size > 128) && input_dag_size <= 1024
+  then (
+    let rounds = ref 0 and improving = ref true in
+    while !rounds < 4 && !improving && not !g_has_timedout do
+      incr rounds;
+      let before = size_of_expr !best in
+      best := Normalization.dag_bottom_up_simplify !best;
+      improving := size_of_expr !best < before
+    done);
+  run_root_minterm_poly ();
   (match
      if size_of_expr !best >= 200
      then Normalization.reduce_modular_polynomial size_of_expr !best
@@ -242,7 +268,7 @@ let run_preprocessing gt input =
   if size_of_expr !best > 768 then run_oes ();
   let standard () =
     let preserve_large_dag_budget =
-      size_of_expr input > 768 && !oes_done && size_of_expr !best > 768
+      dag_size_of_expr input > 768 && !oes_done && dag_size_of_expr !best > 768
     in
     if !c_normalization && not preserve_large_dag_budget && not !g_has_timedout then (
       best := run_normalization ?deadline:(normalization_deadline ()) !best;

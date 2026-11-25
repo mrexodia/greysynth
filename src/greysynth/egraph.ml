@@ -343,15 +343,18 @@ let compute_best graph =
                  | Unary (op, x) ->
                      Option.map
                        (fun (cost, nodes, expression) ->
-                         (unary_cost !cost_model op + cost, nodes + 1,
+                         (Greysynth_utils.Utils.sat_add (unary_cost !cost_model op) cost,
+                          Greysynth_utils.Utils.sat_add nodes 1,
                           E.unary op expression))
                        (child x)
                  | Binary (op, x, y) ->
                      Option.bind (child x) (fun (left_cost, left_nodes, left) ->
                          Option.map
                            (fun (right_cost, right_nodes, right) ->
-                             (binary_cost !cost_model op + left_cost + right_cost,
-                              left_nodes + right_nodes + 1,
+                             (Greysynth_utils.Utils.sat_add (binary_cost !cost_model op)
+                                (Greysynth_utils.Utils.sat_add left_cost right_cost),
+                              Greysynth_utils.Utils.sat_add 1
+                                (Greysynth_utils.Utils.sat_add left_nodes right_nodes),
                               E.binary op left right))
                            (child y))
                  | Ite (c, t, e) ->
@@ -359,9 +362,12 @@ let compute_best graph =
                          Option.bind (child t) (fun (yes_cost, yes_nodes, yes) ->
                              Option.map
                                (fun (no_cost, no_nodes, no) ->
-                                 (conditional_cost !cost_model + condition_cost
-                                  + yes_cost + no_cost,
-                                  condition_nodes + yes_nodes + no_nodes + 1,
+                                 (Greysynth_utils.Utils.sat_add (conditional_cost !cost_model)
+                                    (Greysynth_utils.Utils.sat_add condition_cost
+                                       (Greysynth_utils.Utils.sat_add yes_cost no_cost)),
+                                  Greysynth_utils.Utils.sat_add 1
+                                    (Greysynth_utils.Utils.sat_add condition_nodes
+                                       (Greysynth_utils.Utils.sat_add yes_nodes no_nodes)),
                                   E.ite condition yes no))
                                (child e)))
                in
@@ -386,11 +392,23 @@ let extract graph root =
   | Some (_, _, expression) -> expression
   | None -> (node graph root).expr
 
-let rec additive_terms = function
-  | E.Unary { f = E.Minus; x; _ } -> additive_terms x
-  | E.Binary { f = (E.Plus | E.Minus); x; y; _ } ->
-      additive_terms x + additive_terms y
-  | _ -> 1
+let additive_terms expression =
+  let memo = Nodes.create 128 in
+  let rec count node =
+    match Nodes.find_opt memo node with
+    | Some value -> value
+    | None ->
+        let value =
+          match node with
+          | E.Unary { f = E.Minus; x; _ } -> count x
+          | E.Binary { f = (E.Plus | E.Minus); x; y; _ } ->
+              min 1_000_000 (Greysynth_utils.Utils.sat_add (count x) (count y))
+          | _ -> 1
+        in
+        Nodes.add memo node value;
+        value
+  in
+  count expression
 
 let is_additive_expression = function
   | E.Unary { f = E.Minus; _ }
@@ -522,14 +540,18 @@ let optimize expression =
   last_enodes := 0;
   last_iterations := 0;
   last_fallback := false;
-  if not !c_egraph_extraction || size_of_expr expression > !c_egraph_max_enodes then (
+  let dag_size =
+    Greysynth_utils.Utils.dag_size_bounded ~limit:!c_egraph_max_enodes expression
+  in
+  if not !c_egraph_extraction || dag_size > !c_egraph_max_enodes then (
     last_fallback := true;
     expression)
   else
+    let graph_limit = min 4096 (max !c_egraph_max_enodes (dag_size * 2 + 32)) in
     let initial_proof = Option.map Rewrite_proof.checkpoint !(Rewrite.journal) in
     let initial_cache = Rewrite.checkpoint_caches () in
     try
-      let graph = graph !c_egraph_max_enodes in
+      let graph = graph graph_limit in
       let root = add_expr graph expression in
       let constants = Sample_evaluator.make 8 in
       let visited = Nodes.create 256 in
@@ -539,7 +561,10 @@ let optimize expression =
         +. (if !g_total_timeout <= 0. then 2. else min 2. (!g_total_timeout *. 0.2))
       in
       (try
-      while !continue && !iteration < !c_egraph_max_iters
+      let iteration_limit =
+        if dag_size > 128 then max !c_egraph_max_iters 8 else !c_egraph_max_iters
+      in
+      while !continue && !iteration < iteration_limit
             && graph.count < graph.limit - 1 && not !g_has_timedout do
         incr iteration;
         check_timeout ();
@@ -548,7 +573,8 @@ let optimize expression =
         let root_class = find graph root in
         let root_fast = ref false in
         (match best.(root_class) with
-        | Some (_, _, root_expression) when size_of_expr root_expression <= 1024 ->
+        | Some (_, _, root_expression)
+          when Greysynth_utils.Utils.dag_size_bounded ~limit:1024 root_expression <= 1024 ->
             let merge_proposal ?(deadline = local_deadline) ?(timeout_cap = 1.5) lhs
                 (proposal : Normalization.local_candidate) =
               if verify_local ~timeout_cap ~local_deadline:deadline proposal
@@ -567,6 +593,22 @@ let optimize expression =
                 true)
               else false
             in
+            (match
+               if size_of_expr root_expression > 256
+               then Normalization.minterm_ring_poly_candidate size_of_expr root_expression
+               else None
+             with
+            | Some (candidate, linear_mba_equalities, ring_equalities,
+                    final_linear_equalities) ->
+                if
+                  merge_proposal root_expression
+                    { expr = candidate; pass = "egraph-root-minterm-ring-poly";
+                      equalities = []; ring_equalities; poly_equalities = [];
+                      linear_mba_equalities =
+                        linear_mba_equalities @ final_linear_equalities;
+                      allow_equal_cost = false }
+                then root_fast := size_of_expr candidate <= 10
+            | None -> ());
             let root_variable_count =
               List.length (Sample_evaluator.variables_of_expr root_expression)
             in

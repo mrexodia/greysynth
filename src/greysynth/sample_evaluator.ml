@@ -57,12 +57,16 @@ type t = {
 
 let variables_of_expr expression =
   let variables = Hashtbl.create 16 in
-  let rec visit = function
-    | Expr.Var variable -> Hashtbl.replace variables (variable.name, variable.size) ()
-    | Expr.Unary { x; _ } -> visit x
-    | Expr.Binary { x; y; _ } -> visit x; visit y
-    | Expr.Ite { c; t; e; _ } -> visit c; visit t; visit e
-    | _ -> ()
+  let visited = BvTbl.create 128 in
+  let rec visit node =
+    if not (BvTbl.mem visited node) then (
+      BvTbl.add visited node ();
+      match node with
+      | Expr.Var variable -> Hashtbl.replace variables (variable.name, variable.size) ()
+      | Expr.Unary { x; _ } -> visit x
+      | Expr.Binary { x; y; _ } -> visit x; visit y
+      | Expr.Ite { c; t; e; _ } -> visit c; visit t; visit e
+      | _ -> ())
   in
   visit expression;
   Hashtbl.fold (fun variable () result -> variable :: result) variables []

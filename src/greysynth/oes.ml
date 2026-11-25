@@ -31,13 +31,16 @@ open Sexpr.Expr
 open Sample_evaluator
 
 let record_semantics table expr =
+  let visited = Sexpr.BvTbl.create 128 in
   let rec visit node =
-    Greysynth_utils.Utils.increment_counter table (!evaluator.node_to_outhash node);
-    match node with
-    | Unary r -> visit r.x
-    | Binary r -> visit r.x; visit r.y
-    | Ite r -> visit r.c; visit r.t; visit r.e
-    | _ -> ()
+    if not (Sexpr.BvTbl.mem visited node) then (
+      Sexpr.BvTbl.add visited node ();
+      Greysynth_utils.Utils.increment_counter table (!evaluator.node_to_outhash node);
+      match node with
+      | Unary r -> visit r.x
+      | Binary r -> visit r.x; visit r.y
+      | Ite r -> visit r.c; visit r.t; visit r.e
+      | _ -> ())
   in
   visit expr
 
@@ -145,29 +148,39 @@ let iter_relational_pairs (reps : Sexpr.Expr.t array) emit : unit =
     done
   done
 
-let rec proof_complexity = function
-  | Sexpr.Expr.Var _ | Sexpr.Expr.Cst _ -> 0
-  | Sexpr.Expr.Load _ -> 20
-  | Sexpr.Expr.Unary { f; x; _ } ->
-      (match f with
-      | Not | Minus -> 1
-      | Uext _ | Sext _ | Restrict _ -> 2)
-      + proof_complexity x
-  | Sexpr.Expr.Binary { f; x; y; _ } ->
-      let local =
-        match f with
-        | And | Or | Xor | Plus | Minus -> 1
-        | Lsl | Lsr | Asr | Rol | Ror | Concat -> 2
-        | Eq | Diff | Ule | Ult | Uge | Ugt | Sle | Slt | Sge | Sgt -> 3
-        | Mul ->
-            (match x, y with
-            | Sexpr.Expr.Cst _, _ | _, Sexpr.Expr.Cst _ -> 3
-            | _ -> 8)
-        | Udiv | Sdiv | Umod | Smod -> 10
-      in
-      local + proof_complexity x + proof_complexity y
-  | Sexpr.Expr.Ite { c; t; e; _ } ->
-      3 + proof_complexity c + proof_complexity t + proof_complexity e
+let proof_complexity expression =
+  let memo = Sexpr.BvTbl.create 128 in
+  let open Greysynth_utils.Utils in
+  let rec complexity node =
+    match Sexpr.BvTbl.find_opt memo node with
+    | Some value -> value
+    | None ->
+        let value =
+          match node with
+          | Sexpr.Expr.Var _ | Sexpr.Expr.Cst _ -> 0
+          | Sexpr.Expr.Load _ -> 20
+          | Sexpr.Expr.Unary { f; x; _ } ->
+              sat_add
+                (match f with Not | Minus -> 1 | Uext _ | Sext _ | Restrict _ -> 2)
+                (complexity x)
+          | Sexpr.Expr.Binary { f; x; y; _ } ->
+              let local =
+                match f with
+                | And | Or | Xor | Plus | Minus -> 1
+                | Lsl | Lsr | Asr | Rol | Ror | Concat -> 2
+                | Eq | Diff | Ule | Ult | Uge | Ugt | Sle | Slt | Sge | Sgt -> 3
+                | Mul ->
+                    (match x, y with Sexpr.Expr.Cst _, _ | _, Sexpr.Expr.Cst _ -> 3 | _ -> 8)
+                | Udiv | Sdiv | Umod | Smod -> 10
+              in
+              sat_add local (sat_add (complexity x) (complexity y))
+          | Sexpr.Expr.Ite { c; t; e; _ } ->
+              sat_add 3 (sat_add (complexity c) (sat_add (complexity t) (complexity e)))
+        in
+        Sexpr.BvTbl.add memo node value;
+        value
+  in
+  complexity expression
 
 let linear_simplify ?(seed = true) (expr : Sexpr.Expr.t) =
   let cache = Hashtbl.create 100 in

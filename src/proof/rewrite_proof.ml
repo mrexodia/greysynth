@@ -643,6 +643,7 @@ let linear_mba_equal g left right =
   else
     let max_atoms = 8 and max_visited = 16_384 and max_ops = 2_000_000 in
     let visited = Array.make g.count false and visited_count = ref 0 in
+    let seen_linear = Array.make g.count false and seen_bitwise = Array.make g.count false in
     let atoms = Hashtbl.create 16 and operations = ref 0 in
     let mask = Z.pred (Z.shift_left Z.one width) in
     let normalize value = Z.logand value mask in
@@ -650,10 +651,11 @@ let linear_mba_equal g left right =
       operations := !operations + amount;
       if !operations > max_ops then raise Ring_limit
     in
-    let see id =
+    let see seen id =
       if not visited.(id) then (
         visited.(id) <- true; incr visited_count;
-        if !visited_count > max_visited then raise Ring_limit)
+        if !visited_count > max_visited then raise Ring_limit);
+      if seen.(id) then false else (seen.(id) <- true; true)
     in
     let add_atom id =
       Hashtbl.replace atoms id ();
@@ -666,7 +668,7 @@ let linear_mba_equal g left right =
       | _ -> None
     in
     let rec collect_bitwise id =
-      see id;
+      if see seen_bitwise id then
       match uniform_constant id, (node g id).shape with
       | Some _, _ -> ()
       | None, Unary ("bvnot", [], child) -> collect_bitwise child
@@ -674,7 +676,7 @@ let linear_mba_equal g left right =
           collect_bitwise x; collect_bitwise y
       | _ -> add_atom id
     and collect_linear id =
-      see id;
+      if see seen_linear id then
       match (node g id).shape, (node g id).expr with
       | Value _, E.Cst _ -> ()
       | Unary (("bvneg" | "bvnot"), [], child), _ -> collect_linear child
@@ -721,7 +723,10 @@ let linear_mba_equal g left right =
             Hashtbl.add bitwise_memo id result; result
       in
       let zero () = Array.make assignments Z.zero in
-      let scale coefficient values = Array.map (fun value -> normalize (Z.mul coefficient value)) values in
+      let scale coefficient values =
+        tick assignments;
+        Array.map (fun value -> normalize (Z.mul coefficient value)) values
+      in
       let combine operation left right =
         tick assignments;
         Array.init assignments (fun index -> normalize (operation left.(index) right.(index)))

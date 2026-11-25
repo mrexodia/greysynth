@@ -171,6 +171,14 @@ let () =
   expect "error"
     (P.verify ~original:off_by_one16 ~candidate:(c 16 0)
        (poly_certificate off_by_one16 (c 16 0)));
+  let rec shared depth node =
+    if depth = 0 then node else shared (depth - 1) (E.binary E.Plus node node)
+  in
+  let shared_dag = shared 20 x in
+  let shared_with_zero = E.binary E.Plus shared_dag (c 8 0) in
+  expect "proved_compositional"
+    (P.verify ~original:shared_with_zero ~candidate:shared_dag
+       (linear_mba_certificate shared_with_zero shared_dag));
   let linear_vars = List.init 8 (fun index -> var ("lm" ^ string_of_int index) 8) in
   let sum = function
     | head :: tail -> List.fold_left (E.binary E.Plus) head tail

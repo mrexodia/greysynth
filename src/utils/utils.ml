@@ -224,6 +224,11 @@ let conditional_cost = function
   | Readability -> 4
   | _ -> 1
 
+let max_cost = 1_000_000_000
+let sat_add left right =
+  if left >= max_cost || right >= max_cost || left > max_cost - right
+  then max_cost else left + right
+
 let cost_of_expr model e =
   let memo = Sexpr.BvTbl.create 128 in
   let unary_cost f = unary_cost model f in
@@ -235,10 +240,11 @@ let cost_of_expr model e =
     | None ->
         let value =
           match expression with
-          | Sexpr.Expr.Unary r -> unary_cost r.f + cost r.x
-          | Sexpr.Expr.Binary r -> binary_cost r.f + cost r.x + cost r.y
+          | Sexpr.Expr.Unary r -> sat_add (unary_cost r.f) (cost r.x)
+          | Sexpr.Expr.Binary r ->
+              sat_add (binary_cost r.f) (sat_add (cost r.x) (cost r.y))
           | Sexpr.Expr.Ite r ->
-              conditional_cost + cost r.c + cost r.t + cost r.e
+              sat_add conditional_cost (sat_add (cost r.c) (sat_add (cost r.t) (cost r.e)))
           | Sexpr.Expr.Var _ | Sexpr.Expr.Load _ | Sexpr.Expr.Cst _ -> 1
         in
         Sexpr.BvTbl.add memo expression value;
@@ -248,6 +254,25 @@ let cost_of_expr model e =
 
 
 let size_of_expr e = cost_of_expr !cost_model e
+
+let dag_size_bounded ~limit expression =
+  let visited = Sexpr.BvTbl.create (min 1024 (max 16 limit)) in
+  let count = ref 0 in
+  let rec visit node =
+    if !count <= limit && not (Sexpr.BvTbl.mem visited node) then (
+      Sexpr.BvTbl.add visited node ();
+      incr count;
+      match node with
+      | Sexpr.Expr.Unary { x; _ } -> visit x
+      | Sexpr.Expr.Binary { x; y; _ } -> visit x; visit y
+      | Sexpr.Expr.Ite { c; t; e; _ } -> visit c; visit t; visit e
+      | _ -> ())
+  in
+  visit expression;
+  !count
+
+let dag_size_of_expr expression =
+  dag_size_bounded ~limit:max_int expression
 
 let depth_of_expr expr =
   let memo = Sexpr.BvTbl.create 128 in
