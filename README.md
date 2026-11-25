@@ -106,6 +106,7 @@ working example. An optional second positional argument names the certificate.
 | `ac_normalization` | Enable experimental associative coefficient collection and Boolean cancellation. |
 | `normalization_portfolio` | Run baseline and AC normalization from the same input and retain the cheaper proved branch. |
 | `preprocessing_portfolio` | Race complete baseline and experimental normalization+OES preprocessing, then retain the cheaper proved branch before CHS. |
+| `pipeline_portfolio` | Opt-in proof-journaled race between DAG-native e-graph preprocessing and standard e-graph-free preprocessing; retain only the cheaper branch. |
 | `egraph_extraction` | Explore baseline, AC, and normalized/OES-equivalent preprocessing branches non-destructively and globally extract the cheapest proved result. Experimental, off by default. |
 | `egraph_max_enodes`, `egraph_max_iters` | Hard per-egraph node/input-size and saturation bounds (defaults 2048 and 4); larger inputs use the baseline path. |
 | `normalization_max_atoms` | Maximum independent atoms in local linear-MBA truth tables (1–10, default 6). |

@@ -4,6 +4,7 @@
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location(
@@ -14,6 +15,14 @@ spec.loader.exec_module(audit)
 
 
 class ProofReporting(unittest.TestCase):
+    def test_empty_csv_ground_truth_is_absent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = Path(directory) / "adapted.csv"
+            dataset.write_text("x,\n")
+            cases = audit.collect_cases([dataset], 64)
+            self.assertEqual(len(cases), 1)
+            self.assertNotIn("gt_expr", cases[0].data)
+
     def test_independent_replay_resolves_unknown_but_preserves_direct_result(self):
         direct = {"verdict": "unknown", "sample": {"status": "sampled"}}
         self.assertEqual(audit.combined_verdict(direct, {"status": "proved_compositional"}),

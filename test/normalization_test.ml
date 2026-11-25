@@ -27,6 +27,7 @@ let reset ?(strict = true) () =
   C.c_ac_normalization := false;
   C.c_normalization_portfolio := false;
   C.c_preprocessing_portfolio := false;
+  C.c_pipeline_portfolio := false;
   C.c_egraph_extraction := false;
   C.c_egraph_max_enodes := 8192;
   C.c_egraph_max_iters := 4;

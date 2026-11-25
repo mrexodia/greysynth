@@ -343,12 +343,101 @@ let run_preprocessing_portfolio gt input =
             (if choose_experimental then experimental_cache else baseline_cache);
           if choose_experimental then experimental else baseline))
 
+let select_pipeline_branches ~run_a ~run_b input =
+  let proof = !(Rewrite.journal) in
+  let proof_initial = Option.map Rewrite_proof.checkpoint proof in
+  let cache_initial = Rewrite.checkpoint_caches () in
+  let log_initial = snapshot_preprocessing_log () in
+  let timeout_initial = !g_has_timedout in
+  let restore_proof = function
+    | Some checkpoint ->
+        Option.iter (fun builder -> Rewrite_proof.restore builder checkpoint) proof
+    | None -> ()
+  in
+  let snapshot result =
+    (result, Option.map Rewrite_proof.checkpoint proof,
+     Rewrite.checkpoint_caches (), snapshot_preprocessing_log (), !g_has_timedout)
+  in
+  let restore (result, proof_state, cache, log, timedout) =
+    restore_proof proof_state;
+    Rewrite.restore_caches cache;
+    restore_preprocessing_log log;
+    g_has_timedout := timedout;
+    result
+  in
+  let branch_a = run_a input in
+  let state_a = snapshot branch_a in
+  if size_of_expr branch_a <= 5 || !g_has_timedout then branch_a
+  else (
+    restore_proof proof_initial;
+    Rewrite.restore_caches cache_initial;
+    restore_preprocessing_log log_initial;
+    g_has_timedout := timeout_initial;
+    let branch_b = run_b input in
+    let state_b = snapshot branch_b in
+    let choose_b =
+      size_of_expr branch_b < size_of_expr branch_a
+      || (size_of_expr branch_b = size_of_expr branch_a
+          && Sexpr.Expr.compare branch_b branch_a < 0)
+    in
+    restore (if choose_b then state_b else state_a))
+
+let global_timeout_expired () =
+  !g_total_timeout > 0.
+  && Unix.gettimeofday () -. !g_start_time >= !g_total_timeout
+
+let run_pipeline_portfolio gt input =
+  if not !c_pipeline_portfolio then run_preprocessing_portfolio gt input
+  else
+    let configured_egraph = !c_egraph_extraction in
+    Fun.protect
+      ~finally:(fun () ->
+        c_egraph_extraction := configured_egraph;
+        g_branch_deadline := None)
+      (fun () ->
+        let run_branch ~egraph ~oes_first ~deadline input =
+          c_egraph_extraction := egraph;
+          g_branch_deadline := deadline;
+          let result =
+            try
+              let input =
+                if oes_first && !c_oes && not !g_has_timedout
+                then oes_with_logs input else input
+              in
+              run_preprocessing gt input
+            with Timeout_exception -> g_has_timedout := true; input
+          in
+          g_branch_deadline := None;
+          (* OES, normalization and e-graph retain validated partial work by
+             setting the shared timeout flag. A branch-local expiration must
+             not suppress the other branch or the remainder of the pipeline. *)
+          if !g_has_timedout && not (global_timeout_expired ()) then
+            g_has_timedout := false;
+          result
+        in
+        let run_a input =
+          let deadline =
+            if !g_total_timeout <= 0. then None
+            else
+              let now = Unix.gettimeofday () in
+              let remaining = !g_total_timeout -. (now -. !g_start_time) in
+              if remaining <= 0. then Some now
+              else Some (now +. (0.55 *. remaining))
+          in
+          run_branch ~egraph:true ~oes_first:false ~deadline input
+        and run_b input =
+          run_branch ~egraph:false ~oes_first:true ~deadline:None input
+        in
+        let result = select_pipeline_branches ~run_a ~run_b input in
+        if global_timeout_expired () then g_has_timedout := true;
+        result)
+
 (* Run preprocessing, then the enabled synthesis passes. Traversals retain
    validated partial results when the budget expires. *)
 let run_passes gt obf =
   let best = ref obf in
   (try
-     best := run_preprocessing_portfolio gt !best;
+     best := run_pipeline_portfolio gt !best;
      if !c_global_synthesis && not !g_has_timedout then (
        c_current_mode_is_global := true;
        best := simplify_global !c_synthesis_timeout !c_synthesis_repeat !best;
@@ -527,6 +616,7 @@ let run ?proof_output obf config gt =
   log_obfuscated_expression := obf;
   g_start_time := Unix.gettimeofday ();
   g_has_timedout := false;
+  g_branch_deadline := None;
   Rewrite.reset ~original:obf ();
   Synthesis.reset_rule_cache ();
   Synthesis.load_learned_rules !c_learned_rules_file;

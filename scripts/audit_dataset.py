@@ -107,10 +107,10 @@ def collect_cases(paths: list[Path], raw_bitwidth: int) -> list[Case]:
                     if len(fields) != 2:
                         raise ValueError(f"{dataset}:{line_no}: expected expression,ground_truth")
                     identifier = f"{label}/line_{line_no:07d}"
-                    cases.append(Case(identifier, dataset, {
-                        "obf_expr": fields[0], "gt_expr": fields[1],
-                        "bitwidth": raw_bitwidth,
-                    }, line_no))
+                    data = {"obf_expr": fields[0], "bitwidth": raw_bitwidth}
+                    if fields[1].strip():
+                        data["gt_expr"] = fields[1]
+                    cases.append(Case(identifier, dataset, data, line_no))
     for case in cases:
         if case.identifier in seen:
             raise ValueError(f"duplicate case ID: {case.identifier}; use distinct dataset names")

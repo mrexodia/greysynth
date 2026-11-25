@@ -34,6 +34,7 @@ let reset ?(strict = false) () =
   C.c_ac_normalization := false;
   C.c_normalization_portfolio := false;
   C.c_preprocessing_portfolio := false;
+  C.c_pipeline_portfolio := false;
   C.c_egraph_extraction := false;
   C.c_oes_extended := false;
   C.c_local_extend := false;
@@ -51,6 +52,7 @@ let reset ?(strict = false) () =
   C.c_current_mode_is_global := false;
   C.g_total_timeout := 0.;
   C.g_has_timedout := false;
+  C.g_branch_deadline := None;
   C.c_synthesizer_name := "regression mock";
   C.c_synthesizer := (fun _ -> None);
   R.reset ();
@@ -832,11 +834,62 @@ let test_load_boundary () =
   require (!(L.log_final_is_equiv) = U.Disabled)
     "pipeline claimed equivalence for a memory load"
 
+let test_pipeline_portfolio_transaction () =
+  reset ();
+  let rec chain count expression =
+    if count = 0 then expression else chain (count - 1) (plus expression zero)
+  in
+  let original = chain 5 x and branch_a_result = chain 3 x
+  and branch_b_result = chain 2 x in
+  R.start_recording original;
+  let run pass cache_marker log_marker candidate input =
+    require
+      (R.accepts_compositional ~pass ~equalities:[]
+         ~ring_equalities:[ input, candidate ] input candidate)
+      (pass ^ ": fixture rewrite was rejected");
+    Hashtbl.replace R.proofs (R.proof_key input cache_marker) U.Yes;
+    L.log_linear_size_after := log_marker;
+    candidate
+  in
+  let marker_a = E.var "discarded_cache" 64 "discarded_cache"
+  and marker_b = E.var "winner_cache" 64 "winner_cache" in
+  let result =
+    G.select_pipeline_branches
+      ~run_a:(run "portfolio-branch-a-only" marker_a 111 branch_a_result)
+      ~run_b:(run "portfolio-branch-b-winner" marker_b 222 branch_b_result)
+      original
+  in
+  require (E.is_equal result branch_b_result)
+    "pipeline portfolio did not select the strictly smaller branch";
+  require (!(L.log_linear_size_after) = 222)
+    "pipeline portfolio did not restore the winner's logs";
+  require (Hashtbl.mem R.proofs (R.proof_key original marker_b))
+    "pipeline portfolio lost the winner's rewrite cache";
+  require (not (Hashtbl.mem R.proofs (R.proof_key original marker_a)))
+    "pipeline portfolio leaked the discarded branch's rewrite cache";
+  let certificate = P.finish (Option.get !(R.journal)) result in
+  let passes =
+    Yojson.Basic.Util.member "equalities" certificate
+    |> Yojson.Basic.Util.to_list
+    |> List.map (fun edge ->
+           Yojson.Basic.Util.member "pass" edge |> Yojson.Basic.Util.to_string)
+  in
+  require (List.mem "portfolio-branch-b-winner" passes)
+    "winner proof edge was not restored";
+  require (not (List.mem "portfolio-branch-a-only" passes))
+    "discarded branch leaked a proof edge";
+  let report = P.verify ~original ~candidate:result certificate in
+  require
+    (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+    "selected pipeline branch certificate did not independently replay"
+
 let test_config_reporting () =
   C.reset_defaults ();
   let fields = C.report_fields () in
   require (List.assoc "egraph_max_enodes" fields = `Int 2048)
     "default config report changed egraph limit";
+  require (List.assoc "pipeline_portfolio" fields = `Bool false)
+    "pipeline portfolio is not reported opt-in by default";
   C.c_egraph_max_enodes := 17;
   require (List.assoc "egraph_max_enodes" (C.report_fields ()) = `Int 17)
     "reported option did not follow runtime configuration";
@@ -854,6 +907,7 @@ let test_config_reporting () =
 
 let () =
   test_config_reporting ();
+  test_pipeline_portfolio_transaction ();
   test_dag_accounting ();
   test_oes_proof_ranking ();
   test_learned_rule_persistence ();
@@ -882,7 +936,7 @@ let () =
   test_backend_budget_is_bounded ();
   test_derived_constant_seeding ();
   test_logging_reset ();
-  print_endline "pipeline_test: 24 solver-independent regressions passed";
+  print_endline "pipeline_test: solver-independent regressions passed";
   if solver_available then (
     test_context_proof ();
     test_branch_covering_samples ();

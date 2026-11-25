@@ -37,6 +37,7 @@ let c_normalization = ref true
 let c_ac_normalization = ref false
 let c_normalization_portfolio = ref false
 let c_preprocessing_portfolio = ref false
+let c_pipeline_portfolio = ref false
 let c_egraph_extraction = ref false
 let c_egraph_max_enodes = ref 2048
 let c_egraph_max_iters = ref 4
@@ -87,6 +88,10 @@ let c_synthesizer_portfolio_backends :
 let g_total_timeout = ref 0.
 let g_start_time = ref 0.
 let g_has_timedout = ref false
+(* An optional portfolio-branch deadline. It raises the ordinary timeout
+   exception, but portfolio orchestration clears branch-local timeout state
+   before starting or selecting another branch. *)
+let g_branch_deadline : float option ref = ref None
 
 let chs_cache_per_horizon : (Sample_evaluator.outhash, Sexpr.Expr.t) Hashtbl.t =
   Hashtbl.create 1000
@@ -130,6 +135,7 @@ let config_specs =
     bool_spec ~report:"ac_normalization" "ac_normalization" false c_ac_normalization;
     bool_spec ~report:"normalization_portfolio" "normalization_portfolio" false c_normalization_portfolio;
     bool_spec ~report:"preprocessing_portfolio" "preprocessing_portfolio" false c_preprocessing_portfolio;
+    bool_spec ~report:"pipeline_portfolio" "pipeline_portfolio" false c_pipeline_portfolio;
     bool_spec ~report:"egraph_extraction" "egraph_extraction" false c_egraph_extraction;
     int_spec ~report:"egraph_max_enodes" ~validate:((<) 0) ~message:"must be positive"
       "egraph_max_enodes" 2048 c_egraph_max_enodes;
@@ -240,12 +246,16 @@ let apply_config_specs json =
                (Printf.sprintf "config: unknown synthesizer_portfolio backend %S" name))
 
 let check_timeout () =
+  let now = Unix.gettimeofday () in
   if !g_total_timeout > 0. then
-    let elapsed = Unix.gettimeofday () -. !g_start_time in
+    let elapsed = now -. !g_start_time in
     if elapsed > !g_total_timeout then (
       _log_warn "timeout" "%.1fs elapsed (limit: %.1fs)" elapsed
         !g_total_timeout;
-      raise Timeout_exception)
+      raise Timeout_exception);
+  match !g_branch_deadline with
+  | Some deadline when now > deadline -> raise Timeout_exception
+  | _ -> ()
 
 let load_config_from_json json_file : unit =
   try

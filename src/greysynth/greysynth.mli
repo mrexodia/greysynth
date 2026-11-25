@@ -29,6 +29,16 @@ val run_preprocessing_portfolio : Sexpr.Expr.t option -> Sexpr.Expr.t -> Sexpr.E
 (** Race configured baseline/experimental normalization+OES branches when the
     preprocessing portfolio is enabled. *)
 
+val select_pipeline_branches :
+  run_a:(Sexpr.Expr.t -> Sexpr.Expr.t) ->
+  run_b:(Sexpr.Expr.t -> Sexpr.Expr.t) -> Sexpr.Expr.t -> Sexpr.Expr.t
+(** Run two proof-producing preprocessing branches transactionally and restore
+    exactly the cheaper branch's proof checkpoint, rewrite caches and logs.
+    Branch B is skipped when branch A reaches size five or less. *)
+
+val run_pipeline_portfolio : Sexpr.Expr.t option -> Sexpr.Expr.t -> Sexpr.Expr.t
+(** Opt-in DAG/e-graph versus e-graph-free whole-preprocessing portfolio. *)
+
 val run_cleanup : ?whole:bool -> Sexpr.Expr.t -> Sexpr.Expr.t
 (** Run the configured post-synthesis cleanup, using bounded e-graph extraction
     with safe greedy fallback when enabled. *)

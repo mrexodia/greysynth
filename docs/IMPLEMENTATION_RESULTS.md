@@ -615,3 +615,53 @@ deadline scheduling.
 All five 100-case MBA suites remain 500/500 established with zero refutations or
 errors. MBA-Obfuscator nonlinear improves to 0.7284x in the measured run; other
 quality measurements retain stochastic CHS variance.
+
+## Round-22 dataset adapters and proof-gated pipeline portfolio
+
+`scripts/adapt_dataset.py` now provides three explicit, stdlib-only adapters.
+Generated data is refused below `datasets/`; every run writes a sibling
+`greysynth-dataset-adapter-provenance-v1` manifest containing deterministic
+source/output SHA-256 hashes, per-row transformation counts, and bounded
+before/after samples. The strict expression parser is unchanged.
+
+| Adapted source | Rows present | Transformations | Established | Syntax errors / refuted |
+|---|---:|---:|---:|---:|
+| Xyntia `b2_combined` | 1,110 | 159 `lsl`, 159 `lsr` | 1,110/1,110 | 0 / 0 |
+| CoBRA `oses_all` | 479 | 27 unary `+`, 2 `//`, 51 indexed variables, 2 human annotations, 337 absent-GT sentinels, 1 constant-GT annotation | 479/479 | 0 / 0 |
+| GreySynth FloKI snapshot | 497 | 0 (already brace-clean) | 497/497 | 0 / 0 |
+
+OSES has 142 parseable ground-truth labels: independent 64-bit checking reports
+74 proved, 17 unknown and 51 label disagreements. These are retained as corpus
+metadata and do not alter the 479/479 proofs against original inputs.
+
+The checked-out FloKI snapshot has 497 case JSON files plus 497 `_sizes.json`
+files, rather than the review corpus's 500 cases, and none starts with the
+historical stray `}`. The adapter remains covered by synthetic single-brace and
+idempotence tests instead of claiming transformations absent from this source.
+
+The new opt-in `pipeline_portfolio` runs modern DAG/e-graph preprocessing under
+a branch-local 55% deadline, then transactionally races e-graph-free standard
+preprocessing unless branch A reaches size five. Proof edges, rewrite caches,
+and preprocessing logs are checkpointed and only the winning branch survives;
+local deadline expiry is cleared without masking the global deadline. A focused
+regression makes branch B win and verifies the discarded branch leaves neither
+a proof edge nor cache entry, followed by independent certificate replay.
+
+Eight-worker portfolio gates:
+
+| Suite | Established | Solved | Geomean quality | Strict / unchanged |
+|---|---:|---:|---:|---:|
+| Tigress L5 default, first 200 | 200/200 | 39 | 30.5078x | 197 / 3 |
+| Tigress L5 portfolio, first 200 | 200/200 | 52 | 21.6373x | 197 / 3 |
+| QSynth EA portfolio | 100/100 | 51 | 1.2278x | 97 / 3 |
+| PLDI Non-Poly portfolio | 100/100 | 91 | 0.9872x | 100 / 0 |
+
+The portfolio improves both solved count and geomean substantially on the paired
+L5 gate without retaining any unproved branch result. The 200-case rerun also
+completed without an isolated contention retry.
+
+All seven ObfuscatorX rows establish and strictly shrink; measured quality is
+1.3104x with 1.1467x input/output compression. Existing general Boolean,
+linear-MBA and factor normalization already handles the safe local identities.
+The remaining gap consists of large correlated shared-factor expressions, so no
+benchmark-specific Boolean rewrite was added.
