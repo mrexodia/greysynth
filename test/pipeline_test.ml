@@ -52,6 +52,7 @@ let reset ?(strict = false) () =
   C.c_current_mode_is_global := false;
   C.g_total_timeout := 0.;
   C.g_has_timedout := false;
+  C.g_decidable_root_fast := false;
   C.g_branch_deadline := None;
   C.c_synthesizer_name := "regression mock";
   C.c_synthesizer := (fun _ -> None);

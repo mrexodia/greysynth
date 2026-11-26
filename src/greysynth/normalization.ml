@@ -29,8 +29,123 @@ let is_permutation_poly ~width coefficients =
     && not (odd (sum_with_parity 0))
     && not (odd (sum_with_parity 1))
 
+let invert_permutation_poly_newton ~width coefficients =
+  if not (is_permutation_poly ~width coefficients) then None
+  else
+    let modulus = Z.shift_left Z.one width in
+    let normalize value =
+      let value = Z.erem value modulus in
+      if Z.sign value < 0 then Z.add value modulus else value
+    in
+    let v2_factorial n =
+      let rec loop power total =
+        if power > n then total else loop (power * 2) (total + (n / power))
+      in loop 2 0
+    in
+    let rec find_degree degree =
+      if v2_factorial degree >= width then degree else find_degree (degree + 1)
+    in
+    let degree = find_degree 1 and raw_degree = 2 * (find_degree 1 - 1) in
+    let second = Array.make_matrix (raw_degree + 1) (raw_degree + 1) Z.zero
+    and first = Array.make_matrix (degree + 1) (degree + 1) Z.zero in
+    second.(0).(0) <- Z.one;
+    first.(0).(0) <- Z.one;
+    for n = 1 to raw_degree do
+      for k = 1 to n do
+        second.(n).(k) <- normalize
+            (Z.add second.(n - 1).(k - 1)
+               (Z.mul (Z.of_int k) second.(n - 1).(k)))
+      done
+    done;
+    for n = 1 to degree do
+      for k = 1 to n do
+        first.(n).(k) <- normalize
+            (Z.sub first.(n - 1).(k - 1)
+               (Z.mul (Z.of_int (n - 1)) first.(n - 1).(k)))
+      done
+    done;
+    let reduce power =
+      let falling = Array.make (degree + 1) Z.zero in
+      Array.iteri
+        (fun exponent coefficient ->
+          if not (Z.equal coefficient Z.zero) then
+            for k = 0 to min exponent degree do
+              falling.(k) <- normalize
+                  (Z.add falling.(k) (Z.mul coefficient second.(exponent).(k)))
+            done)
+        power;
+      for k = 0 to degree do
+        let bits = max 0 (width - v2_factorial k) in
+        falling.(k) <-
+          if bits = 0 then Z.zero
+          else Z.erem falling.(k) (Z.shift_left Z.one bits)
+      done;
+      let result = Array.make degree Z.zero in
+      for k = 0 to degree - 1 do
+        if not (Z.equal falling.(k) Z.zero) then
+          for exponent = 0 to k do
+            result.(exponent) <- normalize
+                (Z.add result.(exponent)
+                   (Z.mul falling.(k) first.(k).(exponent)))
+          done
+      done;
+      result
+    in
+    let of_list values =
+      let result = Array.make degree Z.zero in
+      List.iteri (fun index value -> if index < degree then result.(index) <- normalize value)
+        values;
+      result
+    in
+    let add left right =
+      Array.init degree (fun index -> normalize (Z.add left.(index) right.(index)))
+    and neg value = Array.map (fun coefficient -> normalize (Z.neg coefficient)) value in
+    let sub left right = add left (neg right) in
+    let mul left right =
+      let raw = Array.make (2 * degree - 1) Z.zero in
+      Array.iteri (fun i a ->
+          if not (Z.equal a Z.zero) then
+            Array.iteri (fun j b ->
+                if not (Z.equal b Z.zero) then
+                  raw.(i + j) <- normalize (Z.add raw.(i + j) (Z.mul a b))) right)
+        left;
+      reduce raw
+    in
+    let compose source argument =
+      Array.fold_right
+        (fun coefficient result ->
+          let result = mul result argument in
+          result.(0) <- normalize (Z.add result.(0) coefficient);
+          result)
+        source (Array.make degree Z.zero)
+    in
+    let source = of_list coefficients in
+    let a0 = source.(0) in
+    let shifted = Array.copy source in
+    shifted.(0) <- Z.zero;
+    let derivative = Array.make degree Z.zero in
+    for index = 1 to degree - 1 do
+      derivative.(index - 1) <- normalize (Z.mul (Z.of_int index) source.(index))
+    done;
+    let variable = Array.make degree Z.zero in
+    variable.(1) <- Z.one;
+    let g = ref (Array.copy variable) and h = ref (of_list [ Z.one ]) in
+    let steps = ref 0 and covered = ref 1 in
+    while !covered < width do incr steps; covered := 2 * !covered done;
+    for _ = 1 to !steps do
+      let derivative_at_g = compose derivative !g in
+      let correction = sub (of_list [ Z.of_int 2 ]) (mul derivative_at_g !h) in
+      h := mul !h correction;
+      let residual = sub (compose shifted !g) variable in
+      g := sub !g (mul !h residual)
+    done;
+    let affine = of_list [ Z.neg a0; Z.one ] in
+    Some (Array.to_list (compose !g affine))
+
 let invert_permutation_poly ~width ~max_degree coefficients =
   if not (is_permutation_poly ~width coefficients) || max_degree < 1 then None
+  else if max_degree >= width + 2 then
+    invert_permutation_poly_newton ~width coefficients
   else
     let odd value = Z.testbit value 0 in
     let modulus = Z.shift_left Z.one width in
@@ -2026,7 +2141,8 @@ module ModularMonomial = struct
 end
 module ModularPolynomial = Map.Make (ModularMonomial)
 
-let reduce_modular_polynomial cost expression =
+let reduce_modular_polynomial ?(min_degree = 8) ?(allow_atoms = false)
+    cost expression =
   let rec pure_ring = function
     | E.Var _ | E.Cst _ -> true
     | E.Unary { f = E.Minus; x; _ } -> pure_ring x
@@ -2036,8 +2152,8 @@ let reduce_modular_polynomial cost expression =
   in
   let width = E.sizeof expression in
   let allow_opaque =
-    cost expression > 2000
-    && List.length (Sample_evaluator.variables_of_expr expression) <= 2
+    allow_atoms || (cost expression > 2000
+    && List.length (Sample_evaluator.variables_of_expr expression) <= 2)
   in
   if width > 128 || (not (pure_ring expression) && not allow_opaque) then None
   else
@@ -2133,11 +2249,11 @@ let reduce_modular_polynomial cost expression =
           power 0
       in
       let opaque_allowed =
-        not !has_non_variable_atom
+        allow_atoms || not !has_non_variable_atom
         || (cost expression > 2000
             && List.length (Sample_evaluator.variables_of_expr expression) <= 2)
       in
-      if observed_degree < 8 || not opaque_allowed then None
+      if observed_degree < min_degree || not opaque_allowed then None
       else if ModularPolynomial.is_empty power then
         Some (zeros width, [], [ expression, zeros width ])
       else
@@ -2185,7 +2301,11 @@ let reduce_modular_polynomial cost expression =
               let bits = max 0 (width - valuation) in
               let reduced =
                 if bits = 0 then Z.zero
-                else Z.erem coefficient (Z.shift_left Z.one bits)
+                else
+                  let basis_modulus = Z.shift_left Z.one bits in
+                  let unsigned = Z.erem coefficient basis_modulus in
+                  if Z.gt unsigned (Z.shift_right basis_modulus 1)
+                  then Z.sub unsigned basis_modulus else unsigned
               in
               add_term monomial reduced result)
             falling ModularPolynomial.empty
@@ -2209,11 +2329,18 @@ let reduce_modular_polynomial cost expression =
                        |> function head :: tail -> Some (List.fold_left (E.binary E.Mul) head tail)
                                    | [] -> None
                  in
+                 let signed =
+                   if Z.gt coefficient (Z.shift_right modulus 1)
+                   then Z.sub coefficient modulus else coefficient
+                 in
                  match body with
-                 | None -> constant width coefficient
-                 | Some body when Z.equal coefficient Z.one -> body
-                 | Some body when Z.equal coefficient (Z.pred modulus) -> E.unary E.Minus body
-                 | Some body -> E.binary E.Mul (constant width coefficient) body)
+                 | None -> constant width signed
+                 | Some body when Z.equal signed Z.one -> body
+                 | Some body when Z.equal signed (Z.neg Z.one) -> E.unary E.Minus body
+                 | Some body when Z.sign signed < 0 ->
+                     E.unary E.Minus
+                       (E.binary E.Mul (constant width (Z.neg signed)) body)
+                 | Some body -> E.binary E.Mul (constant width signed) body)
         in
         let candidate =
           match terms with [] -> zeros width | _ -> build_balanced E.Plus terms
@@ -3001,6 +3128,349 @@ let linear_mba_compatible expression =
         result
   in
   inspect expression
+
+let reduce_quotient_polynomial_dag cost expression =
+  let width = E.sizeof expression in
+  if width > 128 then None
+  else
+    let max_monomials = 8192 and max_ops = 2_000_000 and max_visited = 32_768 in
+    let operations = ref 0 and visited = ref 0 in
+    let modulus = Z.shift_left Z.one width in
+    let normalize value =
+      let value = Z.erem value modulus in
+      if Z.sign value < 0 then Z.add value modulus else value
+    in
+    let tick () =
+      incr operations;
+      if !operations > max_ops then raise Ring_candidate_too_complex;
+      if !operations mod 512 = 0 then check_timeout ()
+    in
+    let v2_factorial n =
+      let rec loop power total =
+        if power > n then total else loop (power * 2) (total + (n / power))
+      in loop 2 0
+    in
+    let rec null_degree degree =
+      if v2_factorial degree >= width then degree else null_degree (degree + 1)
+    in
+    let null_degree = null_degree 1 in
+    let max_raw_degree = 2 * (null_degree - 1) in
+    let second = Array.make_matrix (max_raw_degree + 1) (max_raw_degree + 1) Z.zero
+    and first = Array.make_matrix (null_degree + 1) (null_degree + 1) Z.zero in
+    second.(0).(0) <- Z.one;
+    first.(0).(0) <- Z.one;
+    for n = 1 to max_raw_degree do
+      for k = 1 to n do
+        second.(n).(k) <- normalize
+            (Z.add second.(n - 1).(k - 1)
+               (Z.mul (Z.of_int k) second.(n - 1).(k)))
+      done
+    done;
+    for n = 1 to null_degree do
+      for k = 1 to n do
+        first.(n).(k) <- normalize
+            (Z.sub first.(n - 1).(k - 1)
+               (Z.mul (Z.of_int (n - 1)) first.(n - 1).(k)))
+      done
+    done;
+    let add_term monomial coefficient polynomial =
+      tick ();
+      if List.exists
+           (fun (_, exponent) -> exponent < 1 || exponent > max_raw_degree)
+           monomial
+      then raise Ring_candidate_too_complex;
+      let coefficient = normalize coefficient in
+      let old = Option.value (ModularPolynomial.find_opt monomial polynomial)
+          ~default:Z.zero in
+      let coefficient = normalize (Z.add old coefficient) in
+      let result =
+        if Z.equal coefficient Z.zero then ModularPolynomial.remove monomial polynomial
+        else ModularPolynomial.add monomial coefficient polynomial
+      in
+      if ModularPolynomial.cardinal result > max_monomials then
+        raise Ring_candidate_too_complex;
+      result
+    in
+    let add left right = ModularPolynomial.fold add_term left right in
+    let neg polynomial =
+      ModularPolynomial.fold
+        (fun monomial coefficient result -> add_term monomial (Z.neg coefficient) result)
+        polynomial ModularPolynomial.empty
+    in
+    let merge left right =
+      let exponents = Nodes.create (List.length left + List.length right) in
+      List.iter
+        (fun (atom, exponent) ->
+          Nodes.replace exponents atom
+            (exponent + Option.value (Nodes.find_opt exponents atom) ~default:0))
+        (left @ right);
+      Nodes.fold (fun atom exponent result -> (atom, exponent) :: result) exponents []
+      |> List.sort (fun (left, _) (right, _) -> E.compare left right)
+    in
+    let expand_basis table maximum polynomial =
+      ModularPolynomial.fold
+        (fun monomial coefficient result ->
+          let rec axes partial scale = function
+            | [] -> add_term (List.rev partial) (Z.mul coefficient scale)
+                      ModularPolynomial.empty
+            | (atom, exponent) :: rest ->
+                if exponent > maximum then raise Ring_candidate_too_complex;
+                let result = ref ModularPolynomial.empty in
+                for degree = 1 to exponent do
+                  let factor = table.(exponent).(degree) in
+                  if not (Z.equal factor Z.zero) then
+                    result := add !result
+                        (axes ((atom, degree) :: partial)
+                           (normalize (Z.mul scale factor)) rest)
+                done;
+                !result
+          in
+          add result
+            (if monomial = [] then add_term [] coefficient ModularPolynomial.empty
+             else axes [] Z.one monomial))
+        polynomial ModularPolynomial.empty
+    in
+    let reduce polynomial =
+      let falling = expand_basis second max_raw_degree polynomial in
+      let falling =
+        ModularPolynomial.fold
+          (fun monomial coefficient result ->
+            let valuation = List.fold_left
+                (fun total (_, degree) -> total + v2_factorial degree) 0 monomial in
+            let bits = max 0 (width - valuation) in
+            if bits = 0 then result
+            else
+              let basis_modulus = Z.shift_left Z.one bits in
+              let coefficient = Z.erem coefficient basis_modulus in
+              let coefficient =
+                if Z.gt coefficient (Z.shift_right basis_modulus 1)
+                then Z.sub coefficient basis_modulus else coefficient
+              in
+              add_term monomial coefficient result)
+          falling ModularPolynomial.empty
+      in
+      expand_basis first null_degree falling
+    in
+    let mul left right =
+      let product =
+        ModularPolynomial.fold
+          (fun lm lc result ->
+            ModularPolynomial.fold
+              (fun rm rc result -> add_term (merge lm rm) (Z.mul lc rc) result)
+              right result)
+          left ModularPolynomial.empty
+      in
+      reduce product
+    in
+    let memo = Nodes.create 256 in
+    let rec parse node =
+      match Nodes.find_opt memo node with
+      | Some result -> result
+      | None ->
+          incr visited;
+          if !visited > max_visited then raise Ring_candidate_too_complex;
+          let result =
+            match node with
+            | E.Cst value -> add_term [] (Bitvector.value_of value) ModularPolynomial.empty
+            | E.Unary { f = E.Minus; x; _ } -> neg (parse x)
+            | E.Binary { f = E.Plus; x; y; _ } -> add (parse x) (parse y)
+            | E.Binary { f = E.Minus; x; y; _ } ->
+                add (parse x) (neg (parse y))
+            | E.Binary { f = E.Mul; x; y; _ } -> mul (parse x) (parse y)
+            | atom -> ModularPolynomial.singleton [ atom, 1 ] Z.one
+          in
+          Nodes.add memo node result;
+          result
+    in
+    let rec power atom exponent =
+      if exponent = 1 then atom
+      else if exponent mod 2 = 0 then
+        let half = power atom (exponent / 2) in E.binary E.Mul half half
+      else E.binary E.Mul atom (power atom (exponent - 1))
+    in
+    try
+      let polynomial = reduce (parse expression) in
+      let terms =
+        ModularPolynomial.bindings polynomial
+        |> List.map (fun (monomial, coefficient) ->
+               let body =
+                 match monomial with
+                 | [] -> None
+                 | factors ->
+                     factors |> List.map (fun (atom, exponent) -> power atom exponent)
+                     |> function head :: tail -> Some (List.fold_left (E.binary E.Mul) head tail)
+                                 | [] -> None
+               in
+               let signed =
+                 if Z.gt coefficient (Z.shift_right modulus 1)
+                 then Z.sub coefficient modulus else coefficient
+               in
+               match body with
+               | None -> constant width signed
+               | Some body when Z.equal signed Z.one -> body
+               | Some body when Z.equal signed (Z.neg Z.one) -> E.unary E.Minus body
+               | Some body when Z.sign signed < 0 ->
+                   E.unary E.Minus
+                     (E.binary E.Mul (constant width (Z.neg signed)) body)
+               | Some body -> E.binary E.Mul (constant width signed) body)
+      in
+      let candidate =
+        match terms with [] -> zeros width | _ -> build_balanced E.Plus terms
+      in
+      if cost candidate < cost expression
+      then Some (candidate, [], [ expression, candidate ]) else None
+    with Ring_candidate_too_complex -> None
+
+let polysim_poly_mod2w cost expression =
+  let width = E.sizeof expression in
+  if cost expression > 32_768
+     || Greysynth_utils.Utils.dag_size_bounded ~limit:8192 expression > 8192
+  then None
+  else
+    let atom_table = Nodes.create 8 in
+    let rec collect_bitwise = function
+      | E.Cst value when Bitvector.is_zeros value || Bitvector.is_fill value -> ()
+      | E.Unary { f = E.Not; x; _ } -> collect_bitwise x
+      | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+          collect_bitwise x; collect_bitwise y
+      | atom -> Nodes.replace atom_table atom ()
+    and collect_ring = function
+      | E.Unary { f = E.Minus; x; _ } -> collect_ring x
+      | E.Binary { f = (E.Plus | E.Minus | E.Mul); x; y; _ } ->
+          collect_ring x; collect_ring y
+      | (E.Unary { f = E.Not; _ }
+        | E.Binary { f = (E.And | E.Or | E.Xor); _ }) as bitwise ->
+          collect_bitwise bitwise
+      | E.Cst _ -> ()
+      | atom -> Nodes.replace atom_table atom ()
+    in
+    collect_ring expression;
+    let atoms =
+      Nodes.fold (fun atom () result -> atom :: result) atom_table []
+      |> List.filter (fun atom -> E.sizeof atom = width)
+      |> List.sort E.compare |> Array.of_list
+    in
+    let count = Array.length atoms in
+    if count < 1 || count > 4 then None
+    else
+      let atom_index expression =
+        let rec find index =
+          if index = count then None
+          else if E.is_equal atoms.(index) expression then Some index
+          else find (index + 1)
+        in
+        find 0
+      in
+      let rec pure_bitwise expression =
+        match atom_index expression with
+        | Some _ -> true
+        | None ->
+            match expression with
+            | E.Cst value -> Bitvector.is_zeros value || Bitvector.is_fill value
+            | E.Unary { f = E.Not; x; _ } -> pure_bitwise x
+            | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+                pure_bitwise x && pure_bitwise y
+            | _ -> false
+      in
+      let rec truth assignment expression =
+        match atom_index expression with
+        | Some index -> assignment land (1 lsl index) <> 0
+        | None ->
+            match expression with
+            | E.Cst value -> Bitvector.is_fill value
+            | E.Unary { f = E.Not; x; _ } -> not (truth assignment x)
+            | E.Binary { f; x; y; _ } ->
+                let x = truth assignment x and y = truth assignment y in
+                if f = E.And then x && y
+                else if f = E.Or then x || y else x <> y
+            | _ -> false
+      in
+      let modulus = Z.shift_left Z.one width in
+      let mask = Z.pred modulus in
+      let normalize value = Z.logand value mask in
+      let conjunction subset =
+        let selected = ref [] in
+        for index = 0 to count - 1 do
+          if subset land (1 lsl index) <> 0 then
+            selected := atoms.(index) :: !selected
+        done;
+        match List.rev !selected with
+        | head :: tail -> List.fold_left (E.binary E.And) head tail
+        | [] -> constant width mask
+      in
+      let scaled coefficient term =
+        if Z.equal coefficient Z.one then term
+        else if Z.equal coefficient mask then E.unary E.Minus term
+        else E.binary E.Mul (constant width coefficient) term
+      in
+      let expansion bitwise =
+        let assignments = 1 lsl count in
+        let coefficients =
+          Array.init assignments (fun assignment ->
+              if truth assignment bitwise then Z.one else Z.zero)
+        in
+        for bit = 0 to count - 1 do
+          for subset = 0 to assignments - 1 do
+            if subset land (1 lsl bit) <> 0 then
+              coefficients.(subset) <-
+                Z.sub coefficients.(subset) coefficients.(subset lxor (1 lsl bit))
+          done
+        done;
+        let terms = ref [] in
+        Array.iteri
+          (fun subset coefficient ->
+            let coefficient = normalize
+                (if subset = 0 then Z.neg coefficient else coefficient)
+            in
+            if not (Z.equal coefficient Z.zero) then
+              let term =
+                if subset = 0 then constant width coefficient
+                else scaled coefficient (conjunction subset)
+              in
+              terms := term :: !terms)
+          coefficients;
+        match List.sort E.compare !terms with
+        | [] -> zeros width
+        | terms -> build_balanced E.Plus terms
+      in
+      let memo = Nodes.create 128 and linear_edges = ref [] and changed = ref false in
+      let rec substitute node =
+        match Nodes.find_opt memo node with
+        | Some result -> result
+        | None ->
+            let result =
+              if pure_bitwise node then (
+                let candidate = expansion node in
+                if not (E.is_equal node candidate) then (
+                  changed := true;
+                  linear_edges := (node, candidate) :: !linear_edges);
+                candidate)
+              else
+                match node with
+                | E.Unary { f; x; _ } -> E.unary f (substitute x)
+                | E.Binary { f; x; y; _ } -> E.binary f (substitute x) (substitute y)
+                | E.Ite { c; t; e; _ } -> E.ite (substitute c) (substitute t) (substitute e)
+                | value -> value
+            in
+            Nodes.add memo node result;
+            result
+      in
+      let substituted = substitute expression in
+      if not !changed then None
+      else
+        match reduce_quotient_polynomial_dag cost substituted with
+        | None -> None
+        | Some (reduced, equalities, poly_equalities) ->
+            let compact =
+              linear_candidates ~max_atoms:8 cost reduced
+              |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+              |> function candidate :: _ -> candidate | [] -> reduced
+            in
+            if cost compact >= cost expression then None
+            else
+              Some
+                (compact, List.rev !linear_edges, equalities, poly_equalities,
+                 if E.is_equal compact reduced then [] else [ reduced, compact ])
 
 let dag_bottom_up_simplify expression =
   let memo = Nodes.create 256 in

@@ -40,6 +40,7 @@ let reset ?(strict = true) () =
   C.c_equiv_timeout := 5;
   C.g_total_timeout := 0.;
   C.g_has_timedout := false;
+  C.g_decidable_root_fast := false;
   R.reset ()
 
 let test_external_oracle_adapter () =
@@ -642,6 +643,46 @@ let test_round19_modular_polynomials () =
   in
   check "multivariate poly_mod2w" (plus linear multi_null) linear
 
+let test_round24_quotient_and_centering () =
+  let replay label original candidate =
+    let builder = P.create original in
+    P.record_poly builder ~pass:label original candidate;
+    let report = P.verify ~original ~candidate (P.finish builder candidate) in
+    require
+      (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+      (label ^ ": quotient-ring certificate did not replay")
+  in
+  let x8 = var 8 "centered_x8" in
+  let square = mul x8 x8 in
+  let falling2 = mul x8 (minus x8 (c 8 1)) in
+  let original = plus (E.unary E.Minus square) (mul (c 8 128) falling2) in
+  (match N.reduce_modular_polynomial ~min_degree:2 U.size_of_expr original with
+  | Some (candidate, _, _) ->
+      require (U.size_of_expr candidate <= 4)
+        (Printf.sprintf "centered recovery bloated -x^2: %s" (U.pp candidate));
+      replay "centered -x^2" original candidate
+  | None -> failwith "centered recovery returned no candidate");
+  let polynomial width variable coefficients =
+    List.rev coefficients
+    |> List.fold_left
+         (fun result coefficient ->
+           plus (E.constant (Bitvector.create coefficient width)) (mul variable result))
+         (c width 0)
+  in
+  let k = Z.shift_left Z.one 61 in
+  let coefficients =
+    [ Z.zero; Z.one; Z.mul (Z.of_int (-50)) k; Z.mul (Z.of_int 35) k;
+      Z.mul (Z.of_int (-10)) k; k ]
+  in
+  require (N.is_permutation_poly ~width:64 coefficients)
+    "degree-5 Rivest polynomial was rejected";
+  (match N.invert_permutation_poly ~width:64 ~max_degree:66 coefficients with
+  | None -> failwith "degree-5 permutation inversion failed"
+  | Some inverse ->
+      let x = var 64 "newton_x64" in
+      let composition = polynomial 64 (polynomial 64 x coefficients) inverse in
+      replay "degree-5 permutation composition" composition x)
+
 let test_round18_regressions () =
   let replay label original result maximum =
     require (U.size_of_expr result <= maximum)
@@ -843,6 +884,7 @@ let () =
     test_egraph_child_replay ();
     test_round15_canonicalization ();
     test_round19_modular_polynomials ();
+    test_round24_quotient_and_centering ();
     test_round18_regressions ();
     test_egraph_round14_regressions ();
     test_preprocessing_portfolio ();

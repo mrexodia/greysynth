@@ -43,7 +43,7 @@
 (test
  (name proof_test)
  (modules proof_test)
- (libraries greysynth.proof greysynth.utils binsec.smt binsec.sse.term yojson)
+ (libraries greysynth.proof greysynth.utils binsec.smt binsec.sse.term yojson unix)
  (flags (:standard -open Binsec -open Libsse -open Libterm)))
 
 (test
@@ -55,3 +55,19 @@
  (deps ../datasets/greysynth/mba_obfuscator/mba_info/target_366.json)
  (action
   (run %{test} %{dep:../datasets/greysynth/mba_obfuscator/mba_info/target_366.json})))
+
+(test
+ (name round24_test)
+ (modules round24_test)
+ (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
+            greysynth.string_to_sexpr binsec.smt binsec.sse.term yojson unix)
+ (flags (:standard -open Binsec -open Libsse -open Libterm))
+ (deps
+  ../datasets/hard_cases/all_failing/permutation64/permutation64__line_0000003.json
+  ../datasets/hard_cases/all_failing/permutation64/permutation64__line_0000006.json
+  ../datasets/hard_cases/all_failing/permutation64/permutation64__line_0000010.json)
+ (action
+  (run %{test}
+   %{dep:../datasets/hard_cases/all_failing/permutation64/permutation64__line_0000003.json}
+   %{dep:../datasets/hard_cases/all_failing/permutation64/permutation64__line_0000006.json}
+   %{dep:../datasets/hard_cases/all_failing/permutation64/permutation64__line_0000010.json})))

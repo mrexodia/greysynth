@@ -88,6 +88,7 @@ let c_synthesizer_portfolio_backends :
 let g_total_timeout = ref 0.
 let g_start_time = ref 0.
 let g_has_timedout = ref false
+let g_decidable_root_fast = ref false
 (* An optional portfolio-branch deadline. It raises the ordinary timeout
    exception, but portfolio orchestration clears branch-local timeout state
    before starting or selecting another branch. *)

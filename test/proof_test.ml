@@ -155,6 +155,18 @@ let () =
       expect "proved_compositional" report;
       require (field "poly_proofs" report = `Int 1) "poly proof was not reported")
     [ 8, 4; 16, 6; 32, 20; 64, 20 ];
+  let high_x = var "poly_composed_64" 64 in
+  let composed_high_degree = E.binary E.Plus high_x (falling high_x 70) in
+  let high_started = Unix.gettimeofday () in
+  expect "proved_compositional"
+    (P.verify ~original:composed_high_degree ~candidate:high_x
+       (poly_certificate composed_high_degree high_x));
+  require (Unix.gettimeofday () -. high_started < 1.)
+    "quotient-ring replay did not reduce a raw degree-70 composition promptly";
+  let high_off_by_one = E.binary E.Plus composed_high_degree (c 64 1) in
+  expect "error"
+    (P.verify ~original:high_off_by_one ~candidate:high_x
+       (poly_certificate high_off_by_one high_x));
   let px = var "poly_x" 8 and py = var "poly_y" 8 in
   let multi = E.binary E.Mul (c 8 64)
       (E.binary E.Mul (falling px 3) (falling py 3)) in
@@ -281,7 +293,9 @@ let () =
         wide_arithmetic_left, wide_arithmetic_right ];
     let negative_verdict, _, _ = U.are_equivalent off_by_one (c 8 0) (Some 2) in
     let negative_verdict16, _, _ = U.are_equivalent off_by_one16 (c 16 0) (Some 2) in
-    require (negative_verdict = U.No && negative_verdict16 = U.No)
+    let high_negative, _, _ = U.are_equivalent high_off_by_one high_x (Some 2) in
+    require (negative_verdict = U.No && negative_verdict16 = U.No
+             && high_negative = U.No)
       "off-by-one poly threshold was not refuted by SMT";
     let complete = certificate original candidate [n1, n2; n2, n3] in
     expect "proved_compositional" (P.verify ~original ~candidate complete);

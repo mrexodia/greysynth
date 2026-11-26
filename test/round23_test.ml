@@ -30,6 +30,7 @@ let () =
   C.g_total_timeout := 5.;
   C.g_start_time := Unix.gettimeofday ();
   C.g_has_timedout := false;
+  C.g_decidable_root_fast := false;
   C.evaluator :=
     Sample_evaluator.make
       ~variables:(Sample_evaluator.variables_of_expr original) ~seed:0 100;

@@ -509,7 +509,7 @@ module PowerMonomial = struct
 end
 module PowerPolynomial = Map.Make (PowerMonomial)
 
-let poly_equal g left right =
+let _poly_equal_legacy g left right =
   let width = (node g left).width in
   if width <> (node g right).width then Ring_not_equal
   else if width > 128 then Ring_limit_exceeded
@@ -634,6 +634,177 @@ let poly_equal g left right =
             falling
         in
         if valid then Ring_equal else Ring_not_equal
+    with Ring_limit -> Ring_limit_exceeded
+
+let poly_equal g left right =
+  let width = (node g left).width in
+  if width <> (node g right).width then Ring_not_equal
+  else if width > 128 then Ring_limit_exceeded
+  else
+    let max_monomials = 8192 and max_ops = 2_000_000
+    and max_visited = 32_768 in
+    let operations = ref 0 and visited = ref 0 in
+    let modulus = Z.shift_left Z.one width in
+    let normalize value =
+      let value = Z.erem value modulus in
+      if Z.sign value < 0 then Z.add value modulus else value
+    in
+    let tick () =
+      incr operations;
+      if !operations > max_ops then raise Ring_limit
+    in
+    let v2_factorial n =
+      let rec loop power total =
+        if power > n then total else loop (power * 2) (total + (n / power))
+      in
+      loop 2 0
+    in
+    let rec find_null_degree degree =
+      if v2_factorial degree >= width then degree
+      else find_null_degree (degree + 1)
+    in
+    let null_degree = find_null_degree 1 in
+    let max_raw_degree = 2 * (null_degree - 1) in
+    let second = Array.make_matrix (max_raw_degree + 1) (max_raw_degree + 1) Z.zero
+    and first = Array.make_matrix (null_degree + 1) (null_degree + 1) Z.zero in
+    second.(0).(0) <- Z.one;
+    for n = 1 to max_raw_degree do
+      for k = 1 to n do
+        second.(n).(k) <- normalize
+            (Z.add second.(n - 1).(k - 1)
+               (Z.mul (Z.of_int k) second.(n - 1).(k)))
+      done
+    done;
+    first.(0).(0) <- Z.one;
+    for n = 1 to null_degree do
+      for k = 1 to n do
+        first.(n).(k) <- normalize
+            (Z.sub first.(n - 1).(k - 1)
+               (Z.mul (Z.of_int (n - 1)) first.(n - 1).(k)))
+      done
+    done;
+    let degree_ok monomial =
+      List.for_all
+        (fun (_, exponent) -> exponent >= 1 && exponent <= max_raw_degree)
+        monomial
+    in
+    let add_term monomial coefficient polynomial =
+      tick ();
+      if not (degree_ok monomial) then raise Ring_limit;
+      let coefficient = normalize coefficient in
+      let old =
+        Option.value (PowerPolynomial.find_opt monomial polynomial) ~default:Z.zero
+      in
+      let coefficient = normalize (Z.add old coefficient) in
+      let result =
+        if Z.equal coefficient Z.zero then PowerPolynomial.remove monomial polynomial
+        else PowerPolynomial.add monomial coefficient polynomial
+      in
+      if PowerPolynomial.cardinal result > max_monomials then raise Ring_limit;
+      result
+    in
+    let add left right = PowerPolynomial.fold add_term left right in
+    let neg polynomial =
+      PowerPolynomial.fold
+        (fun monomial coefficient result ->
+          add_term monomial (Z.neg coefficient) result)
+        polynomial PowerPolynomial.empty
+    in
+    let merge_monomials left right =
+      let counts = Hashtbl.create (List.length left + List.length right) in
+      List.iter
+        (fun (atom, exponent) ->
+          Hashtbl.replace counts atom
+            (exponent + Option.value (Hashtbl.find_opt counts atom) ~default:0))
+        (left @ right);
+      Hashtbl.fold (fun atom exponent result -> (atom, exponent) :: result) counts []
+      |> List.sort (fun (left, _) (right, _) -> Int.compare left right)
+    in
+    let expand_basis matrix maximum polynomial =
+      PowerPolynomial.fold
+        (fun monomial coefficient result ->
+          let rec axes partial scale = function
+            | [] ->
+                add_term (List.rev partial) (Z.mul coefficient scale)
+                  PowerPolynomial.empty
+            | (atom, exponent) :: rest ->
+                if exponent > maximum then raise Ring_limit;
+                let accumulated = ref PowerPolynomial.empty in
+                for degree = 1 to exponent do
+                  let factor = matrix.(exponent).(degree) in
+                  if not (Z.equal factor Z.zero) then
+                    accumulated := add !accumulated
+                        (axes ((atom, degree) :: partial)
+                           (normalize (Z.mul scale factor)) rest)
+                done;
+                !accumulated
+          in
+          let expanded =
+            if monomial = []
+            then add_term [] coefficient PowerPolynomial.empty
+            else axes [] Z.one monomial
+          in
+          add result expanded)
+        polynomial PowerPolynomial.empty
+    in
+    let reduce polynomial =
+      let falling = expand_basis second max_raw_degree polynomial in
+      let falling =
+        PowerPolynomial.fold
+          (fun monomial coefficient result ->
+            let valuation =
+              List.fold_left
+                (fun total (_, degree) -> total + v2_factorial degree) 0 monomial
+            in
+            let bits = max 0 (width - valuation) in
+            if bits = 0 then result
+            else
+              let coefficient = Z.erem coefficient (Z.shift_left Z.one bits) in
+              add_term monomial coefficient result)
+          falling PowerPolynomial.empty
+      in
+      expand_basis first null_degree falling
+    in
+    let mul left right =
+      let product =
+        PowerPolynomial.fold
+          (fun left_monomial left_coefficient result ->
+            PowerPolynomial.fold
+              (fun right_monomial right_coefficient result ->
+                add_term (merge_monomials left_monomial right_monomial)
+                  (Z.mul left_coefficient right_coefficient) result)
+              right result)
+          left PowerPolynomial.empty
+      in
+      reduce product
+    in
+    let memo = Hashtbl.create 256 in
+    let rec polynomial id =
+      match Hashtbl.find_opt memo id with
+      | Some result -> result
+      | None ->
+          incr visited;
+          if !visited > max_visited then raise Ring_limit;
+          let current = node g id in
+          let opaque () = add_term [ id, 1 ] Z.one PowerPolynomial.empty in
+          let result =
+            match current.shape, current.expr with
+            | Value _, E.Cst value ->
+                add_term [] (Bitvector.value_of value) PowerPolynomial.empty
+            | Unary ("bvneg", [], child), _ -> neg (polynomial child)
+            | Binary ("bvadd", x, y), _ -> add (polynomial x) (polynomial y)
+            | Binary ("bvsub", x, y), _ ->
+                add (polynomial x) (neg (polynomial y))
+            | Binary ("bvmul", x, y), _ -> mul (polynomial x) (polynomial y)
+            | _ -> opaque ()
+          in
+          Hashtbl.add memo id result;
+          result
+    in
+    try
+      if PowerPolynomial.equal Z.equal
+           (reduce (polynomial left)) (reduce (polynomial right))
+      then Ring_equal else Ring_not_equal
     with Ring_limit -> Ring_limit_exceeded
 
 module SparseMultilinear = Map.Make (Int)

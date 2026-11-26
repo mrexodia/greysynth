@@ -17,8 +17,9 @@ val record_ring : builder -> pass:string -> Sexpr.Expr.t -> Sexpr.Expr.t -> unit
     the common bit width. Non-ring subterms are opaque indeterminates. *)
 
 val record_poly : builder -> pass:string -> Sexpr.Expr.t -> Sexpr.Expr.t -> unit
-(** [record_poly] additionally permits modular null-polynomial reduction using
-    bounded multivariate falling-factorial divisibility. *)
+(** [record_poly] evaluates polynomial DAGs in the bounded multivariate
+    quotient ring modulo the falling-factorial null ideal, reducing after
+    multiplication so raw degrees may exceed the canonical degree bound. *)
 
 val record_linear_mba : builder -> pass:string -> Sexpr.Expr.t -> Sexpr.Expr.t -> unit
 (** [record_linear_mba] checks exact bounded linear-MBA canonical forms. Up to

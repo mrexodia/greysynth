@@ -190,7 +190,7 @@ let restore_preprocessing_log snapshot =
 
 let run_preprocessing gt input =
   let best = ref input in
-  let oes_done = ref false in
+  let oes_done = ref false and root_decidable_fast = ref false in
   let normalization_deadline () =
     if !g_total_timeout <= 0. || not (!c_oes || !c_chs) then None
     else
@@ -240,6 +240,20 @@ let run_preprocessing gt input =
                !best candidate -> best := candidate
       | _ -> ()
   in
+  let run_root_polysim_poly () =
+    match Normalization.polysim_poly_mod2w size_of_expr !best with
+    | Some (candidate, linear_mba_equalities, equalities, poly_equalities,
+            final_linear_equalities)
+      when Rewrite.accepts_compositional ~pass:"root-polysim-poly-mod2w"
+             ~equalities ~poly_equalities
+             ~linear_mba_equalities:(linear_mba_equalities @ final_linear_equalities)
+             !best candidate ->
+        best := candidate;
+        if size_of_expr candidate <= 20 then (
+          root_decidable_fast := true;
+          g_decidable_root_fast := true)
+    | _ -> ()
+  in
   let run_root_minterm_poly () =
     match
       if size_of_expr !best > 256
@@ -254,6 +268,8 @@ let run_preprocessing gt input =
              !best candidate -> best := candidate
     | _ -> ()
   in
+  run_root_polysim_poly ();
+  if !root_decidable_fast then !best else (
   run_root_minterm_poly ();
   if size_of_expr !best <= 10_000
      || size_of_expr !best < size_of_expr input / 4
@@ -274,6 +290,7 @@ let run_preprocessing gt input =
     done);
   run_root_complementary_atoms ();
   run_root_correlated_null ();
+  run_root_polysim_poly ();
   run_root_minterm_poly ();
   (match
      if size_of_expr !best >= 200
@@ -314,7 +331,7 @@ let run_preprocessing gt input =
   if !c_fast_simplify && not !g_has_timedout then (
     best := fast_simplify_with_logs !best;
     check_equiv gt ~tag:"fast_simplify" log_fast_simplify_is_equiv !best);
-  !best
+  !best)
 
 let run_preprocessing_portfolio gt input =
   if not !c_preprocessing_portfolio then run_preprocessing gt input
@@ -463,11 +480,11 @@ let run_passes gt obf =
   let best = ref obf in
   (try
      best := run_pipeline_portfolio gt !best;
-     if !c_global_synthesis && not !g_has_timedout then (
+     if !c_global_synthesis && not !g_has_timedout && not !g_decidable_root_fast then (
        c_current_mode_is_global := true;
        best := simplify_global !c_synthesis_timeout !c_synthesis_repeat !best;
        check_equiv gt ~tag:"global" log_global_is_equiv !best);
-     if !c_chs && not !g_has_timedout then chs gt best
+     if !c_chs && not !g_has_timedout && not !g_decidable_root_fast then chs gt best
    with Timeout_exception ->
      g_has_timedout := true;
      _log_warn "greysynth" "timeout reached");
@@ -641,6 +658,7 @@ let run ?proof_output obf config gt =
   log_obfuscated_expression := obf;
   g_start_time := Unix.gettimeofday ();
   g_has_timedout := false;
+  g_decidable_root_fast := false;
   g_branch_deadline := None;
   Rewrite.reset ~original:obf ();
   Synthesis.reset_rule_cache ();
@@ -661,7 +679,8 @@ let run ?proof_output obf config gt =
   let reference = Some (Option.value gt ~default:obf) in
   let result = if outside_proof_semantics then obf else run_passes reference obf in
   let result =
-    if not outside_proof_semantics && not !g_has_timedout then
+    if not outside_proof_semantics && not !g_has_timedout
+       && not !g_decidable_root_fast then
       try
         let remaining =
           if !g_total_timeout <= 0. then infinity

@@ -713,3 +713,45 @@ its five-second eight-worker quality gate does not meet the no-regression goal:
 nine rows finish larger than their stored isolated baselines. This is reported
 explicitly rather than treating contention-sensitive phase ordering as a proof
 failure; it remains follow-up scheduling work.
+
+## Round-24 quotient-ring polynomial DAGs and BitTrans hybrid
+
+`poly_mod2w` now evaluates typed polynomial DAGs directly in the multivariate
+quotient ring modulo the falling-factorial null ideal. Products are reduced
+before they can feed the next DAG node, using truncated Stirling rows through
+the width-specific null degree. Replay is fail-closed at width 128, 8,192
+monomials, two million operations and 32,768 visited nodes. The degree-70 raw
+composition regression, existing 8/16-bit one-bit-below negatives, and
+multivariate tests all agree with Bitwuzla.
+
+Producer-side quotient evaluation uses the same bounds and centered falling
+coefficients. Signed reconstruction keeps the 8-bit `-x^2` regression as
+`-(x*x)` rather than the unsigned `127*x^2 + 128*x` form. The untrusted Rivest
+helper now performs `ceil(log2 width)` Newton steps directly in the univariate
+quotient ring. Its degree-5 composition with raw degree above 66 is accepted
+only when independent `poly_mod2w` replay proves it.
+
+The early `polysim_poly_mod2w` root pass maps maximal pure-bitwise leaves into
+the conjunction basis with `linear_mba_mod2w`, reduces the resulting correlated
+polynomial with one `poly_mod2w` edge, and stops the speculative pipeline when
+the decidable result is already at most 20 nodes. The three corpus-backed unit
+rows (Permutation64 3, 6 and 10) each become size 19 versus GT size 20 with no
+SMT certificate edges.
+
+Curated results:
+
+| Gate | Established | Solved/exact | Geomean quality | Better / equal / worse | Proof SMT edges |
+|---|---:|---:|---:|---:|---:|
+| Permutation64 remaining | 10/10 | 10/10 | 76.1156x -> 0.9500x | 10 / 0 / 0 | 0 |
+| Permutation64 full | 13/13 | 13/13 | 25.1508x -> 0.9500x | — | 0 |
+| PLDI Poly remaining weak | 62/62 | 0 exact | 2.5679x -> 1.7578x | 62 / 0 / 0 | 557 |
+| Core hard | 406/413 | 177 exact | 87.4070x -> 8.8451x | 340 / 50 / 4 | 2,386 |
+| Regression smoke | 62/62 | 47 exact | 0.7846x -> 1.2463x | 1 / 44 / 17 | 234 |
+
+All thirteen Permutation64 results are smaller than the supplied GT syntax but
+semantically exact, hence the 0.95x quality rather than 1.00x. Their replay uses
+only `linear_mba_mod2w` and `poly_mod2w`. The core unresolved set remains one
+malformed Loki row plus six pre-existing 30-second OMVLL process timeouts.
+Regression smoke remains 62/62 established and strictly reduced with zero
+refutations/errors, but the five-second contention-sensitive quality gate still
+does not match the stored isolated baselines; 17 rows finish larger.
