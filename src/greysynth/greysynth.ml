@@ -248,6 +248,19 @@ let run_preprocessing gt input =
                !best candidate -> best := candidate
       | _ -> ()
   in
+  let run_root_semantic_probes () =
+    let candidates =
+      [ Normalization.probe_semantic_linear_mba size_of_expr !best;
+        Normalization.probe_semantic_poly size_of_expr !best ]
+      |> List.filter_map Fun.id
+      |> List.sort (fun left right -> Int.compare (size_of_expr left) (size_of_expr right))
+    in
+    match candidates with
+    | candidate :: _
+      when Rewrite.accepts ~pass:"root-semantic-probe" !best candidate ->
+        best := candidate
+    | _ -> ()
+  in
   let run_root_semilinear () =
     match Normalization.semilinear_mba_candidate size_of_expr !best with
     | Some candidate ->
@@ -288,6 +301,7 @@ let run_preprocessing gt input =
              !best candidate -> best := candidate
     | _ -> ()
   in
+  run_root_semantic_probes ();
   run_root_semilinear ();
   run_root_polysim_poly ();
   if !root_decidable_fast then !best else (
@@ -310,8 +324,11 @@ let run_preprocessing gt input =
       improving :=
         size_of_expr !best < before_size || dag_size_of_expr !best < before_dag
     done);
+  if not !g_has_timedout && dag_size_of_expr !best <= 4096 then
+    best := semantic_dag_cse_pass !best;
   run_root_complementary_atoms ();
   run_root_correlated_null ();
+  run_root_semantic_probes ();
   run_root_semilinear ();
   run_root_polysim_poly ();
   run_root_minterm_poly ();

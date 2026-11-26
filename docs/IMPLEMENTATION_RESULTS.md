@@ -877,3 +877,42 @@ There are zero refutations, unknown proof verdicts, or timeouts among establishe
 rows; the sole core failure is the known malformed Loki input. Regression smoke
 remains fully established, while its five-second quality remains sensitive to
 the additional deterministic phase ordering.
+
+## Round-28 black-box semantic interpolation and DAG CSE
+
+Round 28 adds bounded semantic probes independent of syntactic MBA shape.
+`probe_semantic_linear_mba` evaluates one- to four-variable DAGs on the full
+Boolean corner cube, performs modular Möbius reconstruction, minimizes the
+result with the structured Round-27 engine, and rejects it unless full-width
+holdout samples agree. `probe_semantic_poly` uses four univariate or six
+bivariate evaluations, enumerates the exact 2-adic MSB lifts for divided finite
+differences, emits centered degree-3/degree-2 power forms, and applies the same
+full-width filter. Every surviving candidate still crosses `Rewrite.accepts`;
+finite probing never establishes a result.
+
+`semantic_dag_cse_pass` pre-indexes every unique node by complete width-aware
+sample fingerprint, then traverses bottom-up. Constant candidates and smaller
+cross-branch representatives are accepted only through `Rewrite.accepts`, with
+at most 64 non-trivial attempts and a 0.5-second scheduling window. Unit tests
+cover differently obfuscated carry decompositions, dead nonlinear branches,
+wrapped linear noise, 64-bit cubic and bivariate quadratic recovery, and clean
+rejection of `x & y` as an arithmetic polynomial.
+
+The semantic root path also improves the earlier OMVLL regression from
+`target_2558: 647 -> 107` to `647 -> 3`, smaller than its GT size 7. Curated
+results:
+
+| Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| Tigress L5 weak | 23/23 | 2 | 437.4347x -> 118.3432x | 20 / 0 / 3 |
+| Tigress L6 weak | 84/84 | 6 | 1450.2012x -> 454.5251x | 41 / 15 / 24 |
+| Loki weak | 143/144 | 125 | 431.9448x -> 2.2060x | 125 / 10 / 8 |
+| Loki-tiny first 100 | 100/100 | 91 | 14.2659x -> 1.1734x | 99 / 1 / 0 |
+| Core hard non-GB | 405/406 | 201 | 87.4070x -> 8.7275x | 327 / 36 / 31 |
+| Regression smoke | 62/62 | 44 | 0.7846x -> 2.3078x | 0 / 39 / 23 |
+
+There are zero refutations, unknown proof verdicts, or timeouts among established
+rows. The sole Loki/core failure remains malformed `line_0001001`. The semantic
+passes raise exact-GT coverage substantially, especially on Loki/Loki-tiny and
+core-hard, but the fixed five-second smoke quality remains phase-sensitive and
+regresses on 23 stored isolated baselines.

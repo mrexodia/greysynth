@@ -382,6 +382,76 @@ let oes_with_logs (expr : Sexpr.Expr.t) =
     log_linear_size_after := Greysynth_utils.Utils.size_of_expr result;
     result
 
+let semantic_dag_cse_pass expression =
+  if Greysynth_utils.Utils.dag_size_bounded ~limit:4096 expression > 4096 then expression
+  else
+    let memo = Sexpr.BvTbl.create 256 in
+    let representatives = Hashtbl.create 256 in
+    let attempts = ref 0 and deadline = Unix.gettimeofday () +. 0.5 in
+    let can_attempt () = !attempts < 64 && Unix.gettimeofday () < deadline in
+    let scanned = Sexpr.BvTbl.create 256 in
+    let rec scan node =
+      if not (Sexpr.BvTbl.mem scanned node) then (
+        Sexpr.BvTbl.add scanned node ();
+        (match node with
+        | Sexpr.Expr.Unary r -> scan r.x
+        | Sexpr.Expr.Binary r -> scan r.x; scan r.y
+        | Sexpr.Expr.Ite r -> scan r.c; scan r.t; scan r.e
+        | _ -> ());
+        let signature =
+          (Sexpr.Expr.sizeof node, !evaluator.node_to_outhash node)
+        in
+        match Hashtbl.find_opt representatives signature with
+        | None -> Hashtbl.add representatives signature node
+        | Some previous
+          when Greysynth_utils.Utils.size_of_expr node
+               < Greysynth_utils.Utils.size_of_expr previous ->
+            Hashtbl.replace representatives signature node
+        | _ -> ())
+    in
+    scan expression;
+    let rec visit node =
+      match Sexpr.BvTbl.find_opt memo node with
+      | Some result -> result
+      | None ->
+          let rebuilt =
+            match node with
+            | Sexpr.Expr.Unary r -> Sexpr.Expr.unary r.f (visit r.x)
+            | Sexpr.Expr.Binary r -> Sexpr.Expr.binary r.f (visit r.x) (visit r.y)
+            | Sexpr.Expr.Ite r -> Sexpr.Expr.ite (visit r.c) (visit r.t) (visit r.e)
+            | _ -> node
+          in
+          let result = ref rebuilt in
+          (match !evaluator.is_node_constant !result with
+          | Some value when Greysynth_utils.Utils.size_of_expr !result >= 3 && can_attempt () ->
+              incr attempts;
+              let candidate = Sexpr.Expr.constant value in
+              if Rewrite.accepts ~pass:"dag-const-prune" !result candidate then result := candidate
+          | _ -> ());
+          let signature =
+            (Sexpr.Expr.sizeof !result, !evaluator.node_to_outhash !result)
+          in
+          (match Hashtbl.find_opt representatives signature with
+          | Some previous
+            when Greysynth_utils.Utils.size_of_expr previous
+                 < Greysynth_utils.Utils.size_of_expr !result
+                 && can_attempt () ->
+              incr attempts;
+              if Rewrite.accepts ~pass:"dag-semantic-cse" !result previous then
+                result := previous
+          | _ -> ());
+          (match Hashtbl.find_opt representatives signature with
+          | None -> Hashtbl.replace representatives signature !result
+          | Some previous
+            when Greysynth_utils.Utils.size_of_expr !result
+                 < Greysynth_utils.Utils.size_of_expr previous ->
+              Hashtbl.replace representatives signature !result
+          | _ -> ());
+          Sexpr.BvTbl.add memo node !result;
+          !result
+    in
+    visit expression
+
 (* ------------------------------------------------------------------ *)
 (* fast_simplify                                                       *)
 (* ------------------------------------------------------------------ *)

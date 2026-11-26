@@ -3894,6 +3894,174 @@ let polysim_poly_mod2w cost expression =
                 (compact, List.rev !linear_edges, equalities, poly_equalities,
                  if E.is_equal compact reduced then [] else [ reduced, compact ])
 
+let probe_variables expression maximum =
+  let width = E.sizeof expression in
+  let variables =
+    Sample_evaluator.variables_of_expr expression
+    |> List.map (fun (name, size) -> E.var name size name)
+  in
+  if variables = [] || List.length variables > maximum
+     || List.exists (fun variable -> E.sizeof variable <> width) variables
+  then None else Some (width, Array.of_list variables)
+
+let probe_evaluate expression variables values =
+  let labels = Hashtbl.create (Array.length variables) in
+  Array.iteri
+    (fun index variable ->
+      Hashtbl.add labels variable (constant (E.sizeof variable) values.(index)))
+    variables;
+  (Sample_evaluator.make 1).eval_label expression 0 labels |> Bitvector.value_of
+
+let probe_semantic_linear_mba cost expression =
+  if cost expression < 5
+     || Greysynth_utils.Utils.dag_size_bounded ~limit:2048 expression > 2048
+  then None
+  else
+    Option.bind (probe_variables expression 4) (fun (width, variables) ->
+        let count = Array.length variables and modulus = Z.shift_left Z.one width in
+        let normalize value = Z.logand value (Z.pred modulus) in
+        try
+          let assignments = 1 lsl count in
+          let values =
+            Array.init assignments (fun assignment ->
+                let inputs = Array.init count (fun index ->
+                    if assignment land (1 lsl index) = 0 then Z.zero else Z.one) in
+                probe_evaluate expression variables inputs)
+          in
+          for bit = 0 to count - 1 do
+            for subset = 0 to assignments - 1 do
+              if subset land (1 lsl bit) <> 0 then
+                values.(subset) <- normalize
+                    (Z.sub values.(subset) values.(subset lxor (1 lsl bit)))
+            done
+          done;
+          let terms = ref [] in
+          Array.iteri
+            (fun subset coefficient ->
+              let coefficient = normalize coefficient in
+              if not (Z.equal coefficient Z.zero) then
+                let body =
+                  if subset = 0 then None
+                  else
+                    Array.to_list variables
+                    |> List.mapi (fun index variable -> index, variable)
+                    |> List.filter_map (fun (index, variable) ->
+                           if subset land (1 lsl index) = 0 then None else Some variable)
+                    |> function
+                       | head :: tail -> Some (List.fold_left (E.binary E.And) head tail)
+                       | [] -> None
+                in
+                let term =
+                  match body with
+                  | None -> constant width coefficient
+                  | Some body when Z.equal coefficient Z.one -> body
+                  | Some body when Z.equal coefficient (Z.pred modulus) -> E.unary E.Minus body
+                  | Some body -> E.binary E.Mul (constant width coefficient) body
+                in
+                terms := term :: !terms)
+            values;
+          let raw =
+            match !terms with [] -> zeros width | terms -> build_balanced E.Plus terms
+          in
+          let candidate =
+            raw :: linear_candidates ~max_atoms:4 cost raw
+            |> List.filter (fun candidate -> cost candidate < cost expression)
+            |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+            |> List.find_opt (fun candidate -> Rewrite.samples_agree expression candidate)
+          in
+          candidate
+        with _ -> None)
+
+let solve_twice width value =
+  let modulus = Z.shift_left Z.one width in
+  let normalize value = Z.logand value (Z.pred modulus) in
+  let value = normalize value in
+  if Z.testbit value 0 then []
+  else
+    let half = Z.shift_right modulus 1 in
+    let base = Z.erem (Z.shift_right value 1) half in
+    [ base; Z.add base half ]
+
+let probe_semantic_poly cost expression =
+  if cost expression < 5 || E.sizeof expression > 64
+     || Greysynth_utils.Utils.dag_size_bounded ~limit:2048 expression > 2048
+  then None
+  else
+    Option.bind (probe_variables expression 2) (fun (width, variables) ->
+        let modulus = Z.shift_left Z.one width and mask = Z.pred (Z.shift_left Z.one width) in
+        let norm value = Z.logand value mask in
+        let eval inputs = probe_evaluate expression variables (Array.of_list inputs) in
+        let centered coefficient =
+          if Z.gt coefficient (Z.shift_right modulus 1) then Z.sub coefficient modulus
+          else coefficient
+        in
+        let scaled coefficient body =
+          let coefficient = centered (norm coefficient) in
+          if Z.equal coefficient Z.zero then None
+          else if Z.equal coefficient Z.one then Some body
+          else if Z.equal coefficient (Z.neg Z.one) then Some (E.unary E.Minus body)
+          else if Z.sign coefficient < 0 then
+            Some (E.unary E.Minus (E.binary E.Mul (constant width (Z.neg coefficient)) body))
+          else Some (E.binary E.Mul (constant width coefficient) body)
+        in
+        let sum terms =
+          match List.filter_map Fun.id terms with
+          | [] -> zeros width
+          | head :: tail -> List.fold_left (E.binary E.Plus) head tail
+        in
+        let candidates = ref [] in
+        (try
+           if Array.length variables = 1 then (
+             let x = variables.(0) in
+             let f0 = eval [ Z.zero ] and f1 = eval [ Z.one ]
+             and f2 = eval [ Z.of_int 2 ] and f3 = eval [ Z.of_int 3 ] in
+             let d2 = norm (Z.add f2 (Z.sub f0 (Z.mul (Z.of_int 2) f1))) in
+             let d3 = norm
+                 (Z.add (Z.sub f3 (Z.mul (Z.of_int 3) f2))
+                    (Z.sub (Z.mul (Z.of_int 3) f1) f0)) in
+             let inv3 = Z.invert (Z.of_int 3) (Z.shift_right modulus 1) in
+             solve_twice width d3
+             |> List.iter (fun half_c3 ->
+                    let c3 = norm (Z.mul half_c3 inv3) in
+                    solve_twice width (norm (Z.sub d2 (Z.mul (Z.of_int 6) c3)))
+                    |> List.iter (fun c2 ->
+                           let c1 = norm (Z.sub f1 (Z.add f0 (Z.add c2 c3))) in
+                           let x2 = E.binary E.Mul x x in
+                           let x3 = E.binary E.Mul x2 x in
+                           candidates := sum
+                               [ scaled c3 x3; scaled c2 x2; scaled c1 x;
+                                 if Z.equal f0 Z.zero then None else Some (constant width f0) ]
+                             :: !candidates)) )
+           else (
+             let x = variables.(0) and y = variables.(1) in
+             let f00 = eval [ Z.zero; Z.zero ]
+             and f10 = eval [ Z.one; Z.zero ] and f20 = eval [ Z.of_int 2; Z.zero ]
+             and f01 = eval [ Z.zero; Z.one ] and f02 = eval [ Z.zero; Z.of_int 2 ]
+             and f11 = eval [ Z.one; Z.one ] in
+             let d20 = norm (Z.add f20 (Z.sub f00 (Z.mul (Z.of_int 2) f10)))
+             and d02 = norm (Z.add f02 (Z.sub f00 (Z.mul (Z.of_int 2) f01))) in
+             let cxy = norm (Z.add f11 (Z.sub f00 (Z.add f10 f01))) in
+             List.iter
+               (fun cxx ->
+                 List.iter
+                   (fun cyy ->
+                     let cx = norm (Z.sub f10 (Z.add f00 cxx))
+                     and cy = norm (Z.sub f01 (Z.add f00 cyy)) in
+                     candidates := sum
+                         [ scaled cxx (E.binary E.Mul x x);
+                           scaled cyy (E.binary E.Mul y y);
+                           scaled cxy (E.binary E.Mul x y);
+                           scaled cx x; scaled cy y;
+                           if Z.equal f00 Z.zero then None else Some (constant width f00) ]
+                       :: !candidates)
+                   (solve_twice width d02))
+               (solve_twice width d20));
+           !candidates
+           |> List.filter (fun candidate -> cost candidate < cost expression)
+           |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+           |> List.find_opt (fun candidate -> Rewrite.samples_agree expression candidate)
+         with _ -> None))
+
 let dag_bottom_up_simplify expression =
   let memo = Nodes.create 256 in
   let constants = Sample_evaluator.make 1 in
@@ -3922,6 +4090,18 @@ let dag_bottom_up_simplify expression =
           | _ -> node
         in
         let result = ref rebuilt in
+        if cost !result >= 5 && cost !result <= 64 then (
+          let probes =
+            [ probe_semantic_linear_mba cost !result;
+              probe_semantic_poly cost !result ]
+            |> List.filter_map Fun.id
+            |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+          in
+          match probes with
+          | candidate :: _
+            when Rewrite.accepts ~pass:"dag-semantic-probe" !result candidate ->
+              result := candidate
+          | _ -> ());
         (match semilinear_mba_candidate cost !result with
         | Some candidate
           when Rewrite.accepts_compositional ~pass:"dag-semilinear-mba"
