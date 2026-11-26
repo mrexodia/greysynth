@@ -665,8 +665,25 @@ let replace_greek_vars expr new_leafs =
    shifts. Restore the raw backend result first so failed preparation or
    rejected algebraic rewrites cannot lose an otherwise useful synthesis. *)
 let prepare_candidates synth_expr new_leafs =
+  let rec complement_cleanup node =
+    let rebuilt =
+      match node with
+      | Unary r -> unary r.f (complement_cleanup r.x)
+      | Binary r -> binary r.f (complement_cleanup r.x) (complement_cleanup r.y)
+      | Ite r -> ite (complement_cleanup r.c) (complement_cleanup r.t) (complement_cleanup r.e)
+      | _ -> node
+    in
+    match rebuilt with
+    | Binary { f = Minus; x = Unary { f = Minus; x = base; _ }; y = Cst one; _ }
+      when Z.equal (Bitvector.value_of one) Z.one -> unary Not base
+    | Binary { f = Plus; x = Unary { f = Minus; x = base; _ }; y = Cst fill; _ }
+      when Bitvector.is_fill fill -> unary Not base
+    | Binary { f = Minus; x = Cst fill; y = base; _ }
+      when Bitvector.is_fill fill -> unary Not base
+    | value -> value
+  in
   try
-    let raw = replace_greek_vars synth_expr new_leafs in
+    let raw = replace_greek_vars synth_expr new_leafs |> complement_cleanup in
     try
       let simplified =
         replace_greek_vars

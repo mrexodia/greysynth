@@ -204,6 +204,13 @@ let run_preprocessing gt input =
       oes_done := true;
       check_equiv gt ~tag:"OES" log_linear_is_equiv !best)
   in
+  let run_root_complementary_slice () =
+    match Normalization.complementary_slice_candidate size_of_expr !best with
+    | Some (candidate, equalities, ring_equalities)
+      when Rewrite.accepts_compositional ~pass:"root-complementary-slice"
+             ~equalities ~ring_equalities !best candidate -> best := candidate
+    | _ -> ()
+  in
   let run_root_complementary_atoms () =
     match Normalization.pair_complementary_atoms size_of_expr !best with
     | Some (candidate, ring_equalities, linear_mba_equalities)
@@ -349,12 +356,11 @@ let run_preprocessing gt input =
     | _ -> ()
   in
   if !c_oes && size_of_expr !best > 100_000
-     && List.length (Sample_evaluator.variables_of_expr !best) <> 3
+     && List.length (Sample_evaluator.variables_of_expr !best) <= 2
      && dag_size_bounded ~limit:2048 !best <= 2048
      && not !g_has_timedout
   then (
-    let deadline = Unix.gettimeofday () +. 1.5 in
-    g_branch_deadline := Some deadline;
+    g_branch_deadline := Some (Unix.gettimeofday () +. 1.5);
     best := fst (linear_simplify ~seed:false !best);
     g_branch_deadline := None;
     if !g_has_timedout
@@ -371,6 +377,7 @@ let run_preprocessing gt input =
   if size_of_expr !best <= 10_000
      || size_of_expr !best < size_of_expr input / 4
   then run_root_linear_group ();
+  run_root_complementary_slice ();
   run_root_complementary_atoms ();
   run_root_correlated_null ();
   let input_dag_size = dag_size_of_expr !best in
@@ -390,6 +397,21 @@ let run_preprocessing gt input =
       let after_size = size_of_expr !best and after_dag = dag_size_of_expr !best in
       improving := after_size < before_size || after_dag < before_dag
     done);
+  if !c_oes && size_of_expr !best > 100_000
+     && List.length (Sample_evaluator.variables_of_expr !best) > 2
+     && dag_size_bounded ~limit:2048 !best <= 2048
+     && not !g_has_timedout
+  then (
+    let before = !best and deadline = Unix.gettimeofday () +. 0.5 in
+    g_branch_deadline := Some deadline;
+    let candidate = fst (linear_simplify ~seed:false !best) in
+    if size_of_expr candidate < size_of_expr before then best := candidate;
+    g_branch_deadline := None;
+    if !g_has_timedout
+       && (!g_total_timeout <= 0.
+           || Unix.gettimeofday () -. !g_start_time < !g_total_timeout)
+    then g_has_timedout := false);
+  run_root_complementary_slice ();
   run_root_complementary_atoms ();
   run_root_correlated_null ();
   run_root_semilinear ();

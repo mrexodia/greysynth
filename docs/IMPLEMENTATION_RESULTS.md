@@ -1042,3 +1042,45 @@ unchanged, but its 0.9162x geomean remains below the required 0.95x ceiling.
 The named PLDI rows 904/941/795 and Neureduce rows 98/632/798 improve only
 partially rather than reaching their requested exact bounds, and giant Tigress
 L8 target 5856 remains unchanged; these survivor gaps are reported explicitly.
+
+## Round-32 survivor bug fixes
+
+Round 32 moves the bounded OES seed behind giant-DAG peeling for multi-variable
+inputs while retaining the proven two-variable fast path needed by the
+Tigress-1016 guards. Giant bottom-up processing always retains known-bits,
+peephole, nonlinear, linear and ring cleanup, and post-DAG OES is branch-local.
+The Round-30 flagship gate remains green (`target_3218 -> 5`, `target_366 -> 11`,
+`msimba/191 -> 5`, and Tigress L7/L8 1016 within size 13).
+
+Linear recovery now projects two-value tables at full active support, tries both
+Boolean polarities and complement forms, and partial linear-sum extraction
+scores direct linear, direct ring, and ring-then-linear routes instead of
+short-circuiting after a one-node ring win. Complementary low-slice substitution
+and two's-complement `-x-1`/`-1-x`/`-(x+1)` peepholes are proof-gated throughout
+normalization. A small candidate-side complement cleanup remains untrusted and
+is still verified against the restored original context.
+
+Curated outputs are retained at:
+
+```text
+/tmp/r32-gate/pldi/out.jsonl
+/tmp/r32-gate/neureduce/out.jsonl
+/tmp/r32-gate/qsynth/out.jsonl
+/tmp/r32-gate/smoke/out.jsonl
+/tmp/r32-core/out.jsonl
+```
+
+| Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| PLDI Poly weak | 62/62 | 17 | 2.5679x -> 1.1767x | 62 / 0 / 0 |
+| Neureduce weak | 53/53 | 7 | 3.5649x -> 2.1738x | 32 / 12 / 9 |
+| QSynth EA weak | 60/60 | 24 | 11.0762x -> 1.4940x | 58 / 0 / 2 |
+| Core hard non-GB | 405/406 | 228 | 87.4070x -> 5.8241x | 367 / 14 / 13 |
+| Regression smoke | 62/62 | 51 | 0.9162x -> 0.9034x | 3 / 47 / 12 |
+
+There are zero refutations, unknown proof verdicts, or timeouts among established
+rows; malformed Loki `line_0001001` remains the sole core error. Smoke stays
+below the required 0.95x ceiling with 61/62 strict reductions. The requested
+exact survivor targets are not all closed: PLDI 904/795, Neureduce 98/632/798,
+QSynth 388, C-MBA 1685, Tigress-L8 5856, and OMVLL 771 remain above their target
+bounds. These rows remain in the `/tmp/r32-*` JSONLs for the next forensic pass.

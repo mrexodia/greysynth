@@ -268,6 +268,23 @@ let rec peepholes evaluate expression =
   let fill = constant width (Z.pred (Z.shift_left Z.one width)) in
   let same = E.is_equal in
   match expression with
+  | E.Binary { f = E.Minus; x = E.Unary { f = E.Minus; x = base; _ };
+               y = one; _ }
+    when is_number Z.one one -> [ E.unary E.Not base ]
+  | E.Binary { f = E.Minus; x = fill; y = base; _ }
+    when is_number (Z.pred (Z.shift_left Z.one (E.sizeof base))) fill ->
+      [ E.unary E.Not base ]
+  | E.Binary { f = E.Plus; x = E.Unary { f = E.Minus; x = base; _ };
+               y = fill; _ }
+    when is_number (Z.pred (Z.shift_left Z.one (E.sizeof base))) fill ->
+      [ E.unary E.Not base ]
+  | E.Binary { f = E.Plus; x = fill;
+               y = E.Unary { f = E.Minus; x = base; _ }; _ }
+    when is_number (Z.pred (Z.shift_left Z.one (E.sizeof base))) fill ->
+      [ E.unary E.Not base ]
+  | E.Unary { f = E.Minus;
+              x = E.Binary { f = E.Plus; x = base; y = one; _ }; _ }
+    when is_number Z.one one -> [ E.unary E.Not base ]
   | E.Unary { f = E.Not;
               x = E.Binary { f = E.Minus; x = base; y = one; _ }; _ }
     when is_number Z.one one -> [ E.unary E.Minus base ]
@@ -1239,8 +1256,8 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
              done;
              !changed)
     in
-    if List.length active < count && List.length active <= 4
-       && List.length distinct = 2
+    if cost expression <= 128
+       && List.length active <= 4 && List.length distinct = 2
     then (
       let active = Array.of_list active and active_count = List.length active in
       let assignments = 1 lsl active_count in
@@ -1302,9 +1319,17 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
           anf ]
       in
       List.iter (fun boolean ->
-          let weighted = scale (normalize (Z.sub high low)) boolean in
+          let delta = normalize (Z.sub high low) in
+          let weighted = scale delta boolean in
           offer (if Z.equal low Z.zero then weighted
-                 else E.binary E.Plus (constant width low) weighted)) booleans);
+                 else E.binary E.Plus (constant width low) weighted);
+          let inverse_boolean = E.unary E.Not boolean in
+          let inverse_delta = normalize (Z.sub low high) in
+          let inverse_weighted = scale inverse_delta inverse_boolean in
+          offer (if Z.equal high Z.zero then inverse_weighted
+                 else E.binary E.Plus (constant width high) inverse_weighted);
+          if Z.equal low delta then
+            offer (scale (normalize (Z.neg delta)) inverse_boolean)) booleans);
     if semantic_bitwise && count <= min 6 !c_normalization_max_atoms then (
       let zero = Z.zero and one = Z.one
       and minus_one = mask and minus_two = normalize (Z.of_int (-2)) in
@@ -1875,6 +1900,49 @@ let mask_lift_candidate cost expression =
   in
   Option.bind candidate (fun candidate ->
       if cost candidate < cost expression then Some candidate else None)
+
+let complementary_slice_candidate cost expression =
+  if Greysynth_utils.Utils.dag_size_bounded ~limit:2048 expression > 2048 then None
+  else
+    let equalities = ref [] and memo = Nodes.create 64 in
+    let rec rewrite node =
+      match Nodes.find_opt memo node with
+      | Some result -> result
+      | None ->
+          let rebuilt =
+            match node with
+            | E.Unary { f; x; _ } -> E.unary f (rewrite x)
+            | E.Binary { f; x; y; _ } -> E.binary f (rewrite x) (rewrite y)
+            | E.Ite { c; t; e; _ } -> E.ite (rewrite c) (rewrite t) (rewrite e)
+            | value -> value
+          in
+          let result =
+            match rebuilt with
+            | E.Unary { f = E.Uext amount;
+                        x = E.Unary { f = E.Restrict { lo = 0; hi };
+                              x = E.Unary { f = E.Not; x = base; _ }; _ }; _ }
+              when amount > 0 && hi + 1 + amount = E.sizeof base ->
+                let positive =
+                  E.unary (E.Uext amount) (E.restrict ~lo:0 ~hi base)
+                in
+                let replacement =
+                  E.binary E.Minus
+                    (constant (E.sizeof base) (Z.pred (Z.shift_left Z.one (hi + 1))))
+                    positive
+                in
+                equalities := (rebuilt, replacement) :: !equalities;
+                replacement
+            | _ -> rebuilt
+          in
+          Nodes.add memo node result;
+          result
+    in
+    let substituted = rewrite expression in
+    if !equalities = [] then None
+    else
+      if cost substituted < cost expression
+      then Some (substituted, List.rev !equalities, [])
+      else None
 
 let known_bits_candidate cost expression =
   let candidate =
@@ -3250,18 +3318,35 @@ let partial_linear_sum_candidate cost expression =
           | head :: tail -> List.fold_left (E.binary E.Plus) head tail
         in
         let nonlinear_sum = sum nonlinear_terms and linear_sum = sum linear_terms in
+        let best_linear source =
+          linear_candidates ~max_atoms:6 cost source
+          |> List.filter (fun candidate -> Rewrite.samples_agree source candidate)
+          |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+          |> function candidate :: _ when cost candidate < cost source -> Some candidate
+                    | _ -> None
+        in
         let linear_ring = ring_polynomial_candidate cost linear_sum in
-        let simplified_linear, linear_used_ring =
-          match linear_ring with
-          | Some candidate when cost candidate < cost linear_sum -> candidate, true
-          | _ ->
-              (match
-                 linear_candidates ~max_atoms:6 cost linear_sum
-                 |> List.filter (fun candidate -> Rewrite.samples_agree linear_sum candidate)
-                 |> List.sort (fun left right -> Int.compare (cost left) (cost right))
-               with
-              | candidate :: _ when cost candidate < cost linear_sum -> candidate, false
-              | _ -> linear_sum, false)
+        let options = ref [] in
+        Option.iter
+          (fun candidate ->
+            options := (candidate, [], [ linear_sum, candidate ]) :: !options)
+          (best_linear linear_sum);
+        Option.iter
+          (fun ring ->
+            options := (ring, [ linear_sum, ring ], []) :: !options;
+            Option.iter
+              (fun candidate ->
+                options := (candidate, [ linear_sum, ring ], [ ring, candidate ]) :: !options)
+              (best_linear ring))
+          linear_ring;
+        let simplified_linear, linear_ring_edges, linear_equalities =
+          match
+            !options
+            |> List.sort (fun (left, _, _) (right, _, _) ->
+                   Int.compare (cost left) (cost right))
+          with
+          | best :: _ -> best
+          | [] -> linear_sum, [], []
         in
         let simplified_nonlinear =
           Option.value (ring_polynomial_candidate cost nonlinear_sum)
@@ -3274,12 +3359,7 @@ let partial_linear_sum_candidate cost expression =
           let ring_equalities = ref [ expression, partitioned ] in
           if not (E.is_equal simplified_nonlinear nonlinear_sum) then
             ring_equalities := (nonlinear_sum, simplified_nonlinear) :: !ring_equalities;
-          if linear_used_ring then
-            ring_equalities := (linear_sum, simplified_linear) :: !ring_equalities;
-          let linear_equalities =
-            if E.is_equal simplified_linear linear_sum || linear_used_ring then []
-            else [ linear_sum, simplified_linear ]
-          in
+          ring_equalities := linear_ring_edges @ !ring_equalities;
           Some (candidate, List.rev !ring_equalities, linear_equalities)
 
 let rec product_partition_candidate expression =
@@ -3687,6 +3767,13 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
   if Option.is_none bitsliced_fast then (
   List.iter (fun candidate -> candidates := direct "peephole" candidate :: !candidates)
     (peepholes constants.eval expression);
+  Option.iter
+    (fun (candidate, equalities, ring_equalities) ->
+      candidates :=
+        { expr = candidate; pass = "complementary-slice"; equalities;
+          ring_equalities; poly_equalities = []; linear_mba_equalities = [];
+          semilinear_mba_equalities = []; allow_equal_cost = false } :: !candidates)
+    (complementary_slice_candidate cost expression);
   Option.iter
     (fun candidate -> candidates := direct "mask-lift" candidate :: !candidates)
     (mask_lift_candidate cost expression);
@@ -4458,6 +4545,12 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
           | _ -> node
         in
         let result = ref rebuilt in
+        (match complementary_slice_candidate cost !result with
+        | Some (candidate, equalities, ring_equalities)
+          when Rewrite.accepts_compositional ~pass:"dag-complementary-slice"
+                 ~equalities ~ring_equalities !result candidate ->
+            result := candidate
+        | _ -> ());
         (match mask_lift_candidate cost !result with
         | Some candidate when Rewrite.accepts ~pass:"dag-mask-lift" !result candidate ->
             result := candidate
@@ -4470,16 +4563,16 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
                  ~linear_mba_equalities:(linear_mba_equalities @ final_linear_equalities)
                  !result candidate -> result := candidate
         | _ -> ());
+        (match known_bits_candidate cost !result with
+        | Some candidate when Rewrite.accepts ~pass:"dag-known-bits" !result candidate ->
+            result := candidate
+        | _ -> ());
         if not minimal then (
         (match xor_affine_mask_candidate cost !result with
         | Some candidate
           when Rewrite.accepts_compositional ~pass:"dag-xor-affine-mask"
                  ~equalities:[] ~semilinear_mba_equalities:[ !result, candidate ]
                  !result candidate -> result := candidate
-        | _ -> ());
-        (match known_bits_candidate cost !result with
-        | Some candidate when Rewrite.accepts ~pass:"dag-known-bits" !result candidate ->
-            result := candidate
         | _ -> ());
         if cost !result >= 5 && cost !result <= 64 then (
           let probes =
