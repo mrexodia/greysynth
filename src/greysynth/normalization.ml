@@ -286,6 +286,12 @@ let rec peepholes evaluate expression =
           E.Unary { f = (E.Uext _ | E.Sext _); x = base; _ }
           when hi < E.sizeof base ->
             [ if hi = E.sizeof base - 1 then base else E.restrict ~lo:0 ~hi base ]
+        | E.Restrict { lo = 0; hi },
+          E.Binary { f = (E.Plus | E.Minus | E.Mul | E.And | E.Or | E.Xor as op);
+                     x = E.Unary { f = (E.Uext _ | E.Sext _); x = left; _ };
+                     y = E.Unary { f = (E.Uext _ | E.Sext _); x = right; _ }; _ }
+          when E.sizeof left = hi + 1 && E.sizeof right = hi + 1 ->
+            [ E.binary op left right ]
         | _ -> []
       in
       match constant_value x with
@@ -492,6 +498,35 @@ let rec peepholes evaluate expression =
             List.filter_map Fun.id [ select x y; select y x ]
         | _ -> []
       in
+      let boolean_factoring () =
+        let pair = function
+          | E.Binary { f = E.And; x; y; _ } -> Some (x, y)
+          | _ -> None
+        in
+        let xor_pair left right =
+          match pair left, pair right with
+          | Some (a, E.Unary { f = E.Not; x = b; _ }),
+            Some (E.Unary { f = E.Not; x = c; _ }, d)
+            when same a c && same b d -> Some (E.binary E.Xor a b)
+          | Some (E.Unary { f = E.Not; x = b; _ }, a),
+            Some (d, E.Unary { f = E.Not; x = c; _ })
+            when same a c && same b d -> Some (E.binary E.Xor a b)
+          | _ -> None
+        in
+        let factor_pair left right =
+          match pair left, pair right with
+          | Some (a, b), Some (c, d) ->
+              if same a c then Some (E.binary E.And a (E.binary E.Or b d))
+              else if same a d then Some (E.binary E.And a (E.binary E.Or b c))
+              else if same b c then Some (E.binary E.And b (E.binary E.Or a d))
+              else if same b d then Some (E.binary E.And b (E.binary E.Or a c))
+              else None
+          | _ -> None
+        in
+        if f = E.Or then
+          List.filter_map Fun.id [ xor_pair x y; xor_pair y x; factor_pair x y ]
+        else []
+      in
       let shift_mask () =
         match f, x, constant_value y with
         | E.Lsl, E.Binary { f = E.Lsr; x = base; y = amount; _ }, Some left_amount ->
@@ -510,6 +545,7 @@ let rec peepholes evaluate expression =
         | E.Mul when null_falling_factorial () <> [] -> null_falling_factorial ()
         | E.And when complements x y -> [ zero ]
         | E.And | E.Or | E.Xor when complementary_masks () <> [] -> complementary_masks ()
+        | E.Or when boolean_factoring () <> [] -> boolean_factoring ()
         | E.Or | E.Xor when complements x y -> [ fill ]
         | E.Plus when complements x y -> [ fill ]
         | E.Plus when negates x y -> [ zero ]
@@ -1234,7 +1270,7 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
     in
     if not !saw_nonlinear && count <= min 6 !c_normalization_max_atoms
        && List.length distinct <= 8
-       && (cost expression >= 300 || obvious_grouped_sum expression) then (
+       && (count <= 4 || cost expression >= 300 || obvious_grouped_sum expression) then (
       let grouped =
         distinct
         |> List.filter (fun value -> not (Z.equal value Z.zero))
@@ -1250,6 +1286,34 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
       match grouped with
       | [] -> ()
       | terms -> offer (build_balanced E.Plus terms));
+    if not !saw_nonlinear && count <= min 4 !c_normalization_max_atoms
+       && Z.equal target.(0) Z.zero && List.length distinct = 4
+    then (
+      let nonzero = List.filter (fun value -> not (Z.equal value Z.zero)) distinct in
+      List.iter
+        (fun first ->
+          List.iter
+            (fun second ->
+              if Z.compare first second < 0 then
+                let combined = normalize (Z.add first second) in
+                if List.mem combined distinct then (
+                  let first_truth = Array.map
+                      (fun value -> Z.equal value first || Z.equal value combined) target
+                  and second_truth = Array.map
+                      (fun value -> Z.equal value second || Z.equal value combined) target in
+                  match
+                    boolean_candidates first_truth
+                    |> List.sort (fun left right -> Int.compare (cost left) (cost right)),
+                    boolean_candidates second_truth
+                    |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+                  with
+                  | first_boolean :: _, second_boolean :: _ ->
+                      offer
+                        (E.binary E.Plus (scale first first_boolean)
+                           (scale second second_boolean))
+                  | _ -> ()))
+            nonzero)
+        nonzero);
     let affine candidate form =
       check_timeout ();
       let values = table form in
@@ -1594,6 +1658,68 @@ let demand_bits_candidate cost expression =
           let candidate = Option.value zero_candidate ~default:narrowed in
           if cost candidate < cost expression then Some candidate else None)
   | _ -> None
+
+let disjoint_component_candidate cost expression =
+  let rec additive sign = function
+    | E.Binary { f = E.Plus; x; y; _ } -> additive sign x @ additive sign y
+    | E.Binary { f = E.Minus; x; y; _ } -> additive sign x @ additive (not sign) y
+    | E.Unary { f = E.Minus; x; _ } -> additive (not sign) x
+    | term -> [ if sign then term else E.unary E.Minus term ]
+  in
+  let terms = additive true expression |> Array.of_list in
+  if Array.length terms < 2 || Array.length terms > 64 then None
+  else
+    let variables = Array.map Sample_evaluator.variables_of_expr terms in
+    let parent = Array.init (Array.length terms) Fun.id in
+    let rec find index =
+      if parent.(index) = index then index
+      else (parent.(index) <- find parent.(index); parent.(index))
+    in
+    let union left right =
+      let left = find left and right = find right in
+      if left <> right then parent.(right) <- left
+    in
+    for i = 0 to Array.length terms - 1 do
+      for j = i + 1 to Array.length terms - 1 do
+        if List.exists (fun variable -> List.mem variable variables.(j)) variables.(i)
+        then union i j
+      done
+    done;
+    let groups = Hashtbl.create 8 in
+    Array.iteri (fun index term ->
+        let root = find index in
+        Hashtbl.replace groups root
+          (term :: Option.value (Hashtbl.find_opt groups root) ~default:[])) terms;
+    if Hashtbl.length groups < 2 then None
+    else
+      let changed = ref false in
+      let sum = function
+        | [] -> zeros (E.sizeof expression)
+        | head :: tail -> List.fold_left (E.binary E.Plus) head tail
+      in
+      let components =
+        Hashtbl.fold
+          (fun _ terms result ->
+            let component = sum terms in
+            let variable_count =
+              List.length (Sample_evaluator.variables_of_expr component)
+            in
+            let simplified =
+              if variable_count <= 4 then
+                match
+                  linear_candidates ~max_atoms:4 cost component
+                  |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+                with
+                | candidate :: _ when cost candidate < cost component ->
+                    changed := true; candidate
+                | _ -> component
+              else component
+            in
+            simplified :: result)
+          groups []
+      in
+      let candidate = sum components in
+      if !changed && cost candidate < cost expression then Some candidate else None
 
 let component_linear_candidates cost expression =
   if cost expression > 256
@@ -2667,7 +2793,10 @@ let factor_group_steps cost expression =
       frequencies []
     |> List.sort (fun (left, left_frequency) (right, right_frequency) ->
            let order = Int.compare right_frequency left_frequency in
-           if order = 0 then E.compare left right else order)
+           if order <> 0 then order
+           else
+             let size_order = Int.compare (cost right) (cost left) in
+             if size_order = 0 then E.compare left right else size_order)
     |> (fun factors ->
          let rec take count = function
            | _ when count = 0 -> []
@@ -2724,13 +2853,17 @@ let factor_group_steps cost expression =
                if order = 0 then E.compare left right else order)
       in
       let simplification =
-        List.find_map
-          (fun candidate ->
-            if not (Rewrite.samples_agree cofactor candidate) then None
-            else
-              Option.map (fun proof -> (candidate, proof))
-                (minterm_ring_proof cofactor candidate))
-          candidates
+        match
+          List.find_map
+            (fun candidate ->
+              if not (Rewrite.samples_agree cofactor candidate) then None
+              else
+                Option.map (fun proof -> (candidate, proof))
+                  (minterm_ring_proof cofactor candidate))
+            candidates
+        with
+        | Some _ as result -> result
+        | None -> Some (cofactor, ([], []))
       in
       Option.bind simplification (fun (simplified, (equalities, cofactor_ring)) ->
           let factored = E.binary E.Mul factor cofactor in
@@ -3278,6 +3411,14 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
           ring_equalities; poly_equalities = []; linear_mba_equalities;
           semilinear_mba_equalities = []; allow_equal_cost = false } :: !candidates)
     (correlated_null_candidate cost expression);
+  Option.iter
+    (fun candidate ->
+      candidates :=
+        { expr = candidate; pass = "disjoint-components"; equalities = [];
+          ring_equalities = []; poly_equalities = [];
+          linear_mba_equalities = [ expression, candidate ];
+          semilinear_mba_equalities = []; allow_equal_cost = false } :: !candidates)
+    (disjoint_component_candidate cost expression);
   Option.iter
     (fun (candidate, equalities, ring_equalities) ->
       candidates :=

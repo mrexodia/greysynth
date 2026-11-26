@@ -837,3 +837,43 @@ timeouts among established rows. The only Loki/core failure is the known
 malformed `line_0001001` input. Regression smoke remains 62/62 established;
 its five-second quality remains above the stored isolated baseline, as already
 reported in Rounds 23--25.
+
+## Round-27 structured reconstruction, factor grouping and binary-lift polish
+
+Round 27 removes the previous `cost >= 300` barrier for compact grouped
+signature recovery through four active atoms and adds explicit overlapping
+additive-split reconstruction. A new additive union-find pass partitions
+independent variable components, simplifies components of at most four atoms,
+and certifies the rebuilt whole expression with one `linear_mba_mod2w` edge.
+This raises the remaining Neureduce exact count from 3 to 17 without adding a
+new proof rule.
+
+Boolean cleanup now recognizes XOR sum-of-products and common-AND distributive
+factoring. GAMBA factor grouping prefers the largest factor when frequencies
+tie and may retain a pure factorization even when the exposed cofactor is
+already minimal; the factorization is certified by `ring_mod2w`. This is the
+main reason all seven ObfuscatorX weak rows improve and their aggregate quality
+reaches 1.0016x.
+
+QSynthesis cast rules now truncate widened `+`, `-`, `*`, `&`, `|`, and `^`
+operations directly to their narrow operands. Existing nested extension,
+constant concat, complementary-mask and branchless selector rules remain
+proof-gated; the Round-27 gate checks widened multiplication and explicit ITE
+lifting. Structured Cases 3/5/6/7/8, negated forms, factor grouping, casts and
+ITE candidates all independently replay in `test/round27_test.ml`.
+
+Curated results:
+
+| Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| Neureduce weak | 53/53 | 17 | 3.5649x -> 1.9811x | 34 / 13 / 6 |
+| MBA-Flatten weak | 96/96 | 11 | 2.7087x -> 1.3901x | 95 / 1 / 0 |
+| ObfuscatorX | 7/7 | 2 | 1.3104x -> 1.0016x | 7 / 0 / 0 |
+| SiMBA e1 4-var weak | 12/12 | 12 | 113.1366x -> 1.0000x | 12 / 0 / 0 |
+| Core hard non-GB | 405/406 | 189 | 87.4070x -> 8.9548x | 340 / 37 / 17 |
+| Regression smoke | 62/62 | 46 | 0.7846x -> 1.6002x | 0 / 42 / 20 |
+
+There are zero refutations, unknown proof verdicts, or timeouts among established
+rows; the sole core failure is the known malformed Loki input. Regression smoke
+remains fully established, while its five-second quality remains sensitive to
+the additional deterministic phase ordering.

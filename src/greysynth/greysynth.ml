@@ -220,6 +220,14 @@ let run_preprocessing gt input =
              !best candidate -> best := candidate
     | _ -> ()
   in
+  let run_root_disjoint_components () =
+    match Normalization.disjoint_component_candidate size_of_expr !best with
+    | Some candidate
+      when Rewrite.accepts_compositional ~pass:"root-disjoint-components"
+             ~equalities:[] ~linear_mba_equalities:[ !best, candidate ]
+             !best candidate -> best := candidate
+    | _ -> ()
+  in
   let run_root_linear_group () =
     let root_variable_count =
       List.length (Sample_evaluator.variables_of_expr !best)
@@ -284,6 +292,7 @@ let run_preprocessing gt input =
   run_root_polysim_poly ();
   if !root_decidable_fast then !best else (
   run_root_minterm_poly ();
+  run_root_disjoint_components ();
   if size_of_expr !best <= 10_000
      || size_of_expr !best < size_of_expr input / 4
   then run_root_linear_group ();
@@ -306,6 +315,7 @@ let run_preprocessing gt input =
   run_root_semilinear ();
   run_root_polysim_poly ();
   run_root_minterm_poly ();
+  run_root_disjoint_components ();
   (match
      if size_of_expr !best >= 200
      then Normalization.reduce_modular_polynomial size_of_expr !best
