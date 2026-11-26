@@ -794,3 +794,46 @@ The sole non-GB core error is the pre-existing malformed Loki input. Regression
 smoke remains 62/62 established; as in Rounds 23--24, its five-second quality
 comparison remains phase-sensitive and does not meet the stored isolated
 baseline on 19 rows.
+
+## Round-26 analytical SMIR and generalized local synthesis
+
+Round 26 adds the pure-OCaml `Smir_interp` module. It analytically lifts exact
+core expressions with constant, additive, XOR, multiplicative, AND/OR-mask,
+affine, quadratic, rotate-right, logical shifts and arithmetic-right-shift
+rules. Candidate generation is untrusted: restored expressions still require
+strict size reduction, holdout samples, `Rewrite.accepts`, and independently
+replayable proof edges.
+
+For the Xyntia backend, CHS now tries a deterministic cache-free enumerator
+before invoking random search. It enumerates operator-stratified core trees
+through size five, prunes symmetric/identity forms, and is bounded by 1,500
+cores and 25 ms. Mixed-width inputs are excluded from binary cores, preserving
+typed-DAG safety. Existing mock, CVC5 and portfolio backend contracts are not
+silently bypassed.
+
+`GeneralizeRule` replaces up to four shared maximal complex subexpressions with
+fresh rule variables and admits the generalized template only after a fresh
+0.2-second universal SMT proof. The unit gate checks both a sound generalized
+MBA identity and a concrete identity whose abstraction is unsound. CHS also
+tries at most twelve shared-variable pairs in AC chains of length 3--10; local
+normalization and analytical candidates remain proof-gated, followed by a
+whole-chain proof before replacement.
+
+All analytical rules, exact enumeration, generalized-rule rejection, AC
+pairwise cancellation, and prior corpus-backed tests pass. Curated results:
+
+| Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| QSynth EA weak | 60/60 | 16 | 11.0762x -> 2.3561x | 50 / 8 / 2 |
+| Loki weak | 143/144 | 117 | 431.9448x -> 1.8219x | 143 / 0 / 0 |
+| FloKI weak | 19/19 | 13 | 55.3892x -> 2.6252x | 15 / 4 / 0 |
+| Tigress L5 weak | 23/23 | 0 | 437.4347x -> 226.8139x | 17 / 4 / 2 |
+| Core hard non-GB | 405/406 | 187 | 87.4070x -> 7.9237x | 336 / 42 / 16 |
+| Regression smoke | 62/62 | 47 | 0.7846x -> 1.4859x | 0 / 43 / 19 |
+
+At least 104 successful core-hard CHS attempts returned within 30 ms in the
+measured run. There are zero refutations, unknown proof verdicts, or process
+timeouts among established rows. The only Loki/core failure is the known
+malformed `line_0001001` input. Regression smoke remains 62/62 established;
+its five-second quality remains above the stored isolated baseline, as already
+reported in Rounds 23--25.

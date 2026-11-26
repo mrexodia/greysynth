@@ -253,6 +253,75 @@ let instantiate_rule inverse expression =
   in
   visit expression
 
+let generalize_rule lhs rhs =
+  let left_nodes = Sexpr.BvTbl.create 32 and right_nodes = Sexpr.BvTbl.create 32 in
+  let rec collect table node =
+    if not (Sexpr.BvTbl.mem table node) then (
+      Sexpr.BvTbl.add table node ();
+      match node with
+      | Unary r -> collect table r.x
+      | Binary r -> collect table r.x; collect table r.y
+      | Ite r -> collect table r.c; collect table r.t; collect table r.e
+      | _ -> ())
+  in
+  collect left_nodes lhs;
+  collect right_nodes rhs;
+  let common =
+    Sexpr.BvTbl.fold
+      (fun node () result ->
+        if Sexpr.BvTbl.mem right_nodes node && size_of_expr node >= 2
+           && not (Sexpr.Expr.is_equal node lhs) && not (Sexpr.Expr.is_equal node rhs)
+        then node :: result else result)
+      left_nodes []
+    |> List.sort (fun left right -> Int.compare (size_of_expr right) (size_of_expr left))
+  in
+  let selected =
+    let rec take count result = function
+      | _ when count = 0 -> List.rev result
+      | [] -> List.rev result
+      | node :: rest ->
+          let nested = List.exists
+              (fun parent ->
+                let rec contains current =
+                  Sexpr.Expr.is_equal current node
+                  || match current with
+                     | Unary r -> contains r.x
+                     | Binary r -> contains r.x || contains r.y
+                     | Ite r -> contains r.c || contains r.t || contains r.e
+                     | _ -> false
+                in contains parent)
+              result
+          in
+          if nested then take count result rest
+          else take (count - 1) (node :: result) rest
+    in take 4 [] common
+  in
+  if selected = [] then None
+  else
+    let replacements = Sexpr.BvTbl.create (List.length selected) in
+    List.iteri
+      (fun index node ->
+        let name = Printf.sprintf "$greysynth.general.%d" index in
+        Sexpr.BvTbl.add replacements node (var name (sizeof node) name))
+      selected;
+    let rec replace node =
+      match Sexpr.BvTbl.find_opt replacements node with
+      | Some variable -> variable
+      | None ->
+          match node with
+          | Unary r -> unary r.f (replace r.x)
+          | Binary r -> binary r.f (replace r.x) (replace r.y)
+          | Ite r -> ite (replace r.c) (replace r.t) (replace r.e)
+          | _ -> node
+    in
+    let generalized_lhs = replace lhs and generalized_rhs = replace rhs in
+    match Rewrite_proof.prove_equality ~timeout:0.2 generalized_lhs generalized_rhs with
+    | Yes, _ ->
+        let key, result, _ = canonical_rule_pair generalized_lhs (Some generalized_rhs) in
+        Sexpr.BvTbl.replace universal_rules key (Option.get result);
+        Some (generalized_lhs, generalized_rhs)
+    | _ -> None
+
 let truncate (expr : Sexpr.Expr.t) (depth : int) =
   let greek_counter = new greek_oracle () in
   greek_counter#init ();
@@ -662,9 +731,16 @@ let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
   | None ->
   let problem = make_problem e new_leafs synthesis_timeout synthesis_repeat in
   let portfolio_mode = !c_synthesizer_portfolio_backends <> [] in
+  let smir_started = Unix.gettimeofday () in
+  let smir_result =
+    if !c_synthesizer_name = "xyntia" then Smir_interp.synthesize_exact problem
+    else None
+  in
   let backend_result =
-    if not portfolio_mode then run_backend problem
-    else
+    match smir_result with
+    | Some result -> Returned result, Unix.gettimeofday () -. smir_started
+    | None when not portfolio_mode -> run_backend problem
+    | None ->
       let rec attempt total = function
         | [] -> No_result, total
         | (name, backend) :: remaining ->
@@ -719,6 +795,7 @@ let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
         if !c_learn_synthesis_rules && generic_verdict = Yes then (
           let key, result, _ = canonical_rule_pair e (Some synth_expr) in
           Sexpr.BvTbl.replace universal_rules key (Option.get result);
+          ignore (generalize_rule original candidate);
           save_learned_rules !c_learned_rules_file);
         let synth_size = Greysynth_utils.Utils.size_of_expr candidate in
         if !c_current_mode_is_global then
@@ -737,6 +814,66 @@ let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
             synthesize ~retries:(retries - 1) ~original e new_leafs
               synthesis_timeout synthesis_repeat
           else None
+
+let ac_pairwise_candidate node =
+  let operation =
+    match node with
+    | Binary { f = (Plus | Mul | And | Or | Xor as operation); _ } -> Some operation
+    | _ -> None
+  in
+  Option.bind operation (fun operation ->
+      let rec flatten = function
+        | Binary { f; x; y; _ } when f = operation -> flatten x @ flatten y
+        | term -> [ term ]
+      in
+      let terms = flatten node in
+      let count = List.length terms in
+      if count < 3 || count > 10 then None
+      else
+        let terms = Array.of_list terms and attempts = ref 0 and result = ref None in
+        let shares_variables left right =
+          let left = Sample_evaluator.variables_of_expr left in
+          List.exists (fun variable -> List.mem variable left)
+            (Sample_evaluator.variables_of_expr right)
+        in
+        let rebuild i j replacement =
+          let remaining = ref [ replacement ] in
+          Array.iteri
+            (fun index term -> if index <> i && index <> j then remaining := term :: !remaining)
+            terms;
+          match List.rev !remaining with
+          | head :: tail -> List.fold_left (binary operation) head tail
+          | [] -> assert false
+        in
+        for i = 0 to count - 1 do
+          for j = i + 1 to count - 1 do
+            if !result = None && !attempts < 12 && shares_variables terms.(i) terms.(j) then (
+              incr attempts;
+              let pair = binary operation terms.(i) terms.(j) in
+              let proposals =
+                Normalization.local_candidates ~cost:size_of_expr ~constants:!evaluator
+                  ~heavy_additive:false ~ac:false pair
+                |> List.sort (fun left right ->
+                       Int.compare (size_of_expr left.Normalization.expr)
+                         (size_of_expr right.Normalization.expr))
+              in
+              match proposals with
+              | proposal :: _
+                when Rewrite.accepts_compositional ~pass:"CHS AC-pair-local"
+                       ~equalities:proposal.equalities
+                       ~ring_equalities:proposal.ring_equalities
+                       ~poly_equalities:proposal.poly_equalities
+                       ~linear_mba_equalities:proposal.linear_mba_equalities
+                       ~semilinear_mba_equalities:proposal.semilinear_mba_equalities
+                       pair proposal.expr ->
+                  let candidate = rebuild i j proposal.expr in
+                  if size_of_expr candidate < size_of_expr node
+                     && Rewrite.accepts ~pass:"CHS AC-pair" node candidate
+                  then result := Some candidate
+              | _ -> ())
+          done
+        done;
+        !result)
 
 let simplify_with_horizon (horizon : int) synthesis_timeout synthesis_repeat
     (expr : Sexpr.Expr.t) =
@@ -834,7 +971,7 @@ let simplify_with_horizon (horizon : int) synthesis_timeout synthesis_repeat
               | None -> (1, [ horizon ], [ time ]));
 
           candidate
-      | None -> node
+      | None -> Option.value (ac_pairwise_candidate node) ~default:node
     in
     ret
   in
