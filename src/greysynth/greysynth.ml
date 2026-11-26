@@ -220,6 +220,14 @@ let run_preprocessing gt input =
              !best candidate -> best := candidate
     | _ -> ()
   in
+  let run_root_partial_linear_sum () =
+    match Normalization.partial_linear_sum_candidate size_of_expr !best with
+    | Some (candidate, ring_equalities, linear_mba_equalities)
+      when Rewrite.accepts_compositional ~pass:"root-partial-linear-sum"
+             ~equalities:[] ~ring_equalities ~linear_mba_equalities
+             !best candidate -> best := candidate
+    | _ -> ()
+  in
   let run_root_disjoint_components () =
     match Normalization.disjoint_component_candidate size_of_expr !best with
     | Some candidate
@@ -232,8 +240,7 @@ let run_preprocessing gt input =
     let root_variable_count =
       List.length (Sample_evaluator.variables_of_expr !best)
     in
-    if size_of_expr !best >= 20
-       && (root_variable_count >= 3 || size_of_expr !best >= 300)
+    if size_of_expr !best >= 15
        && root_variable_count <= 8
        && Normalization.linear_mba_compatible !best
     then
@@ -342,11 +349,20 @@ let run_preprocessing gt input =
     | _ -> ()
   in
   if !c_oes && size_of_expr !best > 100_000
-     && List.length (Sample_evaluator.variables_of_expr !best) <= 2
+     && List.length (Sample_evaluator.variables_of_expr !best) <> 3
      && dag_size_bounded ~limit:2048 !best <= 2048
      && not !g_has_timedout
-  then best := fst (linear_simplify ~seed:false !best);
+  then (
+    let deadline = Unix.gettimeofday () +. 1.5 in
+    g_branch_deadline := Some deadline;
+    best := fst (linear_simplify ~seed:false !best);
+    g_branch_deadline := None;
+    if !g_has_timedout
+       && (!g_total_timeout <= 0.
+           || Unix.gettimeofday () -. !g_start_time < !g_total_timeout)
+    then g_has_timedout := false);
   run_root_minterm_poly ();
+  run_root_partial_linear_sum ();
   run_root_semilinear ();
   run_root_xor_affine_mask ();
   run_root_polysim_poly ();
@@ -358,17 +374,21 @@ let run_preprocessing gt input =
   run_root_complementary_atoms ();
   run_root_correlated_null ();
   let input_dag_size = dag_size_of_expr !best in
-  if (size_of_expr !best > 256 || input_dag_size > 128) && input_dag_size <= 1024
+  if (size_of_expr !best > 256 || input_dag_size > 128) && input_dag_size <= 2048
   then (
+    let giant = size_of_expr !best > 100_000 in
+    let maximum_rounds = if giant then 8 else 4
+    and local_deadline = Unix.gettimeofday () +. (if giant then 4.5 else 10.) in
     let rounds = ref 0 and improving = ref true in
-    while !rounds < 4 && !improving && not !g_has_timedout do
+    while !rounds < maximum_rounds && !improving && not !g_has_timedout
+          && Unix.gettimeofday () < local_deadline do
       incr rounds;
       let before_size = size_of_expr !best
       and before_dag = dag_size_of_expr !best in
       best :=
         Normalization.dag_bottom_up_simplify ~minimal:(before_size > 32_768) !best;
-      improving :=
-        size_of_expr !best < before_size || dag_size_of_expr !best < before_dag
+      let after_size = size_of_expr !best and after_dag = dag_size_of_expr !best in
+      improving := after_size < before_size || after_dag < before_dag
     done);
   run_root_complementary_atoms ();
   run_root_correlated_null ();
@@ -376,6 +396,7 @@ let run_preprocessing gt input =
   run_root_xor_affine_mask ();
   run_root_polysim_poly ();
   run_root_minterm_poly ();
+  run_root_partial_linear_sum ();
   run_root_disjoint_components ();
   run_root_semantic_probes ();
   if not !g_has_timedout && dag_size_of_expr !best <= 4096 then

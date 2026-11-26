@@ -997,3 +997,48 @@ strict decreases (one giant OSES row remains unchanged), with zero refutations
 or timeouts. The `target_2558` five-second path remains budget-sensitive at
 roughly size 21--23 (versus size 3 with a longer budget), so that flagship does
 not yet meet the requested `<= 7` five-second guard despite replaying cleanly.
+
+## Round-31 survivor-driven lifting, extraction and giant peeling
+
+Round 31 adds constructive low-mask lifting for zero-extended low slices,
+including the nested complemented form, and exposes those candidates to local
+normalization and bottom-up DAG processing. Partial linear-sum extraction now
+expands one small distributive layer, separates nonlinear products from linear
+MBA terms, simplifies each partition independently, and composes
+`ring_mod2w`/`linear_mba_mod2w` proof edges before factor grouping. Pure
+factorization remains available when the cofactor is already minimal.
+
+Root linear reconstruction now starts at size 15. Semantic linear probing also
+feeds its canonical Möbius form through syntactic disjoint-component splitting,
+and two-value reconstruction projects away truth-table variables that are
+semantically inactive. A compact semi-linear cleanup recognizes
+`offset + k*x - 2k*(mask&x) == k*(x^mask)`, restoring `msimba/191` to exact GT.
+Giant DAG scheduling permits eight shrinking rounds and a bounded OES seed,
+while preserving the Round-30 flagship phase order.
+
+Focused wins include:
+
+```text
+C-MBA target_1685: 29,511 -> 5 (GT 7)
+C-MBA target_3218: 54,904 -> 5
+msimba row 191:       248 -> 5
+Tigress L7/L8 target_1016: -> 9 in isolated audit
+```
+
+Curated results (all JSONLs retained at `/tmp/r31-*/out.jsonl`):
+
+| Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| PLDI Poly weak | 62/62 | 12 | 2.5679x -> 1.2463x | 62 / 0 / 0 |
+| Neureduce weak | 53/53 | 7 | 3.5649x -> 2.1308x | 37 / 11 / 5 |
+| MBA-Flatten weak | 96/96 | 21 | 2.7087x -> 1.2032x | 95 / 1 / 0 |
+| Core hard non-GB | 405/406 | 213 | 87.4070x -> 5.9553x | 372 / 14 / 8 |
+| Regression smoke | 62/62 | 51 | 0.9197x -> 0.9162x | 3 / 47 / 12 |
+
+There are zero refutations, unknown proof verdicts, or process timeouts among
+established rows; malformed Loki `line_0001001` remains the sole core error.
+Smoke remains at 61/62 strict reductions because giant OSES row 240 is still
+unchanged, but its 0.9162x geomean remains below the required 0.95x ceiling.
+The named PLDI rows 904/941/795 and Neureduce rows 98/632/798 improve only
+partially rather than reaching their requested exact bounds, and giant Tigress
+L8 target 5856 remains unchanged; these survivor gaps are reported explicitly.

@@ -1227,6 +1227,84 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
     let distinct =
       Array.to_list target |> List.sort_uniq Z.compare
     in
+    let active =
+      List.init count Fun.id
+      |> List.filter (fun bit ->
+             let changed = ref false in
+             for assignment = 0 to Array.length target - 1 do
+               if assignment land (1 lsl bit) = 0
+                  && not (Z.equal target.(assignment)
+                            target.(assignment lor (1 lsl bit)))
+               then changed := true
+             done;
+             !changed)
+    in
+    if List.length active < count && List.length active <= 4
+       && List.length distinct = 2
+    then (
+      let active = Array.of_list active and active_count = List.length active in
+      let assignments = 1 lsl active_count in
+      let original_assignment assignment =
+        let result = ref 0 in
+        Array.iteri (fun projected original ->
+            if assignment land (1 lsl projected) <> 0 then
+              result := !result lor (1 lsl original)) active;
+        !result
+      in
+      let reduced = Array.init assignments (fun assignment ->
+          target.(original_assignment assignment)) in
+      let low = List.hd distinct and high = List.hd (List.tl distinct) in
+      let truth = Array.map (Z.equal high) reduced in
+      let literal assignment projected =
+        let atom = atoms.(active.(projected)) in
+        if assignment land (1 lsl projected) = 0 then E.unary E.Not atom else atom
+      in
+      let minterms =
+        List.init assignments Fun.id
+        |> List.filter (Array.get truth)
+        |> List.map (fun assignment ->
+               List.init active_count (literal assignment)
+               |> build_balanced E.And)
+      and clauses =
+        List.init assignments Fun.id
+        |> List.filter (fun assignment -> not truth.(assignment))
+        |> List.map (fun assignment ->
+               List.init active_count (fun projected ->
+                   let atom = atoms.(active.(projected)) in
+                   if assignment land (1 lsl projected) = 0 then atom
+                   else E.unary E.Not atom)
+               |> build_balanced E.Or)
+      in
+      let coefficients = Array.copy truth in
+      for bit = 0 to active_count - 1 do
+        for subset = 0 to assignments - 1 do
+          if subset land (1 lsl bit) <> 0 then
+            coefficients.(subset) <-
+              coefficients.(subset) <> coefficients.(subset lxor (1 lsl bit))
+        done
+      done;
+      let anf =
+        List.init assignments Fun.id
+        |> List.filter (Array.get coefficients)
+        |> List.map (fun subset ->
+               if subset = 0 then constant width mask
+               else
+                 Array.to_list active
+                 |> List.mapi (fun projected original -> projected, atoms.(original))
+                 |> List.filter_map (fun (projected, atom) ->
+                        if subset land (1 lsl projected) = 0 then None else Some atom)
+                 |> build_balanced E.And)
+        |> build_balanced E.Xor
+      in
+      let booleans =
+        [ (match minterms with [] -> zeros width | terms -> build_balanced E.Or terms);
+          (match clauses with [] -> constant width mask | terms -> build_balanced E.And terms);
+          anf ]
+      in
+      List.iter (fun boolean ->
+          let weighted = scale (normalize (Z.sub high low)) boolean in
+          offer (if Z.equal low Z.zero then weighted
+                 else E.binary E.Plus (constant width low) weighted)) booleans);
     if semantic_bitwise && count <= min 6 !c_normalization_max_atoms then (
       let zero = Z.zero and one = Z.one
       and minus_one = mask and minus_two = normalize (Z.of_int (-2)) in
@@ -1771,6 +1849,32 @@ let xor_affine_mask_candidate cost expression =
       in
       if cost candidate < cost expression then Some candidate else None
   | _ -> None
+
+let mask_lift_candidate cost expression =
+  let bridge base bits =
+    let width = E.sizeof base in
+    E.binary E.And base (constant width (Z.pred (Z.shift_left Z.one bits)))
+  in
+  let candidate =
+    match expression with
+    | E.Unary { f = E.Uext amount;
+                x = E.Unary { f = E.Restrict { lo = 0; hi };
+                      x = E.Unary { f = E.Not;
+                            x = E.Unary { f = E.Uext inner_amount;
+                                  x = E.Unary {
+                                    f = E.Restrict { lo = 0; hi = inner_hi };
+                                    x = base; _ }; _ }; _ }; _ }; _ }
+      when hi = inner_hi && amount = inner_amount
+           && hi + 1 + amount = E.sizeof base && amount > 0 ->
+        Some (bridge (E.unary E.Not base) (hi + 1))
+    | E.Unary { f = E.Uext amount;
+                x = E.Unary { f = E.Restrict { lo = 0; hi }; x = base; _ }; _ }
+      when hi + 1 + amount = E.sizeof base && amount > 0 ->
+        Some (bridge base (hi + 1))
+    | _ -> None
+  in
+  Option.bind candidate (fun candidate ->
+      if cost candidate < cost expression then Some candidate else None)
 
 let known_bits_candidate cost expression =
   let candidate =
@@ -3108,6 +3212,76 @@ let factor_group_candidate cost expression =
   in
   loop 6 expression [] []
 
+let partial_linear_sum_candidate cost expression =
+  if Greysynth_utils.Utils.dag_size_bounded ~limit:1024 expression > 1024 then None
+  else
+    let rec additive sign = function
+      | E.Binary { f = E.Plus; x; y; _ } -> additive sign x @ additive sign y
+      | E.Binary { f = E.Minus; x; y; _ } -> additive sign x @ additive (not sign) y
+      | E.Unary { f = E.Minus; x; _ } -> additive (not sign) x
+      | E.Binary { f = E.Mul;
+                   x = E.Binary { f = (E.Plus | E.Minus as op); x; y; _ };
+                   y = factor; _ }
+      | E.Binary { f = E.Mul; x = factor;
+                   y = E.Binary { f = (E.Plus | E.Minus as op); x; y; _ }; _ } ->
+          let left = E.binary E.Mul factor x and right = E.binary E.Mul factor y in
+          if op = E.Plus then additive sign left @ additive sign right
+          else additive sign left @ additive (not sign) right
+      | term -> [ if sign then term else E.unary E.Minus term ]
+    in
+    let rec nonlinear = function
+      | E.Binary { f = E.Mul; x; y; _ }
+        when Option.is_none (constant_value x) && Option.is_none (constant_value y) -> true
+      | E.Unary { x; _ } -> nonlinear x
+      | E.Binary { x; y; _ } -> nonlinear x || nonlinear y
+      | E.Ite { c; t; e; _ } -> nonlinear c || nonlinear t || nonlinear e
+      | _ -> false
+    in
+    let terms = additive true expression in
+    if List.length terms < 3 || List.length terms > 64 then None
+    else
+      let nonlinear_terms, linear_terms =
+        List.partition nonlinear terms
+      in
+      if nonlinear_terms = [] || linear_terms = [] then None
+      else
+        let sum = function
+          | [] -> zeros (E.sizeof expression)
+          | head :: tail -> List.fold_left (E.binary E.Plus) head tail
+        in
+        let nonlinear_sum = sum nonlinear_terms and linear_sum = sum linear_terms in
+        let linear_ring = ring_polynomial_candidate cost linear_sum in
+        let simplified_linear, linear_used_ring =
+          match linear_ring with
+          | Some candidate when cost candidate < cost linear_sum -> candidate, true
+          | _ ->
+              (match
+                 linear_candidates ~max_atoms:6 cost linear_sum
+                 |> List.filter (fun candidate -> Rewrite.samples_agree linear_sum candidate)
+                 |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+               with
+              | candidate :: _ when cost candidate < cost linear_sum -> candidate, false
+              | _ -> linear_sum, false)
+        in
+        let simplified_nonlinear =
+          Option.value (ring_polynomial_candidate cost nonlinear_sum)
+            ~default:nonlinear_sum
+        in
+        let partitioned = E.binary E.Plus nonlinear_sum linear_sum in
+        let candidate = E.binary E.Plus simplified_nonlinear simplified_linear in
+        if cost candidate >= cost expression then None
+        else
+          let ring_equalities = ref [ expression, partitioned ] in
+          if not (E.is_equal simplified_nonlinear nonlinear_sum) then
+            ring_equalities := (nonlinear_sum, simplified_nonlinear) :: !ring_equalities;
+          if linear_used_ring then
+            ring_equalities := (linear_sum, simplified_linear) :: !ring_equalities;
+          let linear_equalities =
+            if E.is_equal simplified_linear linear_sum || linear_used_ring then []
+            else [ linear_sum, simplified_linear ]
+          in
+          Some (candidate, List.rev !ring_equalities, linear_equalities)
+
 let rec product_partition_candidate expression =
   let same = E.is_equal in
   let commutative_operator = function
@@ -3514,6 +3688,9 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
   List.iter (fun candidate -> candidates := direct "peephole" candidate :: !candidates)
     (peepholes constants.eval expression);
   Option.iter
+    (fun candidate -> candidates := direct "mask-lift" candidate :: !candidates)
+    (mask_lift_candidate cost expression);
+  Option.iter
     (fun candidate -> candidates := direct "known-bits" candidate :: !candidates)
     (known_bits_candidate cost expression);
   Option.iter
@@ -3576,6 +3753,13 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
           ring_equalities; poly_equalities = []; linear_mba_equalities;
           semilinear_mba_equalities = []; allow_equal_cost = false } :: !candidates)
     (correlated_null_candidate cost expression);
+  Option.iter
+    (fun (candidate, ring_equalities, linear_mba_equalities) ->
+      candidates :=
+        { expr = candidate; pass = "partial-linear-sum"; equalities = [];
+          ring_equalities; poly_equalities = []; linear_mba_equalities;
+          semilinear_mba_equalities = []; allow_equal_cost = false } :: !candidates)
+    (partial_linear_sum_candidate cost expression);
   Option.iter
     (fun candidate ->
       candidates :=
@@ -4129,7 +4313,9 @@ let probe_semantic_linear_mba cost expression =
             match !terms with [] -> zeros width | terms -> build_balanced E.Plus terms
           in
           let candidate =
-            raw :: linear_candidates ~max_atoms:4 cost raw
+            raw
+            :: (linear_candidates ~max_atoms:4 cost raw
+                @ Option.to_list (disjoint_component_candidate cost raw))
             |> List.filter (fun candidate -> cost candidate < cost expression)
             |> List.sort (fun left right -> Int.compare (cost left) (cost right))
             |> List.find_opt (fun candidate -> Rewrite.samples_agree expression candidate)
@@ -4272,6 +4458,10 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
           | _ -> node
         in
         let result = ref rebuilt in
+        (match mask_lift_candidate cost !result with
+        | Some candidate when Rewrite.accepts ~pass:"dag-mask-lift" !result candidate ->
+            result := candidate
+        | _ -> ());
         (match nonlinear_poly_candidate cost !result with
         | Some (candidate, linear_mba_equalities, ring_equalities,
                 final_linear_equalities)
