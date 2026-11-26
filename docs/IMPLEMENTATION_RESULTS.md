@@ -755,3 +755,42 @@ malformed Loki row plus six pre-existing 30-second OMVLL process timeouts.
 Regression smoke remains 62/62 established and strictly reduced with zero
 refutations/errors, but the five-second contention-sensitive quality gate still
 does not match the stored isolated baselines; 17 rows finish larger.
+
+## Round-25 semi-linear constants, pullout and demand bits
+
+Round 25 adds the independently replayed `semilinear_mba_mod2w` rule and its
+`semilinear_mba_proofs` report metric. Replay evaluates the exact single-bit
+basis through width 128 with at most six opaque atoms, 128 disjoint constant
+mask groups, 16,384 visited DAG nodes and two million operations. Arbitrary
+constants participate only in `~`, `&`, `|` and `^`; arithmetic and every shift
+beneath a bitwise operator remain strict opaque atoms. Positive split-mask,
+mask-union and top-bit modular-don't-care identities pass, while non-uniform
+mask substitution, the one-bit-below threshold, shift-under-bitwise and
+arithmetic-under-bitwise traps are rejected by both the kernel and Bitwuzla.
+
+The producer adds a bounded semi-linear signature reconstruction and structural
+mask vocabulary, one-edge semi-linear certification, power-of-two pullout, and
+backward low-mask demand narrowing. Regression coverage includes Eyrolles's
+constant injection and `254 & ~(2*x)` pullout, `(x*(x-1)) & 1 == 0`, high-constant
+low-byte narrowing, mask partition/union, and the real OMVLL `target_2558`
+certificate (`647 -> 107`, GT size 7). A rejected decidable root proposal may
+still serve as a smaller proof-bridge candidate for the existing fail-closed SMT
+boundary; unknown or timeout is never accepted.
+
+Seven giant OMVLL source files were kept out of the parallel gate as requested:
+`3716`, `773`, and `802` are about 1.1 GB each; `800`, `4687`, `4678`, and `533`
+are 85--139 MB. Results on the non-GB slice:
+
+| Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse | Semi-linear edges |
+|---|---:|---:|---:|---:|---:|
+| OMVLL non-GB | 92/92 | 11 | 481.5234x -> 25.8668x | 79 / 9 / 1 | 1 |
+| ObfuscatorX | 7/7 | 0 | 1.3104x -> 1.3040x | 2 / 5 / 0 | 0 |
+| OSES hard | 4/4 | 1 | 10.8662x -> 5.2864x | 1 / 2 / 1 | 0 |
+| Core hard non-GB | 405/406 | 189 | 87.4070x -> 9.0491x | 335 / 44 / 15 | 85 |
+| Regression smoke | 62/62 | 46 | 0.7846x -> 1.5027x | 0 / 43 / 19 | 28 |
+
+There are zero refutations or unknown proof verdicts among established rows.
+The sole non-GB core error is the pre-existing malformed Loki input. Regression
+smoke remains 62/62 established; as in Rounds 23--24, its five-second quality
+comparison remains phase-sensitive and does not meet the stored isolated
+baseline on 19 rows.

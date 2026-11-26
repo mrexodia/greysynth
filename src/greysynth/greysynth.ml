@@ -240,6 +240,18 @@ let run_preprocessing gt input =
                !best candidate -> best := candidate
       | _ -> ()
   in
+  let run_root_semilinear () =
+    match Normalization.semilinear_mba_candidate size_of_expr !best with
+    | Some candidate ->
+        let accepted =
+          Rewrite.accepts_compositional ~pass:"root-semilinear-mba"
+            ~equalities:[] ~semilinear_mba_equalities:[ !best, candidate ]
+            !best candidate
+          || Rewrite.accepts ~pass:"root-semilinear-bridge" !best candidate
+        in
+        if accepted then best := candidate
+    | None -> ()
+  in
   let run_root_polysim_poly () =
     match Normalization.polysim_poly_mod2w size_of_expr !best with
     | Some (candidate, linear_mba_equalities, equalities, poly_equalities,
@@ -268,6 +280,7 @@ let run_preprocessing gt input =
              !best candidate -> best := candidate
     | _ -> ()
   in
+  run_root_semilinear ();
   run_root_polysim_poly ();
   if !root_decidable_fast then !best else (
   run_root_minterm_poly ();
@@ -277,7 +290,7 @@ let run_preprocessing gt input =
   run_root_complementary_atoms ();
   run_root_correlated_null ();
   let input_dag_size = dag_size_of_expr !best in
-  if (size_of_expr !best > 768 || input_dag_size > 128) && input_dag_size <= 1024
+  if (size_of_expr !best > 256 || input_dag_size > 128) && input_dag_size <= 1024
   then (
     let rounds = ref 0 and improving = ref true in
     while !rounds < 4 && !improving && not !g_has_timedout do
@@ -290,6 +303,7 @@ let run_preprocessing gt input =
     done);
   run_root_complementary_atoms ();
   run_root_correlated_null ();
+  run_root_semilinear ();
   run_root_polysim_poly ();
   run_root_minterm_poly ();
   (match

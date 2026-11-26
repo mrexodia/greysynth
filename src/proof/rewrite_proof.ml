@@ -19,7 +19,9 @@ type graph = {
   intern : (int * shape, int) Hashtbl.t;
   expressions : (E.t, int) Hashtbl.t;
 }
-type proof_rule = Smt | Ring_mod2w | Poly_mod2w | Linear_mba_mod2w
+type proof_rule =
+  | Smt | Ring_mod2w | Poly_mod2w | Linear_mba_mod2w
+  | Semilinear_mba_mod2w
 type edge = { left : int; right : int; pass : string; rule : proof_rule }
 type builder = {
   graph : graph;
@@ -201,6 +203,9 @@ let record_poly builder ~pass left right =
 let record_linear_mba builder ~pass left right =
   record_with_rule builder ~pass ~rule:Linear_mba_mod2w left right
 
+let record_semilinear_mba builder ~pass left right =
+  record_with_rule builder ~pass ~rule:Semilinear_mba_mod2w left right
+
 let ints xs = `List (List.map (fun x -> `Int x) xs)
 let node_json node =
   let fields = match node.shape with
@@ -227,7 +232,8 @@ let finish builder candidate =
       "rule", `String
         (match edge.rule with
         | Smt -> "smt" | Ring_mod2w -> "ring_mod2w" | Poly_mod2w -> "poly_mod2w"
-        | Linear_mba_mod2w -> "linear_mba_mod2w")
+        | Linear_mba_mod2w -> "linear_mba_mod2w"
+        | Semilinear_mba_mod2w -> "semilinear_mba_mod2w")
     ]) builder.edges);
   ]
 
@@ -382,6 +388,7 @@ let load certificate =
       | `String "ring_mod2w" -> Ring_mod2w
       | `String "poly_mod2w" -> Poly_mod2w
       | `String "linear_mba_mod2w" -> Linear_mba_mod2w
+      | `String "semilinear_mba_mod2w" -> Semilinear_mba_mod2w
       | _ -> fail "unknown equality proof rule"
     in
     { left; right; pass = "untrusted"; rule }) encoded_edges in
@@ -1076,6 +1083,170 @@ let linear_mba_equal g left right =
       then Ring_equal else Ring_not_equal)
     with Ring_limit -> Ring_limit_exceeded
 
+let semilinear_mba_equal g left right =
+  let width = (node g left).width in
+  if width <> (node g right).width then Ring_not_equal
+  else if width > 128 then Ring_limit_exceeded
+  else
+    let max_atoms = 6 and max_groups = 128 and max_visited = 16_384
+    and max_ops = 2_000_000 in
+    let visited = Array.make g.count false and seen_linear = Array.make g.count false
+    and seen_bitwise = Array.make g.count false in
+    let visited_count = ref 0 and operations = ref 0 in
+    let atoms = Hashtbl.create 16 and constants = Hashtbl.create 16 in
+    let mask = Z.pred (Z.shift_left Z.one width) in
+    let normalize value = Z.logand value mask in
+    let tick () =
+      incr operations;
+      if !operations > max_ops then raise Ring_limit
+    in
+    let see seen id =
+      if not visited.(id) then (
+        visited.(id) <- true;
+        incr visited_count;
+        if !visited_count > max_visited then raise Ring_limit);
+      if seen.(id) then false else (seen.(id) <- true; true)
+    in
+    let add_atom id =
+      Hashtbl.replace atoms id ();
+      if Hashtbl.length atoms > max_atoms then raise Ring_limit
+    in
+    let rec collect_bitwise id =
+      if see seen_bitwise id then
+        match (node g id).shape, (node g id).expr with
+        | Value _, E.Cst value -> Hashtbl.replace constants id value
+        | Unary ("bvnot", [], child), _ -> collect_bitwise child
+        | Binary (("bvand" | "bvor" | "bvxor"), x, y), _ ->
+            collect_bitwise x;
+            collect_bitwise y
+        | _ -> add_atom id
+    and collect_linear id =
+      if see seen_linear id then
+        match (node g id).shape, (node g id).expr with
+        | Value _, E.Cst _ -> ()
+        | Unary (("bvneg" | "bvnot"), [], child), _ -> collect_linear child
+        | Binary (("bvadd" | "bvsub"), x, y), _ ->
+            collect_linear x;
+            collect_linear y
+        | Binary ("bvmul", x, y), _ ->
+            (match (node g x).expr, (node g y).expr with
+            | E.Cst _, _ -> collect_linear y
+            | _, E.Cst _ -> collect_linear x
+            | _ -> add_atom id)
+        | Binary ("bvshl", x, y), _ ->
+            (match (node g y).expr with
+            | E.Cst _ -> collect_linear x
+            | _ -> add_atom id)
+        | Binary (("bvand" | "bvor" | "bvxor"), _, _), _ -> collect_bitwise id
+        | _ -> add_atom id
+    in
+    try
+      collect_linear left;
+      collect_linear right;
+      let atom_ids =
+        Hashtbl.fold (fun id () result -> id :: result) atoms []
+        |> List.sort Int.compare |> Array.of_list
+      in
+      let atom_index = Hashtbl.create (Array.length atom_ids) in
+      Array.iteri (fun index id -> Hashtbl.add atom_index id index) atom_ids;
+      let constant_values =
+        Hashtbl.fold
+          (fun _ value result -> Bitvector.value_of value :: result)
+          constants []
+      in
+      let groups = Hashtbl.create width in
+      for bit = 0 to width - 1 do
+        let signature =
+          constant_values
+          |> List.map (fun value -> if Z.testbit value bit then '1' else '0')
+          |> List.to_seq |> String.of_seq
+        in
+        Hashtbl.replace groups signature ()
+      done;
+      if Hashtbl.length groups > max_groups then raise Ring_limit;
+      let atom_values = Array.make (Array.length atom_ids) Z.zero in
+      let linear_memo = Array.make g.count None and bitwise_memo = Array.make g.count None in
+      let rec bitwise id =
+        match bitwise_memo.(id) with
+        | Some value -> value
+        | None ->
+            tick ();
+            let value =
+              if Hashtbl.mem atom_index id then
+                atom_values.(Hashtbl.find atom_index id)
+              else
+                match (node g id).shape, (node g id).expr with
+                | Value _, E.Cst value -> Bitvector.value_of value
+                | Unary ("bvnot", [], child), _ -> Z.logxor mask (bitwise child)
+                | Binary ("bvand", x, y), _ -> Z.logand (bitwise x) (bitwise y)
+                | Binary ("bvor", x, y), _ -> Z.logor (bitwise x) (bitwise y)
+                | Binary ("bvxor", x, y), _ -> Z.logxor (bitwise x) (bitwise y)
+                | _ -> raise Ring_limit
+            in
+            let value = normalize value in
+            bitwise_memo.(id) <- Some value;
+            value
+      and linear id =
+        match linear_memo.(id) with
+        | Some value -> value
+        | None ->
+            tick ();
+            let value =
+              if Hashtbl.mem atom_index id then
+                atom_values.(Hashtbl.find atom_index id)
+              else
+                match (node g id).shape, (node g id).expr with
+                | Value _, E.Cst value -> Bitvector.value_of value
+                | Unary ("bvneg", [], child), _ -> Z.neg (linear child)
+                | Unary ("bvnot", [], child), _ -> Z.sub (Z.neg Z.one) (linear child)
+                | Binary ("bvadd", x, y), _ -> Z.add (linear x) (linear y)
+                | Binary ("bvsub", x, y), _ -> Z.sub (linear x) (linear y)
+                | Binary ("bvmul", x, y), _ ->
+                    (match (node g x).expr, (node g y).expr with
+                    | E.Cst coefficient, _ ->
+                        Z.mul (Bitvector.value_of coefficient) (linear y)
+                    | _, E.Cst coefficient ->
+                        Z.mul (Bitvector.value_of coefficient) (linear x)
+                    | _ -> raise Ring_limit)
+                | Binary ("bvshl", x, y), _ ->
+                    (match (node g y).expr with
+                    | E.Cst amount ->
+                        let amount = Bitvector.value_of amount in
+                        if Z.geq amount (Z.of_int width) then Z.zero
+                        else Z.shift_left (linear x) (Z.to_int amount)
+                    | _ -> raise Ring_limit)
+                | Binary (("bvand" | "bvor" | "bvxor"), _, _), _ -> bitwise id
+                | _ -> raise Ring_limit
+            in
+            let value = normalize value in
+            linear_memo.(id) <- Some value;
+            value
+      in
+      let evaluate id =
+        Array.fill linear_memo 0 g.count None;
+        Array.fill bitwise_memo 0 g.count None;
+        linear id
+      in
+      Array.fill atom_values 0 (Array.length atom_values) Z.zero;
+      let left_zero = evaluate left and right_zero = evaluate right in
+      if not (Z.equal left_zero right_zero) then Ring_not_equal
+      else
+        let equal = ref true and assignments = 1 lsl Array.length atom_ids in
+        for bit = 0 to width - 1 do
+          let value = Z.shift_left Z.one bit in
+          for assignment = 1 to assignments - 1 do
+            if !equal then (
+              Array.iteri
+                (fun index _ ->
+                  atom_values.(index) <-
+                    if assignment land (1 lsl index) = 0 then Z.zero else value)
+                atom_ids;
+              if not (Z.equal (evaluate left) (evaluate right)) then equal := false)
+          done
+        done;
+        if !equal then Ring_equal else Ring_not_equal
+    with Ring_limit -> Ring_limit_exceeded
+
 let is_connected builder candidate =
   let candidate = of_expr builder.graph candidate in
   congruent builder.graph builder.edges builder.original candidate
@@ -1084,7 +1255,7 @@ let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
   let started = Unix.gettimeofday () in
   let checked = ref 0 and proved = ref 0 and unknown = ref 0 and timed_out = ref 0 in
   let abstract = ref 0 and direct = ref 0 and ring = ref 0 and poly = ref 0
-  and linear_mba = ref 0 in
+  and linear_mba = ref 0 and semilinear_mba = ref 0 in
   let ring_limits = ref 0 in
   let nodes = ref 0 and edges_count = ref 0 in
   let result verification reason = `Assoc [
@@ -1097,6 +1268,7 @@ let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
     "abstract_proofs", `Int !abstract; "direct_proofs", `Int !direct;
     "ring_proofs", `Int !ring; "poly_proofs", `Int !poly;
     "linear_mba_proofs", `Int !linear_mba;
+    "semilinear_mba_proofs", `Int !semilinear_mba;
     "ring_limit_equalities", `Int !ring_limits;
     "unknown_equalities", `Int !unknown; "timeout_equalities", `Int !timed_out;
   ] in
@@ -1142,6 +1314,11 @@ let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
               | Ring_equal -> U.Yes, "linear_mba_mod2w"
               | Ring_not_equal -> U.No, "linear_mba_not_equal"
               | Ring_limit_exceeded -> U.Unknown, "linear_mba_limit_exceeded")
+          | Semilinear_mba_mod2w ->
+              (match semilinear_mba_equal g edge.left edge.right with
+              | Ring_equal -> U.Yes, "semilinear_mba_mod2w"
+              | Ring_not_equal -> U.No, "semilinear_mba_not_equal"
+              | Ring_limit_exceeded -> U.Unknown, "semilinear_mba_limit_exceeded")
           | Smt -> attempt timeouts
         in
         match verdict with
@@ -1151,6 +1328,7 @@ let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
             else if method_ = "ring_mod2w" then incr ring
             else if method_ = "poly_mod2w" then incr poly
             else if method_ = "linear_mba_mod2w" then incr linear_mba
+            else if method_ = "semilinear_mba_mod2w" then incr semilinear_mba
             else incr direct;
             established := edge :: !established
         | U.No ->
@@ -1160,13 +1338,15 @@ let verify_impl ?(timeouts = [1.]) ~original ~candidate certificate =
                  (match edge.rule with
                  | Smt -> "smt" | Ring_mod2w -> "ring_mod2w"
                  | Poly_mod2w -> "poly_mod2w"
-                 | Linear_mba_mod2w -> "linear_mba_mod2w")
+                 | Linear_mba_mod2w -> "linear_mba_mod2w"
+                 | Semilinear_mba_mod2w -> "semilinear_mba_mod2w")
                  (U.pp (node g edge.left).expr) (U.pp (node g edge.right).expr))
         | U.Timeout -> incr timed_out
         | U.Unknown | U.Disabled ->
             incr unknown;
             if method_ = "ring_limit_exceeded" || method_ = "poly_limit_exceeded"
                || method_ = "linear_mba_limit_exceeded"
+               || method_ = "semilinear_mba_limit_exceeded"
             then incr ring_limits) obligations;
       if congruent g !established input_id output_id then
         result "proved_compositional" "smt_equalities_and_congruence"

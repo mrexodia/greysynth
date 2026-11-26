@@ -26,6 +26,10 @@ let linear_mba_certificate original candidate =
   let builder = P.create original in
   P.record_linear_mba builder ~pass:"linear-mba-test" original candidate;
   P.finish builder candidate
+let semilinear_mba_certificate original candidate =
+  let builder = P.create original in
+  P.record_semilinear_mba builder ~pass:"semilinear-mba-test" original candidate;
+  P.finish builder candidate
 let update name value = function
   | `Assoc fields -> `Assoc ((name, value) :: List.remove_assoc name fields)
   | _ -> failwith "object expected"
@@ -278,6 +282,41 @@ let () =
   expect "error"
     (P.verify ~original:bad_distribution ~candidate:distributed
        (linear_mba_certificate bad_distribution distributed));
+  let sx = var "semix" 8 and sy = var "semiy" 8 in
+  let split_masks = E.binary E.Plus (E.binary E.And sx (c 8 0x0f))
+      (E.binary E.And sx (c 8 0xf0)) in
+  expect "proved_compositional"
+    (P.verify ~original:split_masks ~candidate:sx
+       (semilinear_mba_certificate split_masks sx));
+  let mask_union = E.binary E.Plus (E.binary E.And sx (c 8 0x55))
+      (E.binary E.Or sx (c 8 0x55)) in
+  let mask_union_expected = E.binary E.Plus sx (c 8 0x55) in
+  let semilinear_report =
+    P.verify ~original:mask_union ~candidate:mask_union_expected
+      (semilinear_mba_certificate mask_union mask_union_expected)
+  in
+  expect "proved_compositional" semilinear_report;
+  require (field "semilinear_mba_proofs" semilinear_report = `Int 1)
+    "semi-linear MBA proof was not reported";
+  let dont_care = E.binary E.Mul (c 8 2) (E.binary E.And sx (c 8 0x80)) in
+  expect "proved_compositional"
+    (P.verify ~original:dont_care ~candidate:(c 8 0)
+       (semilinear_mba_certificate dont_care (c 8 0)));
+  let semi_bad_mask = E.binary E.And sx (c 8 5) in
+  let semi_bad_bit = E.binary E.Mul (c 8 2) (E.binary E.And sx (c 8 0x40)) in
+  let semi_shift_trap = E.binary E.And (E.binary E.Lsl sx (c 8 1)) sy in
+  let semi_shift_wrong = E.binary E.Lsl (E.binary E.And sx sy) (c 8 1) in
+  let semi_arithmetic_trap = E.binary E.And (E.binary E.Plus sx sy) (c 8 5) in
+  let semi_arithmetic_wrong = E.binary E.Plus
+      (E.binary E.And sx (c 8 5)) (E.binary E.And sy (c 8 5)) in
+  List.iter
+    (fun (left, right) ->
+      expect "error"
+        (P.verify ~original:left ~candidate:right
+           (semilinear_mba_certificate left right)))
+    [ semi_bad_mask, sx; semi_bad_bit, c 8 0;
+      semi_shift_trap, semi_shift_wrong;
+      semi_arithmetic_trap, semi_arithmetic_wrong ];
   Printf.printf "proof_test: typed DAG, ring kernel, endpoint binding and incomplete-derivation regressions passed\n";
   if not available then (
     if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then
@@ -290,7 +329,10 @@ let () =
         require (verdict = U.No) "linear MBA negative was not refuted by SMT")
       [ bad_mask, lx; bad_partition, c 8 (-1); bad_distribution, distributed;
         wide_off_by_one, wide_sum; wide_mask_left, wide_sum;
-        wide_arithmetic_left, wide_arithmetic_right ];
+        wide_arithmetic_left, wide_arithmetic_right;
+        semi_bad_mask, sx; semi_bad_bit, c 8 0;
+        semi_shift_trap, semi_shift_wrong;
+        semi_arithmetic_trap, semi_arithmetic_wrong ];
     let negative_verdict, _, _ = U.are_equivalent off_by_one (c 8 0) (Some 2) in
     let negative_verdict16, _, _ = U.are_equivalent off_by_one16 (c 16 0) (Some 2) in
     let high_negative, _, _ = U.are_equivalent high_off_by_one high_x (Some 2) in

@@ -841,6 +841,51 @@ let test_round23_constructive_layers () =
         ("RUMBA exposed null-vector proof failed: " ^ Yojson.Basic.to_string report));
   check "RUMBA correlated null vector" null_vector (c 16 0) 1
 
+let test_round25_semilinear_and_masks () =
+  let check label original expected maximum =
+    reset ();
+    R.start_recording original;
+    let root =
+      match N.semilinear_mba_candidate U.size_of_expr original with
+      | Some candidate
+        when R.accepts_compositional ~pass:"test-semilinear" ~equalities:[]
+               ~semilinear_mba_equalities:[ original, candidate ]
+               original candidate -> candidate
+      | _ -> original
+    in
+    let result = N.run (N.dag_bottom_up_simplify root) in
+    require (U.size_of_expr result <= maximum)
+      (Printf.sprintf "%s: expected <= %d, got %d: %s" label maximum
+         (U.size_of_expr result) (U.pp result));
+    let verdict, _, _ = U.are_equivalent result expected (Some 5) in
+    require (verdict = U.Yes) (label ^ ": wrong result");
+    let certificate = P.finish (Option.get !(R.journal)) result in
+    let report = P.verify ~timeouts:[ 1.; 5. ] ~original ~candidate:result certificate in
+    require
+      (Yojson.Basic.Util.member "verification" report = `String "proved_compositional")
+      (label ^ ": certificate did not replay")
+  in
+  let x = var 8 "semi_x" in
+  check "MSiMBA split masks"
+    (plus (band x (c 8 0x0f)) (band x (c 8 0xf0))) x 1;
+  check "MSiMBA mask union"
+    (plus (band x (c 8 0x55)) (bor x (c 8 0x55)))
+    (plus x (c 8 0x55)) 3;
+  check "Eyrolles constant injection"
+    (plus (plus (c 8 129) x)
+       (mul (c 8 2) (band (c 8 127) (E.unary E.Not x))))
+    (bxor x (c 8 127)) 3;
+  check "Eyrolles power pullout"
+    (band (c 8 254) (E.unary E.Not (mul (c 8 2) x)))
+    (mul (c 8 2) (band (c 8 127) (E.unary E.Not x))) 7;
+  check "demand-bit null polynomial"
+    (band (mul x (minus x (c 8 1))) (c 8 1)) (c 8 0) 1;
+  let x64 = var 64 "demand_x64" in
+  check "demand-bit constant narrowing"
+    (band (plus x64 (E.constant (Bitvector.create (Z.of_string "0x12345600") 64)))
+       (c 64 0xff))
+    (band x64 (c 64 0xff)) 3
+
 let test_nonlinear_is_opaque () =
   reset ();
   let x = var 8 "x" and y = var 8 "y" in
@@ -889,6 +934,7 @@ let () =
     test_egraph_round14_regressions ();
     test_preprocessing_portfolio ();
     test_round23_constructive_layers ();
+    test_round25_semilinear_and_masks ();
     test_nonlinear_is_opaque ();
     print_endline "normalization_test: solver-backed normalization regressions passed")
   else if Sys.getenv_opt "GREYSYNTH_REQUIRE_SOLVER" = Some "1" then

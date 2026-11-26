@@ -116,7 +116,8 @@ let samples_agree original candidate =
   | _ -> false
 
 let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
-    ?(linear_mba_equalities = []) ~pass ~equalities original candidate =
+    ?(linear_mba_equalities = []) ?(semilinear_mba_equalities = [])
+    ~pass ~equalities original candidate =
   let record_equalities () =
     Option.iter
       (fun journal ->
@@ -131,7 +132,11 @@ let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
           poly_equalities;
         List.iter
           (fun (left, right) -> Rewrite_proof.record_linear_mba journal ~pass left right)
-          linear_mba_equalities)
+          linear_mba_equalities;
+        List.iter
+          (fun (left, right) ->
+            Rewrite_proof.record_semilinear_mba journal ~pass left right)
+          semilinear_mba_equalities)
       !journal
   in
   if Sexpr.Expr.sizeof original <> Sexpr.Expr.sizeof candidate then (
@@ -191,6 +196,10 @@ let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
       List.iter
         (fun (left, right) -> Rewrite_proof.record_linear_mba proof ~pass left right)
         linear_mba_equalities;
+      List.iter
+        (fun (left, right) ->
+          Rewrite_proof.record_semilinear_mba proof ~pass left right)
+        semilinear_mba_equalities;
       let certificate = Rewrite_proof.finish proof candidate in
       let report =
         Rewrite_proof.verify ~timeouts:[ float_of_int !c_equiv_timeout ]
