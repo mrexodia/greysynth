@@ -916,3 +916,42 @@ rows. The sole Loki/core failure remains malformed `line_0001001`. The semantic
 passes raise exact-GT coverage substantially, especially on Loki/Loki-tiny and
 core-hard, but the fixed five-second smoke quality remains phase-sensitive and
 regresses on 23 stored isolated baselines.
+
+## Round-29 known bits, bounded arity and low-width recognition
+
+Round 29 adds the DAG-memoized `Known_bits` abstract domain. Sound transfer
+functions cover constants, variables, complement, Boolean operators, disjoint
+addition, multiplication trailing zeroes, constant shifts (including sign
+propagation), extension, restriction and conditional joins. Proof-gated
+consumers collapse exact constants, redundant masks, disjoint AND/addition,
+bounded unsigned comparisons, impossible equalities and dead ITE branches.
+SMIR uses the target sample envelope to prune core expressions whose guaranteed
+zero/one bits are already contradictory.
+
+CHS truncation now backs off deep horizons until the cut has at most four
+semantic stubs. Before synthesis, each multi-stub problem perturbs one stub at
+a time with zero, one, fill and alternating-bit values; invariant stubs are
+replaced by zero and removed from the synthesis problem. This remains heuristic
+only: restored results still require `Rewrite.accepts` against the original
+context.
+
+For one-variable expressions through eight bits, exhaustive input evaluation
+feeds all 256 outputs to the analytical SMIR recognizer. The new unit gate
+cross-checks known-zero/known-one claims with Bitwuzla at 8 and 16 bits and
+covers redundant masks, shift low-zeroes, carry-free addition, comparison/ITE
+pruning, dead stubs, the four-stub cap and exhaustive byte recovery.
+
+Curated results:
+
+| Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse | Known-bit edges |
+|---|---:|---:|---:|---:|---:|
+| Tigress L7 weak | 89/89 | 4 | 3016.6390x -> 766.0362x | 49 / 9 / 31 | 28 |
+| Tigress L8 weak | 143/143 | 16 | 18349.0849x -> 3186.6999x | 72 / 22 / 45 | 79 |
+| QSynth EA weak | 60/60 | 25 | 11.0762x -> 1.5316x | 58 / 0 / 2 | 16 |
+| Core hard non-GB | 405/406 | 196 | 87.4070x -> 8.7677x | 330 / 35 / 29 | 418 |
+| Regression smoke | 62/62 | 44 | 0.7846x -> 2.3720x | 0 / 39 / 23 | 12 |
+
+There are zero refutations, unknown proof verdicts, or timeouts among established
+rows. The sole core failure remains malformed Loki `line_0001001`. Deep Tigress
+quality improves substantially, while the intentionally deferred five-second
+smoke scheduling problem remains visible.

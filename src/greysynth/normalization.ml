@@ -1659,6 +1659,55 @@ let demand_bits_candidate cost expression =
           if cost candidate < cost expression then Some candidate else None)
   | _ -> None
 
+let known_bits_candidate cost expression =
+  let candidate =
+    let known = Known_bits.analyze expression in
+    match Known_bits.is_constant known with
+    | Some value when cost expression > 1 -> Some (constant known.width value)
+    | _ ->
+        match expression with
+        | E.Binary { f = E.And; x = value; y = E.Cst bits; _ }
+        | E.Binary { f = E.And; x = E.Cst bits; y = value; _ } ->
+            let known = Known_bits.analyze value in
+            let removed = Z.logand (Z.pred (Z.shift_left Z.one known.width))
+                (Z.lognot (Bitvector.value_of bits)) in
+            if Z.equal (Z.logand removed known.zeros) removed then Some value else None
+        | E.Binary { f = E.Or; x = value; y = E.Cst bits; _ }
+        | E.Binary { f = E.Or; x = E.Cst bits; y = value; _ } ->
+            let known = Known_bits.analyze value in
+            let bits = Bitvector.value_of bits in
+            if Z.equal (Z.logand bits known.ones) bits then Some value else None
+        | E.Binary { f = E.And; x; y; _ } ->
+            if Known_bits.disjoint (Known_bits.analyze x) (Known_bits.analyze y)
+            then Some (zeros (E.sizeof expression)) else None
+        | E.Binary { f = E.Plus; x; y; _ } ->
+            if Known_bits.disjoint (Known_bits.analyze x) (Known_bits.analyze y)
+            then Some (E.binary E.Or x y) else None
+        | E.Binary { f = E.Ult; x; y = E.Cst bound; _ } ->
+            let known = Known_bits.analyze x in
+            let maximum = Known_bits.possible_ones known
+            and minimum = known.ones and bound = Bitvector.value_of bound in
+            if Z.lt maximum bound then Some (integer (E.sizeof expression) 1)
+            else if Z.geq minimum bound then Some (zeros (E.sizeof expression))
+            else None
+        | E.Binary { f = E.Eq; x; y = E.Cst expected; _ }
+        | E.Binary { f = E.Eq; x = E.Cst expected; y = x; _ } ->
+            let known = Known_bits.analyze x in
+            let expected = Bitvector.value_of expected in
+            if not (Z.equal (Z.logand expected known.zeros) Z.zero)
+               || not (Z.equal
+                         (Z.logand (Z.lognot expected) known.ones) Z.zero)
+            then Some (zeros (E.sizeof expression)) else None
+        | E.Ite { c; t; e; _ } ->
+            (match Known_bits.is_constant (Known_bits.analyze c) with
+            | Some value when Z.equal value Z.zero -> Some e
+            | Some _ -> Some t
+            | None -> None)
+        | _ -> None
+  in
+  Option.bind candidate (fun candidate ->
+      if cost candidate < cost expression then Some candidate else None)
+
 let disjoint_component_candidate cost expression =
   let rec additive sign = function
     | E.Binary { f = E.Plus; x; y; _ } -> additive sign x @ additive sign y
@@ -3352,6 +3401,9 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
   List.iter (fun candidate -> candidates := direct "peephole" candidate :: !candidates)
     (peepholes constants.eval expression);
   Option.iter
+    (fun candidate -> candidates := direct "known-bits" candidate :: !candidates)
+    (known_bits_candidate cost expression);
+  Option.iter
     (fun candidate ->
       candidates :=
         { expr = candidate; pass = "semilinear-mba"; equalities = [];
@@ -3982,6 +4034,22 @@ let solve_twice width value =
     let base = Z.erem (Z.shift_right value 1) half in
     [ base; Z.add base half ]
 
+let probe_low_width_exact cost expression =
+  let width = E.sizeof expression in
+  if width > 8 || cost expression < 5 then None
+  else
+    Option.bind (probe_variables expression 1) (fun (_, variables) ->
+        let variable = variables.(0) and count = 1 lsl width in
+        try
+          let values = Array.init count Z.of_int in
+          let target = Array.map
+              (fun value -> probe_evaluate expression variables [| value |]) values in
+          Smir_interp.analytical_candidates ~width ~target ~expression:variable ~values
+          |> List.filter (fun candidate -> cost candidate < cost expression)
+          |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+          |> List.find_opt (fun candidate -> Rewrite.samples_agree expression candidate)
+        with _ -> None)
+
 let probe_semantic_poly cost expression =
   if cost expression < 5 || E.sizeof expression > 64
      || Greysynth_utils.Utils.dag_size_bounded ~limit:2048 expression > 2048
@@ -4090,9 +4158,14 @@ let dag_bottom_up_simplify expression =
           | _ -> node
         in
         let result = ref rebuilt in
+        (match known_bits_candidate cost !result with
+        | Some candidate when Rewrite.accepts ~pass:"dag-known-bits" !result candidate ->
+            result := candidate
+        | _ -> ());
         if cost !result >= 5 && cost !result <= 64 then (
           let probes =
-            [ probe_semantic_linear_mba cost !result;
+            [ probe_low_width_exact cost !result;
+              probe_semantic_linear_mba cost !result;
               probe_semantic_poly cost !result ]
             |> List.filter_map Fun.id
             |> List.sort (fun left right -> Int.compare (cost left) (cost right))

@@ -242,11 +242,21 @@ let synthesize_exact (problem : Synth_backends.problem) =
       | _ when Unix.gettimeofday () >= deadline -> ()
       | (_, core) :: rest ->
           (if E.sizeof core = problem.output_size then
-             match values_of problem core with
-             | None -> ()
-             | Some values ->
-                 analytical_candidates ~width ~target ~expression:core ~values
-                 |> List.iter consider);
+             let known = Known_bits.analyze core in
+             let observed_ones = Array.fold_left Z.logor Z.zero target
+             and observed_always =
+               Array.fold_left Z.logand (Z.pred (Z.shift_left Z.one width)) target
+             in
+             let contradiction =
+               not (Z.equal (Z.logand known.ones (Z.lognot observed_always)) Z.zero)
+               || not (Z.equal (Z.logand known.zeros observed_ones) Z.zero)
+             in
+             if not contradiction then
+               match values_of problem core with
+               | None -> ()
+               | Some values ->
+                   analytical_candidates ~width ~target ~expression:core ~values
+                   |> List.iter consider);
           loop rest
     in
     loop ordered;

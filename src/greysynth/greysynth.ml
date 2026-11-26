@@ -250,7 +250,8 @@ let run_preprocessing gt input =
   in
   let run_root_semantic_probes () =
     let candidates =
-      [ Normalization.probe_semantic_linear_mba size_of_expr !best;
+      [ Normalization.probe_low_width_exact size_of_expr !best;
+        Normalization.probe_semantic_linear_mba size_of_expr !best;
         Normalization.probe_semantic_poly size_of_expr !best ]
       |> List.filter_map Fun.id
       |> List.sort (fun left right -> Int.compare (size_of_expr left) (size_of_expr right))

@@ -322,7 +322,7 @@ let generalize_rule lhs rhs =
         Some (generalized_lhs, generalized_rhs)
     | _ -> None
 
-let truncate (expr : Sexpr.Expr.t) (depth : int) =
+let rec truncate (expr : Sexpr.Expr.t) (depth : int) =
   let greek_counter = new greek_oracle () in
   greek_counter#init ();
 
@@ -370,7 +370,9 @@ let truncate (expr : Sexpr.Expr.t) (depth : int) =
   let target = if !c_balanced_tree then balance_associative expr else expr in
   let truncated_expression = aux target depth in
 
-  (truncated_expression, new_leafs)
+  if depth >= 3 && Hashtbl.length new_leafs > 4 then
+    truncate expr (depth - 1)
+  else (truncated_expression, new_leafs)
 
 (* ── Main synthesize entry point ──────────────────────────────── *)
 
@@ -685,6 +687,58 @@ let prepare_candidates synth_expr new_leafs =
         (Printexc.to_string exn);
       []
 
+let filter_dead_stubs e new_leafs =
+  if Hashtbl.length new_leafs < 2 then e, new_leafs
+  else
+    let leaves = Hashtbl.fold (fun leaf _ result -> leaf :: result) new_leafs [] in
+    let dead = Sexpr.BvTbl.create 4 in
+    List.iter
+      (fun candidate ->
+        try
+          let outputs = ref [] in
+          List.iter
+            (fun value_kind ->
+              let bindings = Hashtbl.create (List.length leaves) in
+              List.iter
+                (fun leaf ->
+                  let width = sizeof leaf in
+                  let value =
+                    if Sexpr.Expr.is_equal leaf candidate then
+                      match value_kind with
+                      | 0 -> Bitvector.zeros width
+                      | 1 -> Bitvector.ones width
+                      | 2 -> Bitvector.fill width
+                      | _ ->
+                          Bitvector.create
+                            (Z.logand (Z.pred (Z.shift_left Z.one width))
+                               (Z.of_string "0x55555555555555555555555555555555")) width
+                    else Bitvector.zeros width
+                  in
+                  Hashtbl.add bindings leaf value)
+                leaves;
+              outputs := Sample_evaluator.eval_with_bindings bindings e :: !outputs)
+            [ 0; 1; 2; 3 ];
+          match !outputs with
+          | head :: tail when List.for_all (Bitvector.equal head) tail ->
+              Sexpr.BvTbl.add dead candidate ()
+          | _ -> ()
+        with _ -> ())
+      leaves;
+    if Sexpr.BvTbl.length dead = 0 then e, new_leafs
+    else
+      let filtered = Hashtbl.copy new_leafs in
+      Sexpr.BvTbl.iter (fun leaf () -> Hashtbl.remove filtered leaf) dead;
+      let rec replace node =
+        if Sexpr.BvTbl.mem dead node then constant (Bitvector.zeros (sizeof node))
+        else
+          match node with
+          | Unary r -> unary r.f (replace r.x)
+          | Binary r -> binary r.f (replace r.x) (replace r.y)
+          | Ite r -> ite (replace r.c) (replace r.t) (replace r.e)
+          | _ -> node
+      in
+      replace e, filtered
+
 let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
     synthesis_timeout synthesis_repeat =
   check_timeout ();
@@ -729,6 +783,7 @@ let rec synthesize ?(retries = !c_cegis_retries) ~original e new_leafs
       let template = Option.get cached_template |> instantiate_rule rule_inverse in
       Some (template, candidate, 0.)
   | None ->
+  let e, new_leafs = filter_dead_stubs e new_leafs in
   let problem = make_problem e new_leafs synthesis_timeout synthesis_repeat in
   let portfolio_mode = !c_synthesizer_portfolio_backends <> [] in
   let smir_started = Unix.gettimeofday () in
