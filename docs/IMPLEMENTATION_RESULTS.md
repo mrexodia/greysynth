@@ -1131,3 +1131,36 @@ Smoke remains 61/62 strict and below the required 0.95x ceiling. Canonical
 Möbius component reconstruction is still incomplete for Neureduce 798/140 and
 PLDI 941, and the deeply wrapped giant targets C-MBA 1685, Tigress-L8 5856 and
 OMVLL 771 remain above their requested bounds.
+
+## Round-34 De Morgan/Shannon closure and compositional peeling
+
+Round 34 adds exact two-variable Boolean lookup plus one-variable Shannon
+factoring for three-atom truth tables, in both full and active-projected
+reconstruction. De Morgan cleanup is applied to compact negated terms without
+changing the established large nonlinear phase order. This closes the remaining
+small structured survivors: `Neureduce/98 -> 7`, `632 -> 9`, `489 -> 10`,
+`140 -> 11`, `PLDI/904 -> 12`, `941 -> 12`, `QSynth/388 -> 9` on isolated
+replay, and `MBA nonlinear/972 -> 6` exact GT.
+
+Complementary low-slice substitution now runs ring reduction before scoring and
+takes `C-MBA/3551: 506 -> 3` (GT 5). The direct two-atom product identity now
+emits three `linear_mba_mod2w` bridge edges plus one `ring_mod2w` edge instead
+of raw SMT. All remaining raw DAG peephole/mask/demand/pullout SMT calls are
+capped to nodes of cost at most 512 and 0.15 seconds.
+
+Curated outputs remain available at `/tmp/r34-gate/*/out.jsonl` and
+`/tmp/r34-core/out.jsonl`:
+
+| Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| Neureduce weak | 53/53 | 50 | 3.5649x -> 0.9076x | 53 / 0 / 0 |
+| PLDI Poly weak | 62/62 | 22 | 2.5679x -> 1.1957x | 62 / 0 / 0 |
+| Core hard non-GB | 405/406* | 263 | 87.4070x -> 5.3703x | 379 / 8 / 7 |
+| Regression smoke | 62/62 | 52 | 0.9181x -> 0.9079x | 3 / 49 / 10 |
+
+`*` One contended OMVLL proof replay was unknown in the four-worker run and
+proved compositionally on isolated rerun; malformed Loki `line_0001001` remains
+the sole core error. There are zero refutations or process timeouts. Smoke stays
+61/62 strict and below the 0.95x ceiling. Neureduce 798 remains one node above
+GT, and the deeply wrapped C-MBA 1685, Tigress-L8 5856/5710, and OMVLL 771/798
+still do not expose the direct compositional peel pattern.

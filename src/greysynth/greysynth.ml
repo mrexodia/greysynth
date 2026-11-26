@@ -205,7 +205,7 @@ let run_preprocessing gt input =
       check_equiv gt ~tag:"OES" log_linear_is_equiv !best)
   in
   let run_root_complementary_slice () =
-    match Normalization.complementary_slice_candidate size_of_expr !best with
+    match Normalization.complementary_slice_refine_candidate size_of_expr !best with
     | Some (candidate, equalities, ring_equalities)
       when Rewrite.accepts_compositional ~pass:"root-complementary-slice"
              ~equalities ~ring_equalities !best candidate -> best := candidate
