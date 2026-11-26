@@ -1223,3 +1223,84 @@ The separate 62-case regression smoke gate, from the same `039ed2a` binary, is
 retained at `/tmp/r34-gate/smoke/out.jsonl`: 62/62 established, zero refuted or
 unresolved, 52 exact-GT, quality `0.7846x -> 0.9079x`, and `3 / 49 / 10`
 better/equal/worse in 37.3 seconds elapsed (258.9 cumulative row-seconds).
+
+## True Round-34 corpus-wide exact-GT scoreboard
+
+The 5,278 previously untested non-exact rows were audited at HEAD `039ed2a`
+with the same R18 configuration and eight workers. The immutable parallel and
+isolated outputs are:
+
+```text
+/tmp/r34-untested-non-exact/out.jsonl
+/tmp/r34-untested-non-exact-isolated/out.jsonl
+```
+
+The parallel run established 5,276/5,278 rows (`1,366` direct and `3,910`
+compositional proofs), with zero refutations, zero errors, zero process timeouts,
+and two unknown proof replays; 5,174 outputs strictly decreased and 104 were
+net-neutral. Elapsed time was 3,954.1 seconds (65m 54.1s). On isolated rerun,
+Tigress-L8 target 1215 proved compositionally; OMVLL target 1082 remained
+unknown even with a 20-second per-edge replay budget. These isolated outcomes
+do not alter the parallel counts.
+
+Applying the Round-34 all-failing and untested overlays rebuilt the managed hard
+sets. `all_non_exact` shrank from 5,853 to 3,100 non-GB rows (2,753 removed,
+47.04%), `untested_non_exact` is now empty, and the refreshed `core_hard`
+contains 353 rows. Seven giant OMVLL rows remain separated.
+
+| Suite | all_non_exact before -> true remaining |
+|---|---:|
+| c_mba_obfuscator | 155 -> 65 |
+| permutation64 | 0 -> 0 |
+| obfuscatorx | 0 -> 0 |
+| omvll | 327 -> 177 |
+| tigress_l5 | 617 -> 450 |
+| tigress_l6 | 593 -> 468 |
+| tigress_l7 | 610 -> 475 |
+| tigress_l8 | 622 -> 501 |
+| loki | 81 -> 12 |
+| floki | 63 -> 21 |
+| qsynth_ea | 207 -> 146 |
+| pldi_poly | 320 -> 201 |
+| pldi_nonpoly | 365 -> 84 |
+| mba_obf_nonlinear | 161 -> 38 |
+| msimba | 0 -> 0 |
+| mba_flatten | 906 -> 401 |
+| neureduce | 214 -> 24 |
+| simba_e1_4vars | 22 -> 0 |
+| simba_e1_5vars | 0 -> 0 |
+| simba_e2_4vars | 0 -> 0 |
+| simba_e3_4vars | 0 -> 0 |
+| simba_e4_4vars | 0 -> 0 |
+| simba_e5_4vars | 0 -> 0 |
+| simba_e1_3vars | 42 -> 0 |
+| simba_e2_3vars | 67 -> 0 |
+| simba_e3_3vars | 46 -> 0 |
+| simba_e4_3vars | 20 -> 0 |
+| loki_tiny | 369 -> 7 |
+| oses | 46 -> 30 |
+| b2_combined | 0 -> 0 |
+| univariate64 | 0 -> 0 |
+| multivariate64 | 0 -> 0 |
+| **Overall non-GB** | **5,853 -> 3,100** |
+
+The rebuilt manifest covers all 54,105 audited expressions across 32 suites:
+
+| Corpus-wide metric | Round-34 result |
+|---|---:|
+| Total audited | 54,105 |
+| Known malformed skipped | 3 |
+| Parseable proved | 54,091 / 54,102 (99.9797%) |
+| Refuted | 0 |
+| Expressions with usable GT | 52,645 |
+| Proved output <= GT | 49,548 / 52,645 (94.117%) |
+| Proved output <= 1.25x GT | 50,007 / 52,645 (94.989%) |
+| Proved output <= 1.50x GT | 50,304 / 52,645 (95.553%) |
+| Proved output <= 2.00x GT | 50,475 / 52,645 (95.878%) |
+| <= GT as fraction of all audited rows | 49,548 / 54,105 (91.5775%) |
+| True remaining non-GB all_non_exact | 3,100 |
+| Separated giant OMVLL | 7 |
+
+The authoritative generated counts and overlay provenance are stored in
+`datasets/hard_cases/manifest.json`; generated hard-case directories remain
+workspace datasets and are intentionally excluded from Git.
