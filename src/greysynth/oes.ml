@@ -426,7 +426,8 @@ let semantic_dag_cse_pass expression =
           | Some value when Greysynth_utils.Utils.size_of_expr !result >= 3 && can_attempt () ->
               incr attempts;
               let candidate = Sexpr.Expr.constant value in
-              if Rewrite.accepts ~pass:"dag-const-prune" !result candidate then result := candidate
+              if Rewrite.accepts ~timeout:0.15 ~pass:"dag-const-prune" !result candidate
+              then result := candidate
           | _ -> ());
           let signature =
             (Sexpr.Expr.sizeof !result, !evaluator.node_to_outhash !result)
@@ -437,8 +438,8 @@ let semantic_dag_cse_pass expression =
                  < Greysynth_utils.Utils.size_of_expr !result
                  && can_attempt () ->
               incr attempts;
-              if Rewrite.accepts ~pass:"dag-semantic-cse" !result previous then
-                result := previous
+              if Rewrite.accepts ~timeout:0.15 ~pass:"dag-semantic-cse" !result previous
+              then result := previous
           | _ -> ());
           (match Hashtbl.find_opt representatives signature with
           | None -> Hashtbl.replace representatives signature !result

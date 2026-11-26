@@ -955,3 +955,45 @@ There are zero refutations, unknown proof verdicts, or timeouts among establishe
 rows. The sole core failure remains malformed Loki `line_0001001`. Deep Tigress
 quality improves substantially, while the intentionally deferred five-second
 smoke scheduling problem remains visible.
+
+## Round-30 forensic phase ordering and budget isolation
+
+Round 30 moves expensive semantic probing behind decidable DAG/root passes,
+limits post-DAG root probes to 256-node expressions with a 0.25-second proof
+budget, and caps semantic-CSE proof attempts at 0.15 seconds. Semi-linear root
+work now rejects large/no-mask/high-arity inputs before candidate construction,
+and giant DAG peeling uses a minimal pass family so later semantic and
+semi-linear probes cannot starve the original minterm/ring engines.
+
+The polynomial fast exit now applies only to size-three results or compact
+mask-free decidable results from large/nonlinear polynomial inputs. A one-pass
+zero-seed OES path is reserved for very large two-variable shared DAGs, avoiding
+the three-variable `target_366` starvation. E-graph equal-cost/equal-node
+extraction now prefers lower arithmetic/bitwise alternation before structural
+ordering.
+
+The focused regression gate independently replays:
+
+```text
+C-MBA target_3218:       54,904 -> 5
+PLDI Non-Poly row 895:      593 -> 5
+msimba row 191:             248 -> 5
+Tigress L7 target_1016: 264,797 -> 9   (unit gate <= 13)
+Tigress L8 target_1016: 1,324,003 -> 9 (unit gate <= 13)
+C-MBA target_366:       3,400,417 -> 11
+```
+
+Curated results:
+
+| Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| Regression smoke | 62/62 | 51 | 2.3720x -> 0.9197x | 3 / 45 / 14 |
+| Core hard non-GB | 405/406* | 208 | 87.4070x -> 6.2539x | 363 / 20 / 11 |
+
+`*` One contended Tigress-L8 replay was unknown in the four-worker run and
+proved compositionally on its isolated rerun (`1,701,958 -> 266`); the sole
+remaining core error is malformed Loki `line_0001001`. Smoke returns to 61/62
+strict decreases (one giant OSES row remains unchanged), with zero refutations
+or timeouts. The `target_2558` five-second path remains budget-sensitive at
+roughly size 21--23 (versus size 3 with a longer budget), so that flagship does
+not yet meet the requested `<= 7` five-second guard despite replaying cleanly.

@@ -248,22 +248,31 @@ let run_preprocessing gt input =
                !best candidate -> best := candidate
       | _ -> ()
   in
-  let run_root_semantic_probes () =
-    let candidates =
-      [ Normalization.probe_low_width_exact size_of_expr !best;
-        Normalization.probe_semantic_linear_mba size_of_expr !best;
-        Normalization.probe_semantic_poly size_of_expr !best ]
-      |> List.filter_map Fun.id
-      |> List.sort (fun left right -> Int.compare (size_of_expr left) (size_of_expr right))
-    in
-    match candidates with
-    | candidate :: _
-      when Rewrite.accepts ~pass:"root-semantic-probe" !best candidate ->
-        best := candidate
-    | _ -> ()
+  let run_root_semantic_probes ?(max_size = 256) ?(timeout = 0.25) () =
+    if size_of_expr !best > max_size
+       || dag_size_bounded ~limit:1024 !best > 1024
+    then ()
+    else
+      let candidates =
+        [ Normalization.probe_low_width_exact size_of_expr !best;
+          Normalization.probe_semantic_linear_mba size_of_expr !best;
+          Normalization.probe_semantic_poly size_of_expr !best ]
+        |> List.filter_map Fun.id
+        |> List.sort (fun left right -> Int.compare (size_of_expr left) (size_of_expr right))
+      in
+      match candidates with
+      | candidate :: _
+        when Rewrite.accepts ~timeout ~pass:"root-semantic-probe"
+               !best candidate ->
+          best := candidate
+      | _ -> ()
   in
   let run_root_semilinear () =
-    match Normalization.semilinear_mba_candidate size_of_expr !best with
+    match
+      if size_of_expr !best <= 256
+      then Normalization.semilinear_mba_candidate size_of_expr !best
+      else None
+    with
     | Some candidate ->
         let accepted =
           Rewrite.accepts_compositional ~pass:"root-semilinear-mba"
@@ -274,6 +283,25 @@ let run_preprocessing gt input =
         if accepted then best := candidate
     | None -> ()
   in
+  let rec has_nonlinear_product = function
+    | Sexpr.Expr.Binary { f = Sexpr.Expr.Mul; x; y; _ }
+      when Option.is_none (Normalization.constant_value x)
+           && Option.is_none (Normalization.constant_value y) -> true
+    | Sexpr.Expr.Unary { x; _ } -> has_nonlinear_product x
+    | Sexpr.Expr.Binary { x; y; _ } ->
+        has_nonlinear_product x || has_nonlinear_product y
+    | Sexpr.Expr.Ite { c; t; e; _ } ->
+        has_nonlinear_product c || has_nonlinear_product t || has_nonlinear_product e
+    | _ -> false
+  in
+  let run_root_xor_affine_mask () =
+    match Normalization.xor_affine_mask_candidate size_of_expr !best with
+    | Some candidate
+      when Rewrite.accepts_compositional ~pass:"root-xor-affine-mask"
+             ~equalities:[] ~semilinear_mba_equalities:[ !best, candidate ]
+             !best candidate -> best := candidate
+    | _ -> ()
+  in
   let run_root_polysim_poly () =
     match Normalization.polysim_poly_mod2w size_of_expr !best with
     | Some (candidate, linear_mba_equalities, equalities, poly_equalities,
@@ -283,7 +311,15 @@ let run_preprocessing gt input =
              ~linear_mba_equalities:(linear_mba_equalities @ final_linear_equalities)
              !best candidate ->
         best := candidate;
-        if size_of_expr candidate <= 20 then (
+        let candidate_size = size_of_expr candidate in
+        let no_masks =
+          not (Normalization.has_nonuniform_bitwise_constant candidate)
+        in
+        if candidate_size <= 3
+           || (candidate_size <= 20 && no_masks
+               && (size_of_expr input >= 1000
+                   || has_nonlinear_product candidate))
+        then (
           root_decidable_fast := true;
           g_decidable_root_fast := true)
     | _ -> ()
@@ -291,6 +327,9 @@ let run_preprocessing gt input =
   let run_root_minterm_poly () =
     match
       if size_of_expr !best > 256
+         && (size_of_expr !best <= 32_768
+             || size_of_expr !best > 1_000_000
+             || Sexpr.Expr.sizeof !best <= 32)
       then Normalization.nonlinear_poly_candidate size_of_expr !best
       else None
     with
@@ -302,11 +341,16 @@ let run_preprocessing gt input =
              !best candidate -> best := candidate
     | _ -> ()
   in
-  run_root_semantic_probes ();
+  if !c_oes && size_of_expr !best > 100_000
+     && List.length (Sample_evaluator.variables_of_expr !best) <= 2
+     && dag_size_bounded ~limit:2048 !best <= 2048
+     && not !g_has_timedout
+  then best := fst (linear_simplify ~seed:false !best);
+  run_root_minterm_poly ();
   run_root_semilinear ();
+  run_root_xor_affine_mask ();
   run_root_polysim_poly ();
   if !root_decidable_fast then !best else (
-  run_root_minterm_poly ();
   run_root_disjoint_components ();
   if size_of_expr !best <= 10_000
      || size_of_expr !best < size_of_expr input / 4
@@ -321,19 +365,21 @@ let run_preprocessing gt input =
       incr rounds;
       let before_size = size_of_expr !best
       and before_dag = dag_size_of_expr !best in
-      best := Normalization.dag_bottom_up_simplify !best;
+      best :=
+        Normalization.dag_bottom_up_simplify ~minimal:(before_size > 32_768) !best;
       improving :=
         size_of_expr !best < before_size || dag_size_of_expr !best < before_dag
     done);
-  if not !g_has_timedout && dag_size_of_expr !best <= 4096 then
-    best := semantic_dag_cse_pass !best;
   run_root_complementary_atoms ();
   run_root_correlated_null ();
-  run_root_semantic_probes ();
   run_root_semilinear ();
+  run_root_xor_affine_mask ();
   run_root_polysim_poly ();
   run_root_minterm_poly ();
   run_root_disjoint_components ();
+  run_root_semantic_probes ();
+  if not !g_has_timedout && dag_size_of_expr !best <= 4096 then
+    best := semantic_dag_cse_pass !best;
   (match
      if size_of_expr !best >= 200
      then Normalization.reduce_modular_polynomial size_of_expr !best

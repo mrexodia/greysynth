@@ -110,3 +110,23 @@
  (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
             binsec.smt binsec.sse.term yojson unix)
  (flags (:standard -open Binsec -open Libsse -open Libterm)))
+
+(test
+ (name round30_test)
+ (modules round30_test)
+ (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
+            greysynth.string_to_sexpr binsec.smt binsec.sse.term yojson unix)
+ (flags (:standard -open Binsec -open Libsse -open Libterm))
+ (deps
+  ../datasets/hard_cases/regression_smoke/c_mba_obfuscator/mba_obfuscator__target_3218.json
+  ../datasets/hard_cases/regression_smoke/pldi_nonpoly/pldi_nonpoly__line_0000895.json
+  ../datasets/hard_cases/regression_smoke/msimba/msimba__line_0000191.json
+  ../datasets/hard_cases/regression_smoke/tigress_l7/tigress_lvl_7__target_1016.json
+  ../datasets/hard_cases/regression_smoke/tigress_l8/tigress_lvl_8__target_1016.json)
+ (action
+  (run %{test}
+   %{dep:../datasets/hard_cases/regression_smoke/c_mba_obfuscator/mba_obfuscator__target_3218.json}
+   %{dep:../datasets/hard_cases/regression_smoke/pldi_nonpoly/pldi_nonpoly__line_0000895.json}
+   %{dep:../datasets/hard_cases/regression_smoke/msimba/msimba__line_0000191.json}
+   %{dep:../datasets/hard_cases/regression_smoke/tigress_l7/tigress_lvl_7__target_1016.json}
+   %{dep:../datasets/hard_cases/regression_smoke/tigress_l8/tigress_lvl_8__target_1016.json})))

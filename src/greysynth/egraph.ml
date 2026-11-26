@@ -333,7 +333,45 @@ let semantic_merge ~local_deadline graph =
                  else Hashtbl.replace graph.semantic_failures failure_key ()));
   !changed
 
+let mba_alternation expression =
+  let memo = Nodes.create 128 in
+  let rec visit node =
+    match Nodes.find_opt memo node with
+    | Some result -> result
+    | None ->
+        let kind, children =
+          match node with
+          | E.Unary { f = E.Minus; x; _ } -> 1, [ x ]
+          | E.Unary { f = E.Not; x; _ } -> 2, [ x ]
+          | E.Unary { x; _ } -> 0, [ x ]
+          | E.Binary { f = (E.Plus | E.Minus | E.Mul | E.Lsl); x; y; _ } ->
+              1, [ x; y ]
+          | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } -> 2, [ x; y ]
+          | E.Binary { x; y; _ } -> 0, [ x; y ]
+          | E.Ite { c; t; e; _ } -> 0, [ c; t; e ]
+          | _ -> 0, []
+        in
+        let alternation =
+          List.fold_left
+            (fun total child ->
+              let child_kind, child_total = visit child in
+              child_total + total
+              + if kind <> 0 && child_kind <> 0 && kind <> child_kind then 1 else 0)
+            0 children
+        in
+        let result = kind, alternation in
+        Nodes.add memo node result;
+        result
+  in
+  snd (visit expression)
+
 let compute_best graph =
+  let alternations = Nodes.create 128 in
+  let alternation expression =
+    match Nodes.find_opt alternations expression with
+    | Some value -> value
+    | None -> let value = mba_alternation expression in Nodes.add alternations expression value; value
+  in
   let best : (int * int * E.t) option array = Array.make graph.limit None in
   let changed = ref true and rounds = ref 0 in
   while !changed && !rounds <= graph.count do
@@ -387,6 +425,9 @@ let compute_best graph =
                        if cost < previous_cost
                           || (cost = previous_cost && nodes < previous_nodes)
                           || (cost = previous_cost && nodes = previous_nodes
+                              && alternation expression < alternation previous)
+                          || (cost = previous_cost && nodes = previous_nodes
+                              && alternation expression = alternation previous
                               && E.compare expression previous < 0)
                        then (best.(root) <- Some value; changed := true))
                  candidate)

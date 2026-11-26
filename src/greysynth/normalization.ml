@@ -1393,34 +1393,83 @@ let is_semantically_bitwise cost expression =
   |> List.sort (fun left right -> Int.compare (cost left) (cost right))
   |> function candidate :: _ -> Some candidate | [] -> None
 
-let semilinear_mba_candidate cost expression =
-  let width = E.sizeof expression in
-  if width > 128 || cost expression > 4096
-     || Greysynth_utils.Utils.dag_size_bounded ~limit:2048 expression > 2048
-  then None
-  else
-    let constants = Hashtbl.create 16 and saw_nonuniform = ref false in
-    let rec inspect under_bitwise = function
+let has_nonuniform_bitwise_constant expression =
+  let seen = Nodes.create 128 and found = ref false in
+  let rec inspect under_bitwise node =
+    if not !found && not (Nodes.mem seen node) then (
+      Nodes.add seen node ();
+      match node with
       | E.Cst value ->
-          let z = Bitvector.value_of value in
-          Hashtbl.replace constants z ();
           if under_bitwise
              && not (Bitvector.is_zeros value || Bitvector.is_fill value)
-          then saw_nonuniform := true
+          then found := true
       | E.Unary { f = E.Not; x; _ } -> inspect under_bitwise x
       | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
           inspect true x; inspect true y
       | E.Unary { x; _ } -> inspect under_bitwise x
       | E.Binary { x; y; _ } -> inspect under_bitwise x; inspect under_bitwise y
-      | E.Ite { c; t; e; _ } -> inspect under_bitwise c; inspect under_bitwise t; inspect under_bitwise e
-      | _ -> ()
+      | E.Ite { c; t; e; _ } ->
+          inspect under_bitwise c; inspect under_bitwise t; inspect under_bitwise e
+      | _ -> ())
+  in
+  inspect false expression;
+  !found
+
+let semilinear_mba_candidate cost expression =
+  let width = E.sizeof expression in
+  if width > 128 || cost expression > 4096
+     || Greysynth_utils.Utils.dag_size_bounded ~limit:1024 expression > 1024
+     || not (has_nonuniform_bitwise_constant expression)
+  then None
+  else
+    let deadline = Unix.gettimeofday () +. 0.2 in
+    let constants = Hashtbl.create 16 and bitwise_constants = Hashtbl.create 16
+    and saw_nonuniform = ref false
+    and opaque = Nodes.create 8 and linear_seen = Nodes.create 128
+    and bitwise_seen = Nodes.create 128 in
+    let rec inspect under_bitwise node =
+      if Unix.gettimeofday () > deadline then raise Too_complex;
+      let seen = if under_bitwise then bitwise_seen else linear_seen in
+      if not (Nodes.mem seen node) then (
+        Nodes.add seen node ();
+        if under_bitwise then
+          match node with
+          | E.Cst value ->
+              let z = Bitvector.value_of value in
+              Hashtbl.replace constants z ();
+              Hashtbl.replace bitwise_constants z ();
+              if not (Bitvector.is_zeros value || Bitvector.is_fill value)
+              then saw_nonuniform := true
+          | E.Unary { f = E.Not; x; _ } -> inspect true x
+          | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+              inspect true x; inspect true y
+          | atom ->
+              Nodes.replace opaque atom ();
+              if Nodes.length opaque > 6 then raise Too_complex
+        else
+          match node with
+          | E.Unary { f = E.Not; x; _ } -> inspect false x
+          | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+              inspect true x; inspect true y
+          | E.Unary { x; _ } -> inspect false x
+          | E.Binary { x; y; _ } -> inspect false x; inspect false y
+          | E.Ite { c; t; e; _ } -> inspect false c; inspect false t; inspect false e
+          | _ -> ())
     in
-    inspect false expression;
-    if not !saw_nonuniform then None
+    let preflight_ok =
+      try inspect false expression; true with Too_complex -> false
+    in
+    if not preflight_ok || not !saw_nonuniform || Nodes.length opaque > 6
+       || Unix.gettimeofday () > deadline
+    then None
     else
       let mask = Z.pred (Z.shift_left Z.one width) in
       let normalize value = Z.logand value mask in
-      let base_constants = Hashtbl.fold (fun value () result -> value :: result) constants [] in
+      let all_constants = Hashtbl.fold (fun value () result -> value :: result) constants [] in
+      let bit_constants =
+        Hashtbl.fold (fun value () result -> value :: result) bitwise_constants []
+      in
+      let base_constants = bit_constants @ all_constants in
       let merged = ref base_constants in
       List.iter
         (fun left ->
@@ -1433,7 +1482,12 @@ let semilinear_mba_candidate cost expression =
           | head :: tail -> head :: loop (count - 1) tail
         in loop count values
       in
-      let base = base_constants |> List.map normalize |> List.sort_uniq Z.compare in
+      let bit_base = bit_constants |> List.map normalize |> List.sort_uniq Z.compare in
+      let other_base =
+        base_constants |> List.map normalize |> List.sort_uniq Z.compare
+        |> List.filter (fun value -> not (List.mem value bit_base))
+      in
+      let base = bit_base @ other_base in
       let extras =
         !merged |> List.map normalize |> List.sort_uniq Z.compare
         |> List.filter (fun value -> not (List.mem value base))
@@ -1459,18 +1513,25 @@ let semilinear_mba_candidate cost expression =
                   E.binary E.Plus variable constant ])
               constants
           in
-          let nested =
-            if List.length variables <> 1 then []
+          let nested, scaled =
+            if List.length variables <> 1 then [], []
             else
-              List.concat_map
-                (fun mask_value ->
-                  let masked = E.binary E.And variable (constant width mask_value) in
-                  List.map
-                    (fun offset -> E.binary E.Plus masked (constant width offset))
-                    constants)
-                constants
+              (List.concat_map
+                 (fun mask_value ->
+                   let masked = E.binary E.And variable (constant width mask_value) in
+                   List.map
+                     (fun offset -> E.binary E.Plus masked (constant width offset))
+                     constants)
+                 constants,
+               List.concat_map
+                 (fun body ->
+                   List.map
+                     (fun coefficient ->
+                       E.binary E.Mul (constant width coefficient) body)
+                     constants)
+                 simple)
           in
-          simple @ nested |> List.sort_uniq E.compare
+          simple @ nested @ scaled |> List.sort_uniq E.compare
         in
         let per_variable = List.map variants variables in
         let candidates = ref [] in
@@ -1538,32 +1599,38 @@ let semilinear_mba_candidate cost expression =
             Some (match terms with [] -> zeros width | _ -> build_balanced E.Plus terms)
           with _ -> None
         in
-        (match canonical with
-        | Some candidate
-          when cost candidate < cost expression
-               && Rewrite.samples_agree expression candidate -> Some candidate
-        | _ ->
-            (match per_variable with
-            | first :: second :: rest ->
-                List.iter
-                  (fun left ->
-                    List.iter
-                      (fun right -> candidates := E.binary E.Plus left right :: !candidates)
-                      second)
-                  first;
-                ignore rest
-            | _ -> ());
-            let best = ref None in
+        Option.iter (fun candidate -> candidates := candidate :: !candidates) canonical;
+        if List.length variables = 1 then (
+          let target = Array.init 16 (fun index ->
+              !(Config.evaluator).eval expression index |> Bitvector.value_of) in
+          !candidates
+          |> List.filter (fun candidate -> cost candidate <= 3)
+          |> List.iter (fun body ->
+                 let values = Array.init 16 (fun index ->
+                     !(Config.evaluator).eval body index |> Bitvector.value_of) in
+                 Smir_interp.analytical_candidates ~width ~target ~expression:body ~values
+                 |> List.iter (fun candidate -> candidates := candidate :: !candidates)));
+        (match per_variable with
+        | first :: second :: rest ->
             List.iter
-              (fun candidate ->
-                if cost candidate < cost expression
-                   && (match !best with
-                       | None -> true
-                       | Some previous -> cost candidate < cost previous)
-                   && Rewrite.samples_agree expression candidate
-                then best := Some candidate)
-              !candidates;
-            !best)
+              (fun left ->
+                List.iter
+                  (fun right -> candidates := E.binary E.Plus left right :: !candidates)
+                  second)
+              first;
+            ignore rest
+        | _ -> ());
+        let best = ref None in
+        List.iter
+          (fun candidate ->
+            if cost candidate < cost expression
+               && (match !best with
+                   | None -> true
+                   | Some previous -> cost candidate < cost previous)
+               && Rewrite.samples_agree expression candidate
+            then best := Some candidate)
+          !candidates;
+        !best
 
 let power2_pullout_candidate cost expression =
   let width = E.sizeof expression in
@@ -1657,6 +1724,52 @@ let demand_bits_candidate cost expression =
           in
           let candidate = Option.value zero_candidate ~default:narrowed in
           if cost candidate < cost expression then Some candidate else None)
+  | _ -> None
+
+let xor_affine_mask_candidate cost expression =
+  let width = E.sizeof expression and modulus = Z.shift_left Z.one (E.sizeof expression) in
+  let normalize value = Z.logand value (Z.pred modulus) in
+  let rec additive = function
+    | E.Binary { f = E.Plus; x; y; _ } -> additive x @ additive y
+    | term -> [ term ]
+  in
+  let constant_term = function E.Cst value -> Some (Bitvector.value_of value) | _ -> None in
+  let scaled_variable = function
+    | E.Binary { f = E.Mul; x = E.Cst coefficient; y = (E.Var _ as variable); _ }
+    | E.Binary { f = E.Mul; x = (E.Var _ as variable); y = E.Cst coefficient; _ } ->
+        Some (variable, Bitvector.value_of coefficient)
+    | _ -> None
+  in
+  let scaled_mask = function
+    | E.Binary { f = E.Mul; x = E.Cst coefficient;
+                 y = E.Binary { f = E.And; x = E.Cst mask; y = (E.Var _ as variable); _ }; _ }
+    | E.Binary { f = E.Mul; x = E.Cst coefficient;
+                 y = E.Binary { f = E.And; x = (E.Var _ as variable); y = E.Cst mask; _ }; _ }
+    | E.Binary { f = E.Mul;
+                 x = E.Binary { f = E.And; x = E.Cst mask; y = (E.Var _ as variable); _ };
+                 y = E.Cst coefficient; _ }
+    | E.Binary { f = E.Mul;
+                 x = E.Binary { f = E.And; x = (E.Var _ as variable); y = E.Cst mask; _ };
+                 y = E.Cst coefficient; _ } ->
+        Some (variable, Bitvector.value_of mask, Bitvector.value_of coefficient)
+    | _ -> None
+  in
+  let terms = additive expression in
+  match List.find_map constant_term terms,
+        List.find_map scaled_variable terms,
+        List.find_map scaled_mask terms with
+  | Some offset, Some (variable, coefficient),
+    Some (masked_variable, bitmask, masked_coefficient)
+    when E.is_equal variable masked_variable
+         && Z.equal (normalize masked_coefficient)
+              (normalize (Z.neg (Z.mul (Z.of_int 2) coefficient)))
+         && Z.equal (normalize offset) (normalize (Z.mul coefficient bitmask)) ->
+      let body = E.binary E.Xor variable (constant width bitmask) in
+      let candidate =
+        if Z.equal coefficient Z.one then body
+        else E.binary E.Mul (constant width coefficient) body
+      in
+      if cost candidate < cost expression then Some candidate else None
   | _ -> None
 
 let known_bits_candidate cost expression =
@@ -4130,7 +4243,7 @@ let probe_semantic_poly cost expression =
            |> List.find_opt (fun candidate -> Rewrite.samples_agree expression candidate)
          with _ -> None))
 
-let dag_bottom_up_simplify expression =
+let dag_bottom_up_simplify ?(minimal = false) expression =
   let memo = Nodes.create 256 in
   let constants = Sample_evaluator.make 1 in
   let cost = Greysynth_utils.Utils.size_of_expr in
@@ -4140,6 +4253,7 @@ let dag_bottom_up_simplify expression =
     | None ->
         check_timeout ();
         let semantic_child child =
+          if minimal then child else
           match is_semantically_bitwise cost child with
           | Some candidate
             when Rewrite.accepts_compositional ~pass:"dag-semantic-bitwise"
@@ -4158,6 +4272,21 @@ let dag_bottom_up_simplify expression =
           | _ -> node
         in
         let result = ref rebuilt in
+        (match nonlinear_poly_candidate cost !result with
+        | Some (candidate, linear_mba_equalities, ring_equalities,
+                final_linear_equalities)
+          when Rewrite.accepts_compositional ~pass:"dag-minterm-ring-poly"
+                 ~equalities:[] ~ring_equalities
+                 ~linear_mba_equalities:(linear_mba_equalities @ final_linear_equalities)
+                 !result candidate -> result := candidate
+        | _ -> ());
+        if not minimal then (
+        (match xor_affine_mask_candidate cost !result with
+        | Some candidate
+          when Rewrite.accepts_compositional ~pass:"dag-xor-affine-mask"
+                 ~equalities:[] ~semilinear_mba_equalities:[ !result, candidate ]
+                 !result candidate -> result := candidate
+        | _ -> ());
         (match known_bits_candidate cost !result with
         | Some candidate when Rewrite.accepts ~pass:"dag-known-bits" !result candidate ->
             result := candidate
@@ -4200,15 +4329,7 @@ let dag_bottom_up_simplify expression =
           when Rewrite.accepts_compositional ~pass:"dag-correlated-null"
                  ~equalities:[] ~ring_equalities ~linear_mba_equalities
                  !result candidate -> result := candidate
-        | _ -> ());
-        (match nonlinear_poly_candidate cost !result with
-        | Some (candidate, linear_mba_equalities, ring_equalities,
-                final_linear_equalities)
-          when Rewrite.accepts_compositional ~pass:"dag-minterm-ring-poly"
-                 ~equalities:[] ~ring_equalities
-                 ~linear_mba_equalities:(linear_mba_equalities @ final_linear_equalities)
-                 !result candidate -> result := candidate
-        | _ -> ());
+        | _ -> ()));
         let accept_linear candidate =
           Rewrite.accepts_compositional ~pass:"dag-linear-mba"
             ~equalities:[] ~linear_mba_equalities:[ !result, candidate ]

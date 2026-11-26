@@ -226,7 +226,7 @@ let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
           Hashtbl.replace compositional_budgets compositional_key budget;
           false)
 
-let accepts ~pass original candidate =
+let accepts ?timeout ~pass original candidate =
   if Sexpr.Expr.sizeof original <> Sexpr.Expr.sizeof candidate then (
     last_rejection := "width_mismatch";
     false)
@@ -247,7 +247,11 @@ let accepts ~pass original candidate =
       true)
     else
       let key = proof_key original candidate in
-      let budget = float_of_int !c_equiv_timeout in
+      let budget =
+        match timeout with
+        | None -> float_of_int !c_equiv_timeout
+        | Some timeout -> min timeout (float_of_int !c_equiv_timeout)
+      in
       let cached =
         match Hashtbl.find_opt proofs key with
         | Some (Yes | No as verdict) -> Some verdict
