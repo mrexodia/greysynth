@@ -1084,3 +1084,50 @@ below the required 0.95x ceiling with 61/62 strict reductions. The requested
 exact survivor targets are not all closed: PLDI 904/795, Neureduce 98/632/798,
 QSynth 388, C-MBA 1685, Tigress-L8 5856, and OMVLL 771 remain above their target
 bounds. These rows remain in the `/tmp/r32-*` JSONLs for the next forensic pass.
+
+## Round-33 exact two-value offsets and bounded giant proofs
+
+Round 33 fixes the signed bitvector two-value theorem in `linear_candidates`.
+The base value is now `target.(0)` rather than unsigned `min(distinct)`, and both
+zero-preserving and one-preserving Boolean encodings use their exact modular
+offsets (`v0 + (v1-v0)B` and `(2v0-v1) + (v0-v1)~B`). This directly closes
+Neureduce 632 and PLDI Poly 904, and substantially improves the remaining
+multi-value weak suites. Full-active tables through four atoms now use the same
+polarity machinery rather than requiring a dummy variable.
+
+Raw known-bits SMT is again excluded from minimal giant-DAG mode. Mask/slice and
+peephole checks are bounded, `Rewrite.accepts` clamps proof time to the remaining
+global budget, and small raw expressions bypass e-graph saturation that cannot
+respect the case deadline. This removes the 18-second QSynth-388 hang and takes
+that row from `71 -> 9` exact GT in under four seconds. A direct abstract-checked
+two-atom nonlinear product rule is available during bottom-up peeling, while
+ring/linear/peephole cleanup remains active on giant DAGs.
+
+Selected real-row results:
+
+```text
+Neureduce 98:   76 -> 7  (GT 8)
+Neureduce 632:  72 -> 9  (GT 9)
+Neureduce 489:  72 -> 10 (GT 11)
+PLDI Poly 904:  93 -> 12 (GT 12)
+QSynth EA 388:  71 -> 9  (GT 9)
+MBA nonlinear 972: 166 -> 7 (GT 6)
+```
+
+Curated JSONLs are retained at `/tmp/r33-gate/*/out.jsonl` and
+`/tmp/r33-core/out.jsonl`:
+
+| Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| Neureduce weak | 53/53 | 18 | 3.5649x -> 1.1073x | 53 / 0 / 0 |
+| PLDI Poly weak | 62/62 | 19 | 2.5679x -> 1.2236x | 62 / 0 / 0 |
+| QSynth EA weak | 60/60 | 31 | 11.0762x -> 1.1973x | 59 / 0 / 1 |
+| Core hard non-GB | 405/406 | 242 | 87.4070x -> 5.2775x | 380 / 8 / 6 |
+| Regression smoke | 62/62 | 51 | 0.9034x -> 0.9181x | 3 / 48 / 11 |
+
+There are zero refutations, unknown proof verdicts, or process timeouts among
+established rows; malformed Loki `line_0001001` remains the sole core error.
+Smoke remains 61/62 strict and below the required 0.95x ceiling. Canonical
+Möbius component reconstruction is still incomplete for Neureduce 798/140 and
+PLDI 941, and the deeply wrapped giant targets C-MBA 1685, Tigress-L8 5856 and
+OMVLL 771 remain above their requested bounds.

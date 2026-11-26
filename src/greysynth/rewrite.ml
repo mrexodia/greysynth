@@ -158,7 +158,11 @@ let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
       true)
     else
       let key = proof_key original candidate in
-      let budget = float_of_int !c_equiv_timeout in
+      let remaining =
+        if !g_total_timeout <= 0. then infinity
+        else !g_total_timeout -. (Unix.gettimeofday () -. !g_start_time)
+      in
+      let budget = min (float_of_int !c_equiv_timeout) (max 0.001 remaining) in
       let cached = Hashtbl.find_opt proofs key in
       let compositional_key =
         let left, right = key in
@@ -247,11 +251,22 @@ let accepts ?timeout ~pass original candidate =
       true)
     else
       let key = proof_key original candidate in
-      let budget =
+      let requested =
         match timeout with
         | None -> float_of_int !c_equiv_timeout
         | Some timeout -> min timeout (float_of_int !c_equiv_timeout)
       in
+      let remaining =
+        if !g_total_timeout <= 0. then infinity
+        else !g_total_timeout -. (Unix.gettimeofday () -. !g_start_time)
+      in
+      let budget = min requested remaining in
+      if budget <= 0.1 then (
+        if !g_total_timeout > 0. then g_has_timedout := true;
+        incr inconclusive;
+        last_rejection := "smt_inconclusive";
+        false)
+      else
       let cached =
         match Hashtbl.find_opt proofs key with
         | Some (Yes | No as verdict) -> Some verdict

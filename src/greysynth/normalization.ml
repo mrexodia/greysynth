@@ -1256,8 +1256,7 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
              done;
              !changed)
     in
-    if cost expression <= 128
-       && List.length active <= 4 && List.length distinct = 2
+    if List.length active <= 4 && List.length distinct = 2
     then (
       let active = Array.of_list active and active_count = List.length active in
       let assignments = 1 lsl active_count in
@@ -1270,8 +1269,11 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
       in
       let reduced = Array.init assignments (fun assignment ->
           target.(original_assignment assignment)) in
-      let low = List.hd distinct and high = List.hd (List.tl distinct) in
-      let truth = Array.map (Z.equal high) reduced in
+      let v0 = target.(0) in
+      let v1 =
+        List.find (fun value -> not (Z.equal value v0)) distinct
+      in
+      let truth = Array.map (Z.equal v1) reduced in
       let literal assignment projected =
         let atom = atoms.(active.(projected)) in
         if assignment land (1 lsl projected) = 0 then E.unary E.Not atom else atom
@@ -1319,17 +1321,16 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
           anf ]
       in
       List.iter (fun boolean ->
-          let delta = normalize (Z.sub high low) in
-          let weighted = scale delta boolean in
-          offer (if Z.equal low Z.zero then weighted
-                 else E.binary E.Plus (constant width low) weighted);
-          let inverse_boolean = E.unary E.Not boolean in
-          let inverse_delta = normalize (Z.sub low high) in
-          let inverse_weighted = scale inverse_delta inverse_boolean in
-          offer (if Z.equal high Z.zero then inverse_weighted
-                 else E.binary E.Plus (constant width high) inverse_weighted);
-          if Z.equal low delta then
-            offer (scale (normalize (Z.neg delta)) inverse_boolean)) booleans);
+          let delta0 = normalize (Z.sub v1 v0) in
+          let weighted0 = scale delta0 boolean in
+          offer (if Z.equal v0 Z.zero then weighted0
+                 else E.binary E.Plus (constant width v0) weighted0);
+          let boolean1 = E.unary E.Not boolean in
+          let delta1 = normalize (Z.sub v0 v1) in
+          let offset1 = normalize (Z.sub (Z.add v0 v0) v1) in
+          let weighted1 = scale delta1 boolean1 in
+          offer (if Z.equal offset1 Z.zero then weighted1
+                 else E.binary E.Plus (constant width offset1) weighted1)) booleans);
     if semantic_bitwise && count <= min 6 !c_normalization_max_atoms then (
       let zero = Z.zero and one = Z.one
       and minus_one = mask and minus_two = normalize (Z.of_int (-2)) in
@@ -1943,6 +1944,45 @@ let complementary_slice_candidate cost expression =
       if cost substituted < cost expression
       then Some (substituted, List.rev !equalities, [])
       else None
+
+let nonlinear_product_identity_candidate expression =
+  let same = E.is_equal in
+  let commutative operation left right = function
+    | E.Binary { f; x; y; _ } when f = operation ->
+        (same x left && same y right) || (same x right && same y left)
+    | _ -> false
+  in
+  let parse_cross = function
+    | E.Binary { f = E.Mul; x; y; _ } ->
+        let masked = function
+          | E.Binary { f = E.And; x = a; y = E.Unary { f = E.Not; x = b; _ }; _ }
+          | E.Binary { f = E.And; x = E.Unary { f = E.Not; x = b; _ }; y = a; _ } ->
+              Some (a, b)
+          | _ -> None
+        in
+        let parse left right =
+          match masked left, masked right with
+          | Some (a, b), Some (c, d) when same a d && same b c -> Some (a, b)
+          | _ -> None
+        in
+        (match parse x y with Some _ as result -> result | None -> parse y x)
+    | _ -> None
+  in
+  let parse_regular a b = function
+    | E.Binary { f = E.Mul; x; y; _ } ->
+        (commutative E.And a b x && commutative E.Or a b y)
+        || (commutative E.And a b y && commutative E.Or a b x)
+    | _ -> false
+  in
+  match expression with
+  | E.Binary { f = E.Plus; x; y; _ } ->
+      (match parse_cross x with
+      | Some (a, b) when parse_regular a b y -> Some (E.binary E.Mul a b)
+      | _ ->
+          (match parse_cross y with
+          | Some (a, b) when parse_regular a b x -> Some (E.binary E.Mul a b)
+          | _ -> None))
+  | _ -> None
 
 let known_bits_candidate cost expression =
   let candidate =
@@ -4545,16 +4585,23 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
           | _ -> node
         in
         let result = ref rebuilt in
-        (match complementary_slice_candidate cost !result with
-        | Some (candidate, equalities, ring_equalities)
-          when Rewrite.accepts_compositional ~pass:"dag-complementary-slice"
-                 ~equalities ~ring_equalities !result candidate ->
-            result := candidate
+        (match nonlinear_product_identity_candidate !result with
+        | Some candidate
+          when Rewrite.accepts ~timeout:0.25 ~pass:"dag-product-peel"
+                 !result candidate -> result := candidate
         | _ -> ());
-        (match mask_lift_candidate cost !result with
-        | Some candidate when Rewrite.accepts ~pass:"dag-mask-lift" !result candidate ->
-            result := candidate
-        | _ -> ());
+        if Greysynth_utils.Utils.dag_size_bounded ~limit:512 !result <= 512 then (
+          (match complementary_slice_candidate cost !result with
+          | Some (candidate, equalities, ring_equalities)
+            when Rewrite.accepts_compositional ~pass:"dag-complementary-slice"
+                   ~equalities ~ring_equalities !result candidate ->
+              result := candidate
+          | _ -> ());
+          (match mask_lift_candidate cost !result with
+          | Some candidate
+            when Rewrite.accepts ~timeout:0.15 ~pass:"dag-mask-lift" !result candidate ->
+              result := candidate
+          | _ -> ()));
         (match nonlinear_poly_candidate cost !result with
         | Some (candidate, linear_mba_equalities, ring_equalities,
                 final_linear_equalities)
@@ -4563,11 +4610,13 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
                  ~linear_mba_equalities:(linear_mba_equalities @ final_linear_equalities)
                  !result candidate -> result := candidate
         | _ -> ());
-        (match known_bits_candidate cost !result with
-        | Some candidate when Rewrite.accepts ~pass:"dag-known-bits" !result candidate ->
-            result := candidate
-        | _ -> ());
         if not minimal then (
+        (if cost !result <= 256 then
+           match known_bits_candidate cost !result with
+           | Some candidate
+             when Rewrite.accepts ~timeout:0.15 ~pass:"dag-known-bits" !result candidate ->
+               result := candidate
+           | _ -> ());
         (match xor_affine_mask_candidate cost !result with
         | Some candidate
           when Rewrite.accepts_compositional ~pass:"dag-xor-affine-mask"
@@ -4640,7 +4689,8 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
                  !result candidate -> result := candidate
         | _ -> ());
         (match peepholes constants.eval !result with
-        | candidate :: _ when Rewrite.accepts ~pass:"dag-peephole" !result candidate ->
+        | candidate :: _
+          when Rewrite.accepts ~timeout:0.15 ~pass:"dag-peephole" !result candidate ->
             result := candidate
         | _ -> ());
         Nodes.add memo node !result;

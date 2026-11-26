@@ -448,7 +448,8 @@ let run_preprocessing gt input =
       check_equiv gt ~tag:"normalization" log_normalization_is_equiv !best);
     run_oes ()
   in
-  if !c_egraph_extraction && not !g_has_timedout then (
+  if !c_egraph_extraction && size_of_expr !best > 128
+     && not !g_has_timedout then (
     let before = !best in
     best := Egraph.optimize !best;
     if Egraph.fell_back () || Sexpr.Expr.is_equal !best before then (
