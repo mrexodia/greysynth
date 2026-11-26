@@ -1164,3 +1164,62 @@ the sole core error. There are zero refutations or process timeouts. Smoke stays
 61/62 strict and below the 0.95x ceiling. Neureduce 798 remains one node above
 GT, and the deeply wrapped C-MBA 1685, Tigress-L8 5856/5710, and OMVLL 771/798
 still do not expose the direct compositional peel pattern.
+
+## Authoritative Round-34 full survivor scoreboard
+
+The final scoreboard was run at HEAD `952efd1` (implementation commit
+`039ed2a`) with the exact R18 configuration, `mba_equiv`, independent
+`mba_proof` replay, and eight workers. The authoritative parallel output is:
+
+```text
+/tmp/r34-all-failing/out.jsonl
+```
+
+The input contains 1,876 previously failing/weak rows. Seven pre-existing giant
+OMVLL JSON files were explicitly excluded: targets 3716, 773, and 802
+(approximately 1.1 GB each), 800 (139.4 MB), 4687 (114.3 MB), 4678 (92.5 MB),
+and 533 (84.9 MB). Quality and better/equal/worse columns cover the 1,864 rows
+that carry stored baseline and GT sizes. `U/E/T` means unknown/error/timeout;
+`Row wall` is cumulative per-case wall time, while the eight-worker audit's
+actual elapsed time was 1,420.7 seconds (23m 40.7s).
+
+| Suite | Cases | Established | Refuted | U/E/T | Exact GT | Quality before -> after | Better / equal / worse | Row wall |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| c_mba_obfuscator | 152 | 152 | 0 | 0/0/0 | 140 | 69.5511x -> 1.0654x | 151 / 0 / 1 | 644.5s |
+| floki | 19 | 19 | 0 | 0/0/0 | 15 | 55.3892x -> 1.5364x | 19 / 0 / 0 | 69.3s |
+| loki | 144 | 143 | 0 | 0/1/0 | 133 | 431.9448x -> 1.4953x | 134 / 2 / 7 | 611.7s |
+| loki_tiny | 403 | 403 | 0 | 0/0/0 | 401 | 16.4268x -> 1.0113x | 403 / 0 / 0 | 531.6s |
+| mba_flatten | 96 | 96 | 0 | 0/0/0 | 36 | 2.7087x -> 1.1426x | 96 / 0 / 0 | 707.3s |
+| mba_obf_nonlinear | 255 | 255 | 0 | 0/0/0 | 238 | 13.4231x -> 0.6802x | 255 / 0 / 0 | 953.4s |
+| neureduce | 53 | 53 | 0 | 0/0/0 | 49 | 3.5649x -> 0.9087x | 53 / 0 / 0 | 261.7s |
+| obfuscatorx | 7 | 7 | 0 | 0/0/0 | 7 | 1.3104x -> 0.8857x | 7 / 0 / 0 | 68.2s |
+| omvll | 92 | 92 | 0 | 0/0/0 | 21 | 481.5234x -> 15.5922x | 85 / 0 / 4 | 1,055.6s |
+| oses | 4 | 4 | 0 | 0/0/0 | 1 | 10.8662x -> 5.1414x | 2 / 1 / 1 | 19.9s |
+| permutation64 | 10 | 10 | 0 | 0/0/0 | 10 | 76.1156x -> 0.9500x | 10 / 0 / 0 | 57.3s |
+| pldi_poly | 62 | 62 | 0 | 0/0/0 | 22 | 2.5679x -> 1.1945x | 62 / 0 / 0 | 482.3s |
+| qsynth_ea | 60 | 60 | 0 | 0/0/0 | 30 | 11.0762x -> 1.2309x | 59 / 0 / 1 | 423.6s |
+| simba_e1_3vars | 40 | 40 | 0 | 0/0/0 | 40 | 13.1727x -> 1.0000x | 40 / 0 / 0 | 89.4s |
+| simba_e1_4vars | 12 | 12 | 0 | 0/0/0 | 12 | 113.1366x -> 1.0000x | 12 / 0 / 0 | 29.0s |
+| simba_e2_3vars | 37 | 37 | 0 | 0/0/0 | 37 | 47.4562x -> 1.0000x | 37 / 0 / 0 | 84.1s |
+| simba_e3_3vars | 30 | 30 | 0 | 0/0/0 | 30 | 8.9435x -> 1.0000x | 30 / 0 / 0 | 70.2s |
+| simba_e4_3vars | 61 | 61 | 0 | 0/0/0 | 61 | 6.3638x -> 1.0000x | 61 / 0 / 0 | 209.1s |
+| tigress_l5 | 23 | 23 | 0 | 0/0/0 | 2 | 437.4347x -> 119.1323x | 22 / 0 / 1 | 232.2s |
+| tigress_l6 | 84 | 84 | 0 | 0/0/0 | 4 | 1450.2012x -> 172.6973x | 73 / 5 / 2 | 834.7s |
+| tigress_l7 | 89 | 89 | 0 | 0/0/0 | 0 | 3016.6390x -> 610.7064x | 84 / 2 / 3 | 966.1s |
+| tigress_l8 | 143 | 140 | 0 | 0/0/3 | 9 | 18349.0849x -> 2599.5295x | 121 / 8 / 10 | 2,657.3s |
+| **Overall parallel** | **1,876** | **1,872** | **0** | **0/1/3** | **1,298** | **59.9565x -> 3.7192x** | **1,816 / 18 / 30** | **11,058.6s** |
+
+The one parallel error is the known malformed Loki `line_0001001`. The three
+parallel timeouts were Tigress-L8 targets 1281, 1285, and 5697. The parallel
+numbers above are preserved unchanged. All three timeout rows were rerun with
+one worker and independently proved directly (three `proved`, zero unresolved),
+with net-neutral outputs. Isolated artifacts are retained at:
+
+```text
+/tmp/r34-all-failing-isolated/out.jsonl
+```
+
+The separate 62-case regression smoke gate, from the same `039ed2a` binary, is
+retained at `/tmp/r34-gate/smoke/out.jsonl`: 62/62 established, zero refuted or
+unresolved, 52 exact-GT, quality `0.7846x -> 0.9079x`, and `3 / 49 / 10`
+better/equal/worse in 37.3 seconds elapsed (258.9 cumulative row-seconds).
