@@ -1379,25 +1379,25 @@ shifts, low slices, shifted-away restrictions and complemented scaled terms;
 Parity and target artifacts:
 
 ```text
-/tmp/r36-l5/out.jsonl
-/tmp/r36-core/out.jsonl
-/tmp/r36-core-isolated/out.jsonl
-/tmp/r36-smoke/out.jsonl
-/tmp/r36-smoke-isolated/out.jsonl
+/tmp/r36-final-l5/out.jsonl
+/tmp/r36-final-core/out.jsonl
+/tmp/r36-final-core-isolated/out.jsonl
+/tmp/r36-final-smoke/out.jsonl
 ```
 
 | Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse |
 |---|---:|---:|---:|---:|
-| Tigress L5 all_non_exact | 450/450 | 61 | 25.4124x -> 13.7133x | 242 / 113 / 95 |
-| Refreshed core hard | 353/353* | 13 | 24.3105x -> 17.2171x | 52 / 273 / 25 |
-| Regression smoke | 62/62 | 52 | 0.7846x -> 0.8969x | 3 / 49 / 10 |
+| Tigress L5 all_non_exact | 450/450 | 59 | 25.4124x -> 14.8828x | 238 / 108 / 104 |
+| Refreshed core hard | 353/353* | 17 | 24.3105x -> 17.1394x | 59 / 266 / 25 |
+| Regression smoke | 62/62 | 53 | 0.7846x -> 0.8860x | 4 / 49 / 9 |
 
-`*` The eight-worker core run had six Tigress-L8 process timeouts; all six
-proved directly on isolated one-worker rerun with net-neutral outputs. The raw
-parallel smoke run was 62/62 established but contained one severe
-Multivariate64 contention result (1.0089x); isolated replay restored `2403 -> 3`
-and the 0.8969x overlay quality shown above. There are zero refutations or
-remaining timeout/error verdicts after isolated replay. Focused Tigress-L5
-results include target 6533 exact (`564 -> 5`), target 3126 (`5639 -> 19`, GT
-19), target 3500 (`4605 -> 13`, GT 11), and target 4671 (`2421 -> 10`, GT 7).
-The deeply wrapped Tigress-L8 giant targets still require further exposure.
+`*` The final eight-worker core run had three Tigress-L8 process timeouts; all
+three proved directly on isolated one-worker rerun with net-neutral outputs.
+The final smoke run established 62/62 directly with zero unresolved rows and no
+isolation adjustment. There are zero refutations or remaining timeout/error
+verdicts after isolated replay. Focused Tigress-L5 results include target 3126
+exact (`5639 -> 19`), target 3500 (`4605 -> 13`, GT 11), target 4671
+(`2421 -> 10`, GT 7), and target 6533 (`564 -> 11`, GT 5). The stricter
+semi-linear slice hotfix reduces the final L5 exact count from the pre-hotfix
+61 to 59 while restoring the required proof-kernel soundness. Deeply wrapped
+Tigress-L8 giant targets still require further exposure.

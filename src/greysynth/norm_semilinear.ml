@@ -37,6 +37,20 @@ let semilinear_mba_candidate cost expression =
     and saw_nonuniform = ref false
     and opaque = Nodes.create 8 and linear_seen = Nodes.create 128
     and bitwise_seen = Nodes.create 128 in
+    let add_opaque atom =
+      Nodes.replace opaque atom ();
+      if Nodes.length opaque > 6 then raise Too_complex
+    in
+    let add_slice_mask hi =
+      let value = Z.pred (Z.shift_left Z.one (hi + 1)) in
+      Hashtbl.replace constants value ();
+      Hashtbl.replace bitwise_constants value ();
+      if not (Z.equal value Z.zero) && not (Z.equal value (Z.pred (Z.shift_left Z.one width)))
+      then saw_nonuniform := true
+    in
+    let valid_slice amount hi inner =
+      amount > 0 && hi + 1 + amount = E.sizeof inner
+    in
     let rec inspect under_bitwise node =
       if Unix.gettimeofday () > deadline then raise Too_complex;
       let seen = if under_bitwise then bitwise_seen else linear_seen in
@@ -51,20 +65,33 @@ let semilinear_mba_candidate cost expression =
               if not (Bitvector.is_zeros value || Bitvector.is_fill value)
               then saw_nonuniform := true
           | E.Unary { f = E.Not; x; _ } -> inspect true x
+          | E.Unary { f = E.Uext amount;
+                      x = E.Unary { f = E.Restrict { lo = 0; hi }; x = inner; _ }; _ }
+            when valid_slice amount hi inner ->
+              add_slice_mask hi;
+              inspect true inner
           | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
               inspect true x; inspect true y
-          | atom ->
-              Nodes.replace opaque atom ();
-              if Nodes.length opaque > 6 then raise Too_complex
+          | atom -> add_opaque atom
         else
           match node with
-          | E.Unary { f = E.Not; x; _ } -> inspect false x
+          | E.Unary { f = E.Not; x; _ }
+          | E.Unary { f = E.Minus; x; _ } -> inspect false x
+          | E.Unary { f = E.Uext amount;
+                      x = E.Unary { f = E.Restrict { lo = 0; hi }; x = inner; _ }; _ }
+            when valid_slice amount hi inner ->
+              add_slice_mask hi;
+              inspect true inner
+          | E.Unary { f = (E.Uext _ | E.Sext _ | E.Restrict _); _ } as atom ->
+              add_opaque atom
           | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
               inspect true x; inspect true y
-          | E.Unary { x; _ } -> inspect false x
-          | E.Binary { x; y; _ } -> inspect false x; inspect false y
-          | E.Ite { c; t; e; _ } -> inspect false c; inspect false t; inspect false e
-          | _ -> ())
+          | E.Binary { f = (E.Plus | E.Minus); x; y; _ } ->
+              inspect false x; inspect false y
+          | E.Binary { f = E.Mul; x = E.Cst _; y; _ }
+          | E.Binary { f = E.Mul; x = y; y = E.Cst _; _ }
+          | E.Binary { f = E.Lsl; x = y; y = E.Cst _; _ } -> inspect false y
+          | atom -> add_opaque atom)
     in
     let preflight_ok =
       try inspect false expression; true with Too_complex -> false

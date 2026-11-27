@@ -1119,7 +1119,10 @@ let semilinear_mba_equal g left right =
         | Unary ("zero_extend", [amount], child), _ when amount > 0 ->
             (match (node g child).shape with
             | Unary ("extract", [0; hi], inner)
-              when hi + 1 + amount = (node g inner).width -> collect_bitwise inner
+              when hi + 1 + amount = (node g inner).width ->
+                Hashtbl.replace constants id
+                  (Bitvector.create (Z.pred (Z.shift_left Z.one (hi + 1))) width);
+                collect_bitwise inner
             | _ -> add_atom id)
         | Binary (("bvand" | "bvor" | "bvxor"), x, y), _ ->
             collect_bitwise x;
@@ -1133,7 +1136,7 @@ let semilinear_mba_equal g left right =
         | Unary ("zero_extend", [amount], child), _ when amount > 0 ->
             (match (node g child).shape with
             | Unary ("extract", [0; hi], inner)
-              when hi + 1 + amount = (node g inner).width -> collect_linear inner
+              when hi + 1 + amount = (node g inner).width -> collect_bitwise id
             | _ -> add_atom id)
         | Binary (("bvadd" | "bvsub"), x, y), _ ->
             collect_linear x;
@@ -1218,8 +1221,7 @@ let semilinear_mba_equal g left right =
                 | Unary ("zero_extend", [amount], child), _ when amount > 0 ->
                     (match (node g child).shape with
                     | Unary ("extract", [0; hi], inner)
-                      when hi + 1 + amount = (node g inner).width ->
-                        Z.logand (linear inner) (Z.pred (Z.shift_left Z.one (hi + 1)))
+                      when hi + 1 + amount = (node g inner).width -> bitwise id
                     | _ -> raise Ring_limit)
                 | Binary ("bvadd", x, y), _ -> Z.add (linear x) (linear y)
                 | Binary ("bvsub", x, y), _ -> Z.sub (linear x) (linear y)
