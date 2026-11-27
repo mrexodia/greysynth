@@ -6,14 +6,26 @@ include Norm_poly
 module AndPolynomial = Map.Make (Int)
 
 let polysim_candidate cost expression =
-  let rec has_nonlinear_product = function
-    | E.Binary { f = E.Mul; x; y; _ }
-      when Option.is_none (constant_value x) && Option.is_none (constant_value y) -> true
-    | E.Unary { x; _ } -> has_nonlinear_product x
-    | E.Binary { x; y; _ } -> has_nonlinear_product x || has_nonlinear_product y
-    | E.Ite { c; t; e; _ } ->
-        has_nonlinear_product c || has_nonlinear_product t || has_nonlinear_product e
-    | _ -> false
+  let nonlinear_memo = Nodes.create 128 in
+  let rec has_nonlinear_product node =
+    match Nodes.find_opt nonlinear_memo node with
+    | Some result -> result
+    | None ->
+        let result =
+          match node with
+          | E.Binary { f = E.Mul; x; y; _ }
+            when Option.is_none (constant_value x)
+                 && Option.is_none (constant_value y) -> true
+          | E.Unary { x; _ } -> has_nonlinear_product x
+          | E.Binary { x; y; _ } ->
+              has_nonlinear_product x || has_nonlinear_product y
+          | E.Ite { c; t; e; _ } ->
+              has_nonlinear_product c || has_nonlinear_product t
+              || has_nonlinear_product e
+          | _ -> false
+        in
+        Nodes.add nonlinear_memo node result;
+        result
   in
   if not (has_nonlinear_product expression) then None else
   let width = E.sizeof expression in
@@ -22,14 +34,21 @@ let polysim_candidate cost expression =
     let value = Z.erem value modulus in
     if Z.sign value < 0 then Z.add value modulus else value
   in
-  let atoms_table = Nodes.create 32 in
-  let rec collect_bitwise = function
+  let atoms_table = Nodes.create 32 and collected_bitwise = Nodes.create 128
+  and collected_ring = Nodes.create 128 in
+  let rec collect_bitwise node =
+    if not (Nodes.mem collected_bitwise node) then (
+      Nodes.add collected_bitwise node ();
+      match node with
     | E.Cst value when Bitvector.is_zeros value || Bitvector.is_fill value -> ()
     | E.Unary { f = E.Not; x; _ } -> collect_bitwise x
     | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
         collect_bitwise x; collect_bitwise y
-    | atom -> Nodes.replace atoms_table atom ()
-  and collect_ring = function
+    | atom -> Nodes.replace atoms_table atom ());
+  and collect_ring node =
+    if not (Nodes.mem collected_ring node) then (
+      Nodes.add collected_ring node ();
+      match node with
     | E.Unary { f = E.Minus; x; _ } -> collect_ring x
     | E.Binary { f = (E.Plus | E.Minus | E.Mul); x; y; _ } ->
         collect_ring x; collect_ring y
@@ -37,7 +56,7 @@ let polysim_candidate cost expression =
       | E.Binary { f = (E.And | E.Or | E.Xor); _ }) as bitwise ->
         collect_bitwise bitwise
     | E.Cst _ -> ()
-    | atom -> Nodes.replace atoms_table atom ()
+    | atom -> Nodes.replace atoms_table atom ())
   in
   collect_ring expression;
   let atoms =
@@ -58,16 +77,24 @@ let polysim_candidate cost expression =
       in
       find 0
     in
+    let pure_memo = Nodes.create 128 in
     let rec pure_bitwise expression =
-      match atom_index expression with
-      | Some _ -> true
+      match Nodes.find_opt pure_memo expression with
+      | Some result -> result
       | None ->
-          match expression with
-          | E.Cst value -> Bitvector.is_zeros value || Bitvector.is_fill value
-          | E.Unary { f = E.Not; x; _ } -> pure_bitwise x
-          | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
-              pure_bitwise x && pure_bitwise y
-          | _ -> false
+          let result =
+            match atom_index expression with
+            | Some _ -> true
+            | None ->
+                match expression with
+                | E.Cst value -> Bitvector.is_zeros value || Bitvector.is_fill value
+                | E.Unary { f = E.Not; x; _ } -> pure_bitwise x
+                | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+                    pure_bitwise x && pure_bitwise y
+                | _ -> false
+          in
+          Nodes.add pure_memo expression result;
+          result
     in
     let operations = ref 0 and total_monomials = ref 0 in
     let tick () =

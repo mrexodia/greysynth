@@ -86,7 +86,7 @@ let test_oes_legacy_collision () =
 let test_strict_oes_unknown () =
   reset ~strict:true ();
   let original = plus x zero in
-  Hashtbl.add R.proofs (R.proof_key original x) U.Unknown;
+  R.ExprPairTbl.add R.proofs (R.proof_key original x) U.Unknown;
   let result, count = O.linear_simplify ~seed:false original in
   require (E.compare original result = 0) "OES accepted an unproven rewrite";
   require (!count = 0) "rejected OES rewrite was counted";
@@ -95,8 +95,8 @@ let test_strict_oes_unknown () =
 let test_strict_relational_unknown () =
   reset ~strict:true ();
   let original = plus (E.binary E.Or x y) (E.binary E.And x y) in
-  Hashtbl.add R.proofs (R.proof_key original (plus x y)) U.Unknown;
-  Hashtbl.add R.proofs (R.proof_key original (plus y x)) U.Unknown;
+  R.ExprPairTbl.add R.proofs (R.proof_key original (plus x y)) U.Unknown;
+  R.ExprPairTbl.add R.proofs (R.proof_key original (plus y x)) U.Unknown;
   let result, count = O.relational_pass original in
   require (E.compare original result = 0)
     "relational pass accepted an unproven rewrite";
@@ -112,7 +112,7 @@ let test_strict_cache_unknown () =
     Array.iter
       (fun a ->
         Array.iter
-          (fun b -> Hashtbl.replace R.proofs (R.proof_key a b) U.Unknown)
+          (fun b -> R.ExprPairTbl.replace R.proofs (R.proof_key a b) U.Unknown)
           chains)
       chains;
     (* Both traversal orders encounter a large chain after a small cached
@@ -382,8 +382,8 @@ let test_larger_proof_budget_retries () =
   reset ~strict:true ();
   let original = plus x zero in
   let key = R.proof_key original x in
-  Hashtbl.replace R.proofs key U.Timeout;
-  Hashtbl.replace R.proof_budgets key 1.;
+  R.ExprPairTbl.replace R.proofs key U.Timeout;
+  R.ExprPairTbl.replace R.proof_budgets key 1.;
   C.c_equiv_timeout := 5;
   require (R.accepts ~pass:"retry-test" original x)
     "larger proof budget did not retry an inconclusive obligation";
@@ -391,7 +391,8 @@ let test_larger_proof_budget_retries () =
   reset ~strict:true ();
   let key = R.proof_key original x in
   let left, right = key in
-  Hashtbl.replace R.compositional_budgets (left, right, "cached-compositional") 5.;
+  R.ExprPairPassTbl.replace R.compositional_budgets
+    (left, right, "cached-compositional") 5.;
   C.c_equiv_timeout := 5;
   require
     (not (R.accepts_compositional ~pass:"cached-compositional"
@@ -406,7 +407,7 @@ let test_larger_proof_budget_retries () =
   R.start_recording original;
   let builder = Option.get !(R.journal) in
   P.record builder ~pass:"prior-proof" original x;
-  Hashtbl.replace R.proofs (R.proof_key original x) U.Yes;
+  R.ExprPairTbl.replace R.proofs (R.proof_key original x) U.Yes;
   require
     (R.accepts_compositional ~pass:"cached-endpoint"
        ~equalities:[] ~ring_equalities:[ x, plus x (c 64 1) ] original x)
@@ -848,7 +849,7 @@ let test_pipeline_portfolio_transaction () =
       (R.accepts_compositional ~pass ~equalities:[]
          ~ring_equalities:[ input, candidate ] input candidate)
       (pass ^ ": fixture rewrite was rejected");
-    Hashtbl.replace R.proofs (R.proof_key input cache_marker) U.Yes;
+    R.ExprPairTbl.replace R.proofs (R.proof_key input cache_marker) U.Yes;
     L.log_linear_size_after := log_marker;
     candidate
   in
@@ -864,9 +865,9 @@ let test_pipeline_portfolio_transaction () =
     "pipeline portfolio did not select the strictly smaller branch";
   require (!(L.log_linear_size_after) = 222)
     "pipeline portfolio did not restore the winner's logs";
-  require (Hashtbl.mem R.proofs (R.proof_key original marker_b))
+  require (R.ExprPairTbl.mem R.proofs (R.proof_key original marker_b))
     "pipeline portfolio lost the winner's rewrite cache";
-  require (not (Hashtbl.mem R.proofs (R.proof_key original marker_a)))
+  require (not (R.ExprPairTbl.mem R.proofs (R.proof_key original marker_a)))
     "pipeline portfolio leaked the discarded branch's rewrite cache";
   let certificate = P.finish (Option.get !(R.journal)) result in
   let passes =

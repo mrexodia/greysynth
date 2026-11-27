@@ -52,42 +52,60 @@ let write_certificate filename result =
 
 (* Keep validation inputs independent of the synthesis/OES sample bank. *)
 let holdout = ref (Sample_evaluator.make 32)
-let proof_key left right =
-  if Sexpr.Expr.compare left right <= 0 then (left, right) else (right, left)
+module ExprPairTbl = Hashtbl.Make (struct
+  type t = Sexpr.Expr.t * Sexpr.Expr.t
+  let equal (a, b) (c, d) =
+    (Sexpr.Expr.is_equal a c && Sexpr.Expr.is_equal b d)
+    || (Sexpr.Expr.is_equal a d && Sexpr.Expr.is_equal b c)
+  let hash (a, b) = Sexpr.Expr.hash a lxor Sexpr.Expr.hash b
+end)
 
-let proofs : (Sexpr.Expr.t * Sexpr.Expr.t, equiv_t) Hashtbl.t =
-  Hashtbl.create 128
+module ExprPairPassTbl = Hashtbl.Make (struct
+  type t = Sexpr.Expr.t * Sexpr.Expr.t * string
+  let equal (a, b, pass) (c, d, other_pass) =
+    String.equal pass other_pass
+    && ((Sexpr.Expr.is_equal a c && Sexpr.Expr.is_equal b d)
+        || (Sexpr.Expr.is_equal a d && Sexpr.Expr.is_equal b c))
+  let hash (a, b, pass) =
+    (Sexpr.Expr.hash a lxor Sexpr.Expr.hash b) lxor Hashtbl.hash pass
+end)
+
+let proof_key left right = left, right
+
+let proofs : equiv_t ExprPairTbl.t = ExprPairTbl.create 128
 
 (* Unknown and timeout results are reusable only for an equal or smaller
    budget. A larger budget is a meaningful retry; repeating the same query is
    just lost simplification time. Entries inserted directly by tests or API
    users without a budget remain authoritative. *)
-let proof_budgets : (Sexpr.Expr.t * Sexpr.Expr.t, float) Hashtbl.t =
-  Hashtbl.create 128
-let compositional_budgets : (Sexpr.Expr.t * Sexpr.Expr.t * string, float) Hashtbl.t =
-  Hashtbl.create 128
+let proof_budgets : float ExprPairTbl.t = ExprPairTbl.create 128
+let compositional_budgets : float ExprPairPassTbl.t = ExprPairPassTbl.create 128
 
 type cache_checkpoint = {
-  cached_proofs : (Sexpr.Expr.t * Sexpr.Expr.t, equiv_t) Hashtbl.t;
-  cached_budgets : (Sexpr.Expr.t * Sexpr.Expr.t, float) Hashtbl.t;
-  cached_compositional : (Sexpr.Expr.t * Sexpr.Expr.t * string, float) Hashtbl.t;
+  cached_proofs : equiv_t ExprPairTbl.t;
+  cached_budgets : float ExprPairTbl.t;
+  cached_compositional : float ExprPairPassTbl.t;
 }
 
 let checkpoint_caches () =
   {
-    cached_proofs = Hashtbl.copy proofs;
-    cached_budgets = Hashtbl.copy proof_budgets;
-    cached_compositional = Hashtbl.copy compositional_budgets;
+    cached_proofs = ExprPairTbl.copy proofs;
+    cached_budgets = ExprPairTbl.copy proof_budgets;
+    cached_compositional = ExprPairPassTbl.copy compositional_budgets;
   }
 
-let restore_table target source =
-  Hashtbl.clear target;
-  Hashtbl.iter (Hashtbl.replace target) source
+let restore_pair_table target source =
+  ExprPairTbl.clear target;
+  ExprPairTbl.iter (ExprPairTbl.replace target) source
+
+let restore_pass_table target source =
+  ExprPairPassTbl.clear target;
+  ExprPairPassTbl.iter (ExprPairPassTbl.replace target) source
 
 let restore_caches checkpoint =
-  restore_table proofs checkpoint.cached_proofs;
-  restore_table proof_budgets checkpoint.cached_budgets;
-  restore_table compositional_budgets checkpoint.cached_compositional
+  restore_pair_table proofs checkpoint.cached_proofs;
+  restore_pair_table proof_budgets checkpoint.cached_budgets;
+  restore_pass_table compositional_budgets checkpoint.cached_compositional
 
 let reset ?original () =
   List.iter (fun counter -> counter := 0)
@@ -99,9 +117,9 @@ let reset ?original () =
     | Some expression ->
         Sample_evaluator.make ~variables:(Sample_evaluator.variables_of_expr expression)
           ~seed:1 32);
-  Hashtbl.clear proofs;
-  Hashtbl.clear proof_budgets;
-  Hashtbl.clear compositional_budgets;
+  ExprPairTbl.clear proofs;
+  ExprPairTbl.clear proof_budgets;
+  ExprPairPassTbl.clear compositional_budgets;
   counterexamples := [];
   journal := None
 
@@ -163,13 +181,13 @@ let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
         else !g_total_timeout -. (Unix.gettimeofday () -. !g_start_time)
       in
       let budget = min (float_of_int !c_equiv_timeout) (max 0.001 remaining) in
-      let cached = Hashtbl.find_opt proofs key in
+      let cached = ExprPairTbl.find_opt proofs key in
       let compositional_key =
         let left, right = key in
         (left, right, pass)
       in
       let attempted =
-        Option.value (Hashtbl.find_opt compositional_budgets compositional_key)
+        Option.value (ExprPairPassTbl.find_opt compositional_budgets compositional_key)
           ~default:0.
       in
       if cached = Some Yes then (
@@ -179,11 +197,11 @@ let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
         last_rejection := "none";
         incr proved;
         true)
-      else if Option.is_some cached && not (Hashtbl.mem proof_budgets key) then (
+      else if Option.is_some cached && not (ExprPairTbl.mem proof_budgets key) then (
         last_rejection := "smt_inconclusive";
         incr inconclusive;
         false)
-      else if Hashtbl.mem compositional_budgets compositional_key
+      else if ExprPairPassTbl.mem compositional_budgets compositional_key
               && attempted >= budget then (
         last_rejection := "smt_inconclusive";
         incr inconclusive;
@@ -215,8 +233,8 @@ let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
       | Some "proved_compositional" ->
           incr proved;
           last_rejection := "none";
-          Hashtbl.replace proofs key Yes;
-          Hashtbl.replace proof_budgets key budget;
+          ExprPairTbl.replace proofs key Yes;
+          ExprPairTbl.replace proof_budgets key budget;
           record_equalities ();
           true
       | _ ->
@@ -227,7 +245,7 @@ let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
           | _ ->
               incr inconclusive;
               last_rejection := "smt_inconclusive");
-          Hashtbl.replace compositional_budgets compositional_key budget;
+          ExprPairPassTbl.replace compositional_budgets compositional_key budget;
           false)
 
 let accepts ?timeout ?(allow_equal_cost = false) ~pass original candidate =
@@ -270,11 +288,11 @@ let accepts ?timeout ?(allow_equal_cost = false) ~pass original candidate =
         false)
       else
       let cached =
-        match Hashtbl.find_opt proofs key with
+        match ExprPairTbl.find_opt proofs key with
         | Some (Yes | No as verdict) -> Some verdict
         | Some (Unknown | Timeout | Disabled as verdict) ->
             let attempted =
-              Option.value (Hashtbl.find_opt proof_budgets key) ~default:Float.infinity
+              Option.value (ExprPairTbl.find_opt proof_budgets key) ~default:Float.infinity
             in
             if attempted >= budget then Some verdict else None
         | None -> None
@@ -287,8 +305,8 @@ let accepts ?timeout ?(allow_equal_cost = false) ~pass original candidate =
             let verdict, _, model =
               Rewrite_proof.prove_equality_with_model ~timeout:budget original candidate
             in
-            Hashtbl.replace proofs key verdict;
-            Hashtbl.replace proof_budgets key budget;
+            ExprPairTbl.replace proofs key verdict;
+            ExprPairTbl.replace proof_budgets key budget;
             (verdict, model)
       in
       check_timeout ();

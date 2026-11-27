@@ -13,12 +13,24 @@ let constant width value = E.constant (Bitvector.create value width)
 let integer width value = constant width (Z.of_int value)
 let zeros width = integer width 0
 
-let rec constant_value = function
-  | E.Cst value -> Some value
-  | E.Unary { f; x; _ } ->
-      Option.bind (constant_value x) (fun value ->
-          try Some (Term.Bv.unary f value) with _ -> None)
-  | _ -> None
+let constant_value expression =
+  let memo = Nodes.create 16 in
+  let rec visit node =
+    match Nodes.find_opt memo node with
+    | Some result -> result
+    | None ->
+        let result =
+          match node with
+          | E.Cst value -> Some value
+          | E.Unary { f; x; _ } ->
+              Option.bind (visit x) (fun value ->
+                  try Some (Term.Bv.unary f value) with _ -> None)
+          | _ -> None
+        in
+        Nodes.add memo node result;
+        result
+  in
+  visit expression
 
 let canonical_bitwise_atom expression =
   match constant_value expression with

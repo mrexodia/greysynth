@@ -75,7 +75,7 @@ let test_fail_closed () =
   reset ();
   let x = var 32 "x" in
   let original = plus x (c 32 0) in
-  Hashtbl.replace R.proofs (R.proof_key original x) U.Unknown;
+  R.ExprPairTbl.replace R.proofs (R.proof_key original x) U.Unknown;
   let result = N.run original in
   require (E.is_equal result original) "normalizer accepted an unknown proof";
   require (!(R.inconclusive) > 0) "normalizer bypassed the proof boundary"

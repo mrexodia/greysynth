@@ -1484,3 +1484,49 @@ refutations or unresolved rows after isolation. Focused wins include Tigress-L5
 target 1373 (`4264 -> 5` exact), target 1499 (`9664 -> 5` exact), target 3500
 (`4605 -> 11` exact), and target 5498 (`41387 -> 7` exact). More deeply wrapped
 targets such as 158, 2968, 3728, and 2618 improve but remain above GT.
+
+## Round-39 DAG memoization and zero-SMT-first scheduling
+
+Round 39 makes preprocessing explicitly DAG-native for highly shared inputs.
+Critical recursive normalization analyses now memoize with `Sexpr.BvTbl`, the
+rewrite caches use hash-cons-aware expression-pair tables, and the proof graph's
+expression index uses `Sexpr.BvTbl` without changing any replay rule or proof
+semantics.
+
+`dag_bottom_up_simplify` now supports a zero-SMT mode, a cumulative SMT budget,
+an optional local deadline, and soft stopping. A soft stop keeps every accepted
+subtree rewrite in the memo table and rebuilds the unsimplified ancestors rather
+than throwing away partial work. Every SMT-backed local check has an explicit
+short timeout; once the cumulative budget is exhausted, decidable linear,
+semi-linear, ring, polynomial, product, complement, and correlated-null passes
+continue without invoking Bitwuzla. Highly shared roots receive the zero-SMT DAG
+phase before expensive root expansion. Small-root cleanup also includes
+zero-SMT product peeling and opaque-atom probing.
+
+`test/round39_test.ml` covers a synthetic million-node AST with fewer than 100
+DAG nodes, soft local-deadline preservation, target-2618-style exact product
+cleanup, and independent compositional certificate replay. The complete
+warning-clean `make test` gate passes.
+
+Final eight-worker artifacts:
+
+```text
+/tmp/r39-l5/out.jsonl
+/tmp/r39-core/out.jsonl
+/tmp/r39-smoke/out.jsonl
+```
+
+| Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| Tigress L5 all_non_exact | 450/450 | 155 | 25.4124x -> 5.2131x | 344 / 23 / 83 |
+| Refreshed core hard | 353/353 | 71 | 24.3105x -> 3.4329x | 166 / 163 / 21 |
+| Regression smoke | 62/62 | 53 | 0.7846x -> 0.8304x | 6 / 49 / 7 |
+
+All 450 Tigress-L5 rows strictly decrease; the previous 16 net-neutral stalls
+are eliminated. Core hard establishes all 353 rows directly in the parallel
+run with zero timeouts, zero unknowns, and zero refutations; only four unrelated
+non-Tigress rows remain net-neutral. Giant Tigress-L8 reductions include
+`target_1169: 4,377,943 -> 474`, `target_6503: 2,702,423 -> 96`,
+`target_3601: 2,666,519 -> 80`, `target_126: 2,486,999 -> 80`, and
+`target_2790: 2,463,063 -> 7` exact. Tigress-L5 `target_158` now reaches its
+size-9 GT.

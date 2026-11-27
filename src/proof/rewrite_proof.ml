@@ -17,7 +17,7 @@ type graph = {
   mutable nodes : node array;
   mutable count : int;
   intern : (int * shape, int) Hashtbl.t;
-  expressions : (E.t, int) Hashtbl.t;
+  expressions : int Sexpr.BvTbl.t;
 }
 type proof_rule =
   | Smt | Ring_mod2w | Poly_mod2w | Linear_mba_mod2w
@@ -41,7 +41,7 @@ let dummy =
     expr = E.constant (Bitvector.of_int ~size:1 0); cost = 1 }
 let graph () =
   { nodes = Array.make 128 dummy; count = 0; intern = Hashtbl.create 128;
-    expressions = Hashtbl.create 128 }
+    expressions = Sexpr.BvTbl.create 128 }
 let children = function
   | Variable _ | Value _ -> []
   | Unary (_, _, x) -> [x]
@@ -138,7 +138,7 @@ let intern g width shape =
       id
 
 let rec of_expr g expression =
-  match Hashtbl.find_opt g.expressions expression with
+  match Sexpr.BvTbl.find_opt g.expressions expression with
   | Some id -> id
   | None ->
       let shape = match expression with
@@ -163,7 +163,7 @@ let rec of_expr g expression =
         | E.Load _ -> fail "memory loads are outside the proof semantics"
       in
       let id = intern g (E.sizeof expression) shape in
-      Hashtbl.add g.expressions expression id;
+      Sexpr.BvTbl.add g.expressions expression id;
       id
 
 let create original =

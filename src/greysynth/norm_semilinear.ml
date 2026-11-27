@@ -419,13 +419,22 @@ let demand_bits_candidate cost expression =
   | E.Binary { f = E.And; x = term; y = E.Cst mask; _ }
   | E.Binary { f = E.And; x = E.Cst mask; y = term; _ } ->
       Option.bind (low_mask mask) (fun (bits, mask_value) ->
-          let rec narrow = function
-            | E.Cst value ->
-                constant (Bitvector.size_of value)
-                  (Z.logand (Bitvector.value_of value) mask_value)
-            | E.Unary { f; x; _ } -> E.unary f (narrow x)
-            | E.Binary { f; x; y; _ } -> E.binary f (narrow x) (narrow y)
-            | value -> value
+          let memo = Nodes.create 64 in
+          let rec narrow node =
+            match Nodes.find_opt memo node with
+            | Some result -> result
+            | None ->
+                let result =
+                  match node with
+                  | E.Cst value ->
+                      constant (Bitvector.size_of value)
+                        (Z.logand (Bitvector.value_of value) mask_value)
+                  | E.Unary { f; x; _ } -> E.unary f (narrow x)
+                  | E.Binary { f; x; y; _ } -> E.binary f (narrow x) (narrow y)
+                  | value -> value
+                in
+                Nodes.add memo node result;
+                result
           in
           let narrowed = E.binary E.And (narrow term) (constant width mask_value) in
           let zero_candidate =

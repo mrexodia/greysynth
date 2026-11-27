@@ -5,17 +5,39 @@
 open Config
 include Norm_probes
 
-let dag_bottom_up_simplify ?(minimal = false) expression =
+let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
+    ?(smt_budget = 1.2) ?deadline expression =
   let memo = Nodes.create 256 in
   let constants = Sample_evaluator.make 1 in
   let cost = Greysynth_utils.Utils.size_of_expr in
+  let soft_stopped = ref false and smt_spent = ref 0.0 in
+  let should_stop () =
+    let now = Unix.gettimeofday () in
+    let local = Option.fold ~none:false ~some:(fun limit -> now >= limit) deadline in
+    let global =
+      !g_total_timeout > 0.
+      && !g_total_timeout -. (now -. !g_start_time) <= 0.35
+    in
+    if local || global then soft_stopped := true;
+    !soft_stopped
+  in
+  let try_smt thunk =
+    if zero_smt || !soft_stopped || !smt_spent >= smt_budget then false
+    else
+      let started = Unix.gettimeofday () in
+      let result =
+        try thunk () with Timeout_exception -> soft_stopped := true; false
+      in
+      smt_spent := !smt_spent +. (Unix.gettimeofday () -. started);
+      result
+  in
   let rec visit node =
     match Nodes.find_opt memo node with
     | Some result -> result
     | None ->
-        check_timeout ();
+        ignore (should_stop ());
         let semantic_child child =
-          if minimal then child else
+          if minimal || !soft_stopped then child else
           match is_semantically_bitwise cost child with
           | Some candidate
             when Rewrite.accepts_compositional ~pass:"dag-semantic-bitwise"
@@ -34,27 +56,32 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
           | _ -> node
         in
         let result = ref rebuilt in
+        if not !soft_stopped then
+        (try
         (match constant_cast_fold_candidate constants.eval !result with
         | Some candidate
-          when Rewrite.accepts ~allow_equal_cost:true ~timeout:0.15
-                 ~pass:"dag-constant-cast" !result candidate ->
+          when try_smt (fun () ->
+                 Rewrite.accepts ~allow_equal_cost:true ~timeout:0.15
+                   ~pass:"dag-constant-cast" !result candidate) ->
             result := candidate
         | _ -> ());
         (match restrict_factoring_candidate !result with
         | Some candidate
-          when Rewrite.accepts ~allow_equal_cost:true ~timeout:0.15
-                 ~pass:"dag-restrict-factor" !result candidate ->
+          when try_smt (fun () ->
+                 Rewrite.accepts ~allow_equal_cost:true ~timeout:0.15
+                   ~pass:"dag-restrict-factor" !result candidate) ->
             result := candidate
         | _ -> ());
         (match bit0_parity_candidate cost !result with
         | Some candidate
-          when Rewrite.accepts ~timeout:0.15 ~pass:"dag-bit0-parity" !result candidate ->
+          when try_smt (fun () -> Rewrite.accepts ~timeout:0.15
+                 ~pass:"dag-bit0-parity" !result candidate) ->
             result := candidate
         | _ -> ());
         (match abstract_slice_candidate !result with
         | Some candidate
-          when Rewrite.accepts ~timeout:0.15 ~pass:"dag-abstract-slice"
-                 !result candidate -> result := candidate
+          when try_smt (fun () -> Rewrite.accepts ~timeout:0.15
+                 ~pass:"dag-abstract-slice" !result candidate) -> result := candidate
         | _ -> ());
         (match nonlinear_product_identity_candidate !result with
         | Some (candidate, linear_mba_equalities, semilinear_mba_equalities,
@@ -73,7 +100,8 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
           (match mask_lift_candidate cost !result with
           | Some candidate
             when cost !result <= 512
-                 && Rewrite.accepts ~timeout:0.15 ~pass:"dag-mask-lift" !result candidate ->
+                 && try_smt (fun () -> Rewrite.accepts ~timeout:0.15
+                      ~pass:"dag-mask-lift" !result candidate) ->
               result := candidate
           | _ -> ()));
         (match nonlinear_poly_candidate cost !result with
@@ -94,7 +122,8 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
         (if cost !result <= 256 then
            match known_bits_candidate cost !result with
            | Some candidate
-             when Rewrite.accepts ~timeout:0.15 ~pass:"dag-known-bits" !result candidate ->
+             when try_smt (fun () -> Rewrite.accepts ~timeout:0.15
+                    ~pass:"dag-known-bits" !result candidate) ->
                result := candidate
            | _ -> ());
         (match xor_affine_mask_candidate cost !result with
@@ -118,20 +147,23 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
                 Rewrite.accepts_compositional ~pass:"dag-semantic-probe-linear"
                   ~equalities:[] ~linear_mba_equalities:[ !result, candidate ]
                   !result candidate
-                || Rewrite.accepts ~pass:"dag-semantic-probe" !result candidate
+                || try_smt (fun () -> Rewrite.accepts ~timeout:0.15
+                     ~pass:"dag-semantic-probe" !result candidate)
               in
               if accepted then result := candidate
           | _ -> ());
         (match power2_pullout_candidate cost !result with
         | Some candidate
           when cost !result <= 512
-               && Rewrite.accepts ~timeout:0.15 ~pass:"dag-power2-pullout" !result candidate ->
+               && try_smt (fun () -> Rewrite.accepts ~timeout:0.15
+                      ~pass:"dag-power2-pullout" !result candidate) ->
             result := candidate
         | _ -> ());
         (match demand_bits_candidate cost !result with
         | Some candidate
           when cost !result <= 512
-               && Rewrite.accepts ~timeout:0.15 ~pass:"dag-demand-bits" !result candidate ->
+               && try_smt (fun () -> Rewrite.accepts ~timeout:0.15
+                      ~pass:"dag-demand-bits" !result candidate) ->
             result := candidate
         | _ -> ());
         (match pair_complementary_atoms cost !result with
@@ -175,9 +207,11 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
         (match peepholes constants.eval !result with
         | candidate :: _
           when cost !result <= 512
-               && Rewrite.accepts ~timeout:0.15 ~pass:"dag-peephole" !result candidate ->
+               && try_smt (fun () -> Rewrite.accepts ~timeout:0.15
+                      ~pass:"dag-peephole" !result candidate) ->
             result := candidate
-        | _ -> ());
+        | _ -> ())
+        with Timeout_exception -> soft_stopped := true);
         Nodes.add memo node !result;
         !result
   in
@@ -469,16 +503,25 @@ let run ?deadline expression =
                    | _ -> None)
              in
              let decomposed =
-               match ring_normalized with
-               | Some candidate -> Some candidate
-               | None ->
-                   (match product_partition_candidate !current with
-                   | Some (candidate, equalities)
-                     when cost candidate < cost !current
-                          && Rewrite.accepts_compositional ~pass:"polynomial"
-                               ~equalities !current candidate ->
-                       Some candidate
-                   | _ -> None)
+               match nonlinear_product_identity_candidate !current with
+               | Some (candidate, linear_mba_equalities,
+                       semilinear_mba_equalities, ring_equalities)
+                 when cost candidate < cost !current
+                      && Rewrite.accepts_compositional ~pass:"product-peel"
+                           ~equalities:[] ~ring_equalities
+                           ~linear_mba_equalities ~semilinear_mba_equalities
+                           !current candidate -> Some candidate
+               | _ ->
+                   (match ring_normalized with
+                   | Some candidate -> Some candidate
+                   | None ->
+                       (match product_partition_candidate !current with
+                       | Some (candidate, equalities)
+                         when cost candidate < cost !current
+                              && Rewrite.accepts_compositional ~pass:"polynomial"
+                                   ~equalities !current candidate ->
+                           Some candidate
+                       | _ -> None))
              in
              match decomposed with
              | Some candidate ->

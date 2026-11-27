@@ -205,11 +205,11 @@ let verify_local ?(timeout_cap = 0.5) ~local_deadline
     else if direct then
       let key = Rewrite.proof_key lhs rhs in
       let cached =
-        match Hashtbl.find_opt Rewrite.proofs key with
+        match Rewrite.ExprPairTbl.find_opt Rewrite.proofs key with
         | Some (Yes | No as verdict) -> Some verdict
         | Some (Unknown | Timeout | Disabled as verdict) ->
             let attempted =
-              Option.value (Hashtbl.find_opt Rewrite.proof_budgets key)
+              Option.value (Rewrite.ExprPairTbl.find_opt Rewrite.proof_budgets key)
                 ~default:Float.infinity
             in
             if attempted >= timeout then Some verdict else None
@@ -222,8 +222,8 @@ let verify_local ?(timeout_cap = 0.5) ~local_deadline
             let verdict, _, _ =
               Rewrite_proof.prove_equality_with_model ~timeout lhs rhs
             in
-            Hashtbl.replace Rewrite.proofs key verdict;
-            Hashtbl.replace Rewrite.proof_budgets key timeout;
+            Rewrite.ExprPairTbl.replace Rewrite.proofs key verdict;
+            Rewrite.ExprPairTbl.replace Rewrite.proof_budgets key timeout;
             verdict
       in
       verdict = Yes

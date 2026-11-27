@@ -484,14 +484,21 @@ let complementary_slice_refine_candidate cost expression =
 
 let minterm_ring_poly_candidate cost expression =
   let width = E.sizeof expression in
-  let atom_table = Nodes.create 8 in
-  let rec collect_bitwise = function
+  let atom_table = Nodes.create 8 and collected_bitwise = Nodes.create 128
+  and collected_ring = Nodes.create 128 in
+  let rec collect_bitwise node =
+    if not (Nodes.mem collected_bitwise node) then (
+      Nodes.add collected_bitwise node ();
+      match node with
     | E.Cst value when Bitvector.is_zeros value || Bitvector.is_fill value -> ()
     | E.Unary { f = E.Not; x; _ } -> collect_bitwise x
     | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
         collect_bitwise x; collect_bitwise y
-    | atom -> Nodes.replace atom_table atom ()
-  and collect_ring = function
+    | atom -> Nodes.replace atom_table atom ());
+  and collect_ring node =
+    if not (Nodes.mem collected_ring node) then (
+      Nodes.add collected_ring node ();
+      match node with
     | E.Unary { f = E.Minus; x; _ } -> collect_ring x
     | E.Binary { f = (E.Plus | E.Minus | E.Mul); x; y; _ } ->
         collect_ring x; collect_ring y
@@ -499,7 +506,7 @@ let minterm_ring_poly_candidate cost expression =
       | E.Binary { f = (E.And | E.Or | E.Xor); _ }) as bitwise ->
         collect_bitwise bitwise
     | E.Cst _ -> ()
-    | atom -> Nodes.replace atom_table atom ()
+    | atom -> Nodes.replace atom_table atom ())
   in
   collect_ring expression;
   let variables =
@@ -517,16 +524,24 @@ let minterm_ring_poly_candidate cost expression =
         else if E.is_equal variables.(index) node then Some index else find (index + 1)
       in find 0
     in
+    let pure_memo = Nodes.create 128 in
     let rec pure_bitwise expression =
-      match variable_index expression with
-      | Some _ -> true
+      match Nodes.find_opt pure_memo expression with
+      | Some result -> result
       | None ->
-        match expression with
-        | E.Cst value -> Bitvector.is_zeros value || Bitvector.is_fill value
-        | E.Unary { f = E.Not; x; _ } -> pure_bitwise x
-        | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
-            pure_bitwise x && pure_bitwise y
-        | _ -> false
+          let result =
+            match variable_index expression with
+            | Some _ -> true
+            | None ->
+              match expression with
+              | E.Cst value -> Bitvector.is_zeros value || Bitvector.is_fill value
+              | E.Unary { f = E.Not; x; _ } -> pure_bitwise x
+              | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+                  pure_bitwise x && pure_bitwise y
+              | _ -> false
+          in
+          Nodes.add pure_memo expression result;
+          result
     in
     let rec truth assignment expression =
       match variable_index expression with

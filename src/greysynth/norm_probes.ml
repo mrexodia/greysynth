@@ -823,15 +823,18 @@ let probe_opaque_atoms cost expression =
      || Greysynth_utils.Utils.dag_size_bounded ~limit:256 expression > 256
   then None
   else
-    let width = E.sizeof expression and frequencies = Nodes.create 128 in
+    let width = E.sizeof expression and frequencies = Nodes.create 128
+    and expanded = Nodes.create 128 in
     let rec count node =
       Nodes.replace frequencies node
         (1 + Option.value (Nodes.find_opt frequencies node) ~default:0);
-      match node with
-      | E.Unary { x; _ } -> count x
-      | E.Binary { x; y; _ } -> count x; count y
-      | E.Ite { c; t; e; _ } -> count c; count t; count e
-      | _ -> ()
+      if not (Nodes.mem expanded node) then (
+        Nodes.add expanded node ();
+        match node with
+        | E.Unary { x; _ } -> count x
+        | E.Binary { x; y; _ } -> count x; count y
+        | E.Ite { c; t; e; _ } -> count c; count t; count e
+        | _ -> ())
     in
     count expression;
     let shell = function

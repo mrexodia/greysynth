@@ -101,7 +101,34 @@ let run_cleanup ?(whole = true) expression =
       if !c_normalization && not !g_has_timedout then run_normalization expression
       else expression
     in
-    if !c_oes && not !g_has_timedout then oes_quiet expression else expression
+    let expression =
+      if !c_oes && not !g_has_timedout then oes_quiet expression else expression
+    in
+    let expression =
+      if not !g_has_timedout then
+        match Normalization.nonlinear_product_identity_candidate expression with
+        | Some (candidate, linear_mba_equalities, semilinear_mba_equalities,
+                ring_equalities)
+          when Rewrite.accepts_compositional ~pass:"cleanup-product-peel"
+                 ~equalities:[] ~ring_equalities ~linear_mba_equalities
+                 ~semilinear_mba_equalities expression candidate -> candidate
+        | _ -> expression
+      else expression
+    in
+    let size = size_of_expr expression in
+    if not !g_has_timedout && size >= 9 && size <= 256 then
+      match Normalization.probe_opaque_atoms size_of_expr expression with
+      | Some candidate ->
+          let accepted =
+            Rewrite.accepts_compositional ~pass:"cleanup-opaque-linear"
+              ~equalities:[] ~linear_mba_equalities:[ expression, candidate ]
+              expression candidate
+            || Rewrite.accepts ~timeout:0.20 ~pass:"cleanup-opaque"
+                 expression candidate
+          in
+          if accepted then candidate else expression
+      | None -> expression
+    else expression
   in
   if whole && !c_egraph_extraction && not !g_has_timedout then
     let producer_cache = Rewrite.checkpoint_caches () in
@@ -132,7 +159,15 @@ let chs gt best =
           else !g_total_timeout -. (Unix.gettimeofday () -. !g_start_time)
         in
         if remaining >= 4. then best := run_cleanup !best
-        else if !c_oes then best := oes_quiet !best);
+        else if !c_oes then (
+          best := oes_quiet !best;
+          match Normalization.nonlinear_product_identity_candidate !best with
+          | Some (candidate, linear_mba_equalities, semilinear_mba_equalities,
+                  ring_equalities)
+            when Rewrite.accepts_compositional ~pass:"chs-product-peel"
+                   ~equalities:[] ~ring_equalities ~linear_mba_equalities
+                   ~semilinear_mba_equalities !best candidate -> best := candidate
+          | _ -> ()));
       if size_of_expr !best < before then horizon := 2 else incr horizon
     with Timeout_exception -> g_has_timedout := true
   done;
@@ -302,16 +337,26 @@ let run_preprocessing gt input =
         if accepted then best := candidate
     | None -> ()
   in
-  let rec has_nonlinear_product = function
-    | Sexpr.Expr.Binary { f = Sexpr.Expr.Mul; x; y; _ }
-      when Option.is_none (Normalization.constant_value x)
-           && Option.is_none (Normalization.constant_value y) -> true
-    | Sexpr.Expr.Unary { x; _ } -> has_nonlinear_product x
-    | Sexpr.Expr.Binary { x; y; _ } ->
-        has_nonlinear_product x || has_nonlinear_product y
-    | Sexpr.Expr.Ite { c; t; e; _ } ->
-        has_nonlinear_product c || has_nonlinear_product t || has_nonlinear_product e
-    | _ -> false
+  let nonlinear_memo = Sexpr.BvTbl.create 128 in
+  let rec has_nonlinear_product node =
+    match Sexpr.BvTbl.find_opt nonlinear_memo node with
+    | Some result -> result
+    | None ->
+        let result =
+          match node with
+          | Sexpr.Expr.Binary { f = Sexpr.Expr.Mul; x; y; _ }
+            when Option.is_none (Normalization.constant_value x)
+                 && Option.is_none (Normalization.constant_value y) -> true
+          | Sexpr.Expr.Unary { x; _ } -> has_nonlinear_product x
+          | Sexpr.Expr.Binary { x; y; _ } ->
+              has_nonlinear_product x || has_nonlinear_product y
+          | Sexpr.Expr.Ite { c; t; e; _ } ->
+              has_nonlinear_product c || has_nonlinear_product t
+              || has_nonlinear_product e
+          | _ -> false
+        in
+        Sexpr.BvTbl.add nonlinear_memo node result;
+        result
   in
   let run_root_xor_affine_mask () =
     match Normalization.xor_affine_mask_candidate size_of_expr !best with
@@ -372,6 +417,25 @@ let run_preprocessing gt input =
        && (!g_total_timeout <= 0.
            || Unix.gettimeofday () -. !g_start_time < !g_total_timeout)
     then g_has_timedout := false);
+  let early_dag_size = dag_size_bounded ~limit:4096 !best in
+  if size_of_expr !best > 1024
+     && early_dag_size <= 4096
+     && size_of_expr !best > 8 * early_dag_size
+     && not !g_has_timedout
+  then (
+    let local_deadline = Unix.gettimeofday () +. 1.5 in
+    let rounds = ref 0 and improving = ref true in
+    while !rounds < 12 && !improving && not !g_has_timedout
+          && Unix.gettimeofday () < local_deadline do
+      incr rounds;
+      let before_size = size_of_expr !best
+      and before_dag = dag_size_of_expr !best in
+      best := Normalization.dag_bottom_up_simplify
+          ~zero_smt:true ~minimal:(before_size > 32_768)
+          ~deadline:local_deadline !best;
+      let after_size = size_of_expr !best and after_dag = dag_size_of_expr !best in
+      improving := after_size < before_size || after_dag < before_dag
+    done);
   run_root_minterm_poly ();
   run_root_partial_linear_sum ();
   run_root_semilinear ();
@@ -398,7 +462,8 @@ let run_preprocessing gt input =
       let before_size = size_of_expr !best
       and before_dag = dag_size_of_expr !best in
       best :=
-        Normalization.dag_bottom_up_simplify ~minimal:(before_size > 32_768) !best;
+        Normalization.dag_bottom_up_simplify ~minimal:(before_size > 32_768)
+          ~zero_smt:false ~smt_budget:1.2 ~deadline:local_deadline !best;
       let after_size = size_of_expr !best and after_dag = dag_size_of_expr !best in
       improving := after_size < before_size || after_dag < before_dag
     done);
@@ -632,6 +697,14 @@ let run_passes gt obf =
    with Timeout_exception ->
      g_has_timedout := true;
      _log_warn "greysynth" "timeout reached");
+  if not !g_has_timedout then
+    (match Normalization.nonlinear_product_identity_candidate !best with
+    | Some (candidate, linear_mba_equalities, semilinear_mba_equalities,
+            ring_equalities)
+      when Rewrite.accepts_compositional ~pass:"final-product-peel"
+             ~equalities:[] ~ring_equalities ~linear_mba_equalities
+             ~semilinear_mba_equalities !best candidate -> best := candidate
+    | _ -> ());
   !best
 
 (* ── Reporting ─────────────────────────────────────────────────── *)
@@ -782,13 +855,24 @@ let report_json ~initial_size ~total_time ?proof ?(outside_proof_semantics = fal
 
 (* ── Entry point ───────────────────────────────────────────────── *)
 
-let rec contains_load = function
-  | Sexpr.Expr.Load _ -> true
-  | Sexpr.Expr.Unary { x; _ } -> contains_load x
-  | Sexpr.Expr.Binary { x; y; _ } -> contains_load x || contains_load y
-  | Sexpr.Expr.Ite { c; t; e; _ } ->
-      contains_load c || contains_load t || contains_load e
-  | _ -> false
+let contains_load expression =
+  let memo = Sexpr.BvTbl.create 128 in
+  let rec visit node =
+    match Sexpr.BvTbl.find_opt memo node with
+    | Some result -> result
+    | None ->
+        let result =
+          match node with
+          | Sexpr.Expr.Load _ -> true
+          | Sexpr.Expr.Unary { x; _ } -> visit x
+          | Sexpr.Expr.Binary { x; y; _ } -> visit x || visit y
+          | Sexpr.Expr.Ite { c; t; e; _ } -> visit c || visit t || visit e
+          | _ -> false
+        in
+        Sexpr.BvTbl.add memo node result;
+        result
+  in
+  visit expression
 
 let run ?proof_output obf config gt =
   Greysynth_utils.Utils.reset_solver_session ();

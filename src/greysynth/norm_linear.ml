@@ -62,39 +62,54 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
     let result = lookup 0 !atoms in
     if complemented then Not result else result
   in
+  let linear_memo = Nodes.create 128 and boolean_memo = Nodes.create 128 in
   let rec linear expression =
-    tick ();
-    if List.exists (E.is_equal expression) opaque_atoms then atom expression
-    else match expression with
-    | E.Cst value -> Number (Bitvector.value_of value)
-    | E.Unary { f = E.Minus; x; _ } -> Scale (mask, linear x)
-    | E.Unary { f = E.Not; x; _ } -> Not (linear x)
-    | E.Binary { f = E.Plus; x; y; _ } -> Add (linear x, linear y)
-    | E.Binary { f = E.Minus; x; y; _ } -> Sub (linear x, linear y)
-    | E.Binary { f = E.Mul; x; y; _ } -> (
-        match constant_value x, constant_value y with
-        | Some k, _ -> Scale (Bitvector.value_of k, linear y)
-        | _, Some k -> Scale (Bitvector.value_of k, linear x)
-        | _ -> saw_nonlinear := true; atom expression)
-    | E.Binary { f = E.Lsl; x; y; _ } -> (
-        match constant_value y with
-        | Some count ->
-            let count = bounded_count width count in
-            if count >= width then Number Z.zero
-            else Scale (Z.shift_left Z.one count, linear x)
-        | None -> atom expression)
-    | _ -> boolean expression
+    match Nodes.find_opt linear_memo expression with
+    | Some result -> result
+    | None ->
+        tick ();
+        let result =
+          if List.exists (E.is_equal expression) opaque_atoms then atom expression
+          else match expression with
+          | E.Cst value -> Number (Bitvector.value_of value)
+          | E.Unary { f = E.Minus; x; _ } -> Scale (mask, linear x)
+          | E.Unary { f = E.Not; x; _ } -> Not (linear x)
+          | E.Binary { f = E.Plus; x; y; _ } -> Add (linear x, linear y)
+          | E.Binary { f = E.Minus; x; y; _ } -> Sub (linear x, linear y)
+          | E.Binary { f = E.Mul; x; y; _ } -> (
+              match constant_value x, constant_value y with
+              | Some k, _ -> Scale (Bitvector.value_of k, linear y)
+              | _, Some k -> Scale (Bitvector.value_of k, linear x)
+              | _ -> saw_nonlinear := true; atom expression)
+          | E.Binary { f = E.Lsl; x; y; _ } -> (
+              match constant_value y with
+              | Some count ->
+                  let count = bounded_count width count in
+                  if count >= width then Number Z.zero
+                  else Scale (Z.shift_left Z.one count, linear x)
+              | None -> atom expression)
+          | _ -> boolean expression
+        in
+        Nodes.add linear_memo expression result;
+        result
   and boolean expression =
-    tick ();
-    if List.exists (E.is_equal expression) opaque_atoms then atom expression
-    else match expression with
-    | E.Cst value when Bitvector.is_zeros value || Bitvector.is_fill value ->
-        Number (Bitvector.value_of value)
-    | E.Unary { f = E.Not; x; _ } -> Not (boolean x)
-    | E.Binary { f = E.And; x; y; _ } -> And (boolean x, boolean y)
-    | E.Binary { f = E.Or; x; y; _ } -> Or (boolean x, boolean y)
-    | E.Binary { f = E.Xor; x; y; _ } -> Xor (boolean x, boolean y)
-    | _ -> atom expression
+    match Nodes.find_opt boolean_memo expression with
+    | Some result -> result
+    | None ->
+        tick ();
+        let result =
+          if List.exists (E.is_equal expression) opaque_atoms then atom expression
+          else match expression with
+          | E.Cst value when Bitvector.is_zeros value || Bitvector.is_fill value ->
+              Number (Bitvector.value_of value)
+          | E.Unary { f = E.Not; x; _ } -> Not (boolean x)
+          | E.Binary { f = E.And; x; y; _ } -> And (boolean x, boolean y)
+          | E.Binary { f = E.Or; x; y; _ } -> Or (boolean x, boolean y)
+          | E.Binary { f = E.Xor; x; y; _ } -> Xor (boolean x, boolean y)
+          | _ -> atom expression
+        in
+        Nodes.add boolean_memo expression result;
+        result
   in
   try
     let source = linear expression in
@@ -512,12 +527,22 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
   with Too_complex -> []
 
 let is_semantically_bitwise cost expression =
-  let rec pure = function
-    | E.Var _ -> true
-    | E.Cst value -> Bitvector.is_zeros value || Bitvector.is_fill value
-    | E.Unary { f = E.Not; x; _ } -> pure x
-    | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } -> pure x && pure y
-    | _ -> false
+  let memo = Nodes.create 32 in
+  let rec pure node =
+    match Nodes.find_opt memo node with
+    | Some result -> result
+    | None ->
+        let result =
+          match node with
+          | E.Var _ -> true
+          | E.Cst value -> Bitvector.is_zeros value || Bitvector.is_fill value
+          | E.Unary { f = E.Not; x; _ } -> pure x
+          | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+              pure x && pure y
+          | _ -> false
+        in
+        Nodes.add memo node result;
+        result
   in
   linear_candidates ~max_atoms:6 ~semantic_bitwise:true cost expression
   |> List.filter pure
