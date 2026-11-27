@@ -818,8 +818,8 @@ let probe_semantic_poly cost expression =
            |> List.find_opt (fun candidate -> Rewrite.samples_agree expression candidate)
          with _ -> None))
 
-let probe_opaque_atoms cost expression =
-  if cost expression < 9 || cost expression > 512
+let probe_opaque_atoms ?(max_cost = 512) cost expression =
+  if cost expression < 9 || cost expression > max_cost
      || Greysynth_utils.Utils.dag_size_bounded ~limit:256 expression > 256
   then None
   else
@@ -1026,30 +1026,42 @@ let probe_opaque_atoms cost expression =
               raw :: (linear_candidates ~max_atoms:3 cost raw
                       @ analytical @ binary_templates)
             in
-            let samples =
-              [| Z.zero; Z.one; Z.pred modulus; Z.of_string "0x5555555555555555";
-                 Z.of_string "0xaaaaaaaaaaaaaaaa"; Z.of_int 3; Z.of_int 17; Z.of_int 255;
-                 Z.of_int 1024; Z.of_string "0x123456789abcdef";
-                 Z.of_string "0xfedcba987654321"; Z.of_int 7; Z.of_int 31;
-                 Z.of_int 63; Z.of_int 127; Z.of_int 511 |]
+            let full_width_value sample_index variable_index =
+              let rec fill shift state result =
+                if shift >= width then normalize result
+                else
+                  let state =
+                    Z.logand
+                      (Z.add
+                         (Z.mul state (Z.of_string "0x5851f42d4c957f2d"))
+                         (Z.of_string "0x14057b7ef767814f"))
+                      (Z.pred (Z.shift_left Z.one 64))
+                  in
+                  fill (shift + 64) state
+                    (Z.logor result (Z.shift_left state shift))
+              in
+              let seed = Z.of_int
+                  ((sample_index + 1) * 65537 + (variable_index + 3) * 104729)
+              in
+              fill 0 seed Z.zero
             in
             let agrees candidate =
-              Array.mapi (fun sample_index seed ->
-                  let values = Array.init count (fun index ->
-                      let multiplier = Z.of_int (2 * index + 1) in
-                      let salt = Z.shift_left
-                          (Z.of_int ((sample_index + 1) * (index + 3)))
-                          ((11 * index + 7) mod (max 1 width))
-                      in
-                      normalize (Z.logxor (Z.mul seed multiplier) salt)) in
+              let rec loop sample_index =
+                if sample_index = 24 then true
+                else
+                  let values = Array.init count (fun variable_index ->
+                      full_width_value sample_index variable_index) in
                   Z.equal (probe_evaluate abstract_expression variables values)
-                    (probe_evaluate candidate variables values)) samples
-              |> Array.for_all Fun.id
+                    (probe_evaluate candidate variables values)
+                  && loop (sample_index + 1)
+              in
+              loop 0
             in
             abstract_candidates
             |> List.filter (fun candidate -> agrees candidate)
             |> List.map restore
             |> List.filter (fun candidate -> cost candidate < cost expression)
+            |> List.filter (Rewrite.samples_agree expression)
             |> List.sort (fun left right -> Int.compare (cost left) (cost right))
             |> function candidate :: _ -> Some candidate | [] -> None
           with _ -> None

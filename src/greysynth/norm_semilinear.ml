@@ -568,7 +568,8 @@ let complementary_slice_candidate _cost expression =
       Some (substituted, List.rev !equalities, [])
 
 let nonlinear_product_identity_candidate expression =
-  let same = E.is_equal in
+  let same = E.is_equal
+  and expression_cost = Greysynth_utils.Utils.size_of_expr expression in
   let commutative operation left right = function
     | E.Binary { f; x; y; _ } when f = operation ->
         (same x left && same y right) || (same x right && same y left)
@@ -607,7 +608,7 @@ let nonlinear_product_identity_candidate expression =
     match complement with
     | E.Unary { f = E.Not; x; _ } when same base x ->
         Some (complement, [], [])
-    | _ when affine_complements base complement ->
+    | _ when expression_cost <= 4096 && affine_complements base complement ->
         let width = E.sizeof base in
         let canonical = E.binary E.Minus (E.unary E.Minus base) (integer width 1) in
         Some (E.unary E.Not base,
@@ -616,8 +617,41 @@ let nonlinear_product_identity_candidate expression =
   in
   let parse_cross = function
     | E.Binary { f = E.Mul; x; y; _ } ->
-        let operands = function
-          | E.Binary { f = E.And; x; y; _ } -> [ x, y; y, x ]
+        let operands actual =
+          match actual with
+          | E.Binary { f = E.And; x; y; _ } ->
+              [ x, y, actual, []; y, x, actual, [] ]
+          | E.Unary { f = E.Uext amount;
+                      x = E.Binary { f = E.And; x; y; _ }; _ } ->
+              let lift variable mask =
+                let wide_variable = E.unary (E.Uext amount) variable in
+                let wide_masks =
+                  match mask with
+                  | E.Unary { f = E.Not; x = E.Cst value; _ } ->
+                      [ E.unary E.Not
+                          (constant (E.sizeof actual) (Bitvector.value_of value)) ]
+                  | E.Cst value ->
+                      let direct =
+                        constant (E.sizeof actual) (Bitvector.value_of value)
+                      and complemented_base =
+                        constant (E.sizeof actual)
+                          (Bitvector.value_of (Bitvector.lognot value))
+                      in
+                      [ direct; E.unary E.Not complemented_base ]
+                  | _ -> [ E.unary (E.Uext amount) mask ]
+                in
+                List.concat_map (fun wide_mask ->
+                    let canonical = E.binary E.And wide_variable wide_mask in
+                    [ wide_variable, wide_mask, canonical, [ actual, canonical ];
+                      wide_mask, wide_variable, canonical, [ actual, canonical ] ])
+                  wide_masks
+              in
+              (match x, y with
+              | (E.Cst _ | E.Unary { f = E.Not; x = E.Cst _; _ }), variable ->
+                  lift variable x
+              | variable, (E.Cst _ | E.Unary { f = E.Not; x = E.Cst _; _ }) ->
+                  lift variable y
+              | _ -> [])
           | _ -> []
         in
         let replace_complement actual old_value new_value =
@@ -630,26 +664,28 @@ let nonlinear_product_identity_candidate expression =
         in
         let parse first second =
           operands first
-          |> List.find_map (fun (a, b_complement) ->
+          |> List.find_map (fun (a, b_complement, first_base, first_lifted) ->
                  operands second
-                 |> List.find_map (fun (b, a_complement) ->
+                 |> List.find_map
+                      (fun (b, a_complement, second_base, second_lifted) ->
                         match complement_info b b_complement,
                               complement_info a a_complement with
                         | Some (not_b, linear_b, ring_b),
                           Some (not_a, linear_a, ring_a) ->
                             let first_canonical =
-                              replace_complement first b_complement not_b
+                              replace_complement first_base b_complement not_b
                             and second_canonical =
-                              replace_complement second a_complement not_a
+                              replace_complement second_base a_complement not_a
                             in
                             Some (a, b, first_canonical, second_canonical,
+                                  first_lifted @ second_lifted,
                                   linear_a @ linear_b, ring_a @ ring_b)
                         | _ -> None))
         in
         (match parse x y with Some _ as result -> result | None -> parse y x)
     | _ -> None
   in
-  let lifted_intersection a b actual =
+  let rec lifted_intersection a b actual =
     if commutative E.And a b actual then Some []
     else
       match a, b, actual with
@@ -659,6 +695,21 @@ let nonlinear_product_identity_candidate expression =
         when amount = amount_a && amount = amount_b
              && commutative E.And low_a low_b low_and ->
           Some [ actual, E.binary E.And a b ]
+      | E.Unary { f = E.Uext amount_a; x = low_a; _ }, E.Cst wide_mask,
+        E.Unary { f = E.Uext amount;
+                  x = E.Binary { f = E.And; x; y; _ }; _ }
+        when amount = amount_a ->
+          let low_mask =
+            match x, y with
+            | E.Cst value, other when same other low_a -> Some value
+            | other, E.Cst value when same other low_a -> Some value
+            | _ -> None
+          in
+          Option.bind low_mask (fun value ->
+              if Z.equal (Bitvector.value_of value) (Bitvector.value_of wide_mask)
+              then Some [ actual, E.binary E.And a b ] else None)
+      | E.Cst _, E.Unary { f = E.Uext _; _ }, _ ->
+          lifted_intersection b a actual
       | _ -> None
   in
   let parse_regular a b = function
@@ -702,7 +753,8 @@ let nonlinear_product_identity_candidate expression =
   in
   let build make_candidate cross regular =
     match parse_cross cross with
-    | Some (a, b, first, second, complement_linear, complement_ring) ->
+    | Some (a, b, first, second, cross_lifted,
+            complement_linear, complement_ring) ->
         Option.map
           (fun (_intersection, union, lifted_equalities) ->
             let u = E.binary E.And a b in
@@ -723,9 +775,10 @@ let nonlinear_product_identity_candidate expression =
             let candidate = make_candidate product in
             let substituted =
               substitute_equalities
-                (lifted_equalities @ equalities @ complement_ring) expression
+                (cross_lifted @ lifted_equalities @ equalities @ complement_ring)
+                expression
             in
-            (candidate, lifted_equalities, equalities, [],
+            (candidate, cross_lifted @ lifted_equalities, equalities, [],
              complement_ring @ [ substituted, candidate ]))
           (parse_regular a b regular)
     | None -> None

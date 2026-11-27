@@ -1577,3 +1577,52 @@ directly in the parallel run. Exact Tigress-L5 wins include `target_126: 7`,
 `target_2818: 3`, `target_3728: 5`, and the three related targets
 `6014/6027/6086: 5`; `target_2968` reaches size 3, beating its size-5 GT.
 Core Tigress-L8 `target_1349` and `target_2818` also reach exact GT.
+
+## Round-41 strict DAG budgets, wide samples, and constant-mask lifting
+
+Round 41 closes the three scheduling leaks exposed by the expanded Round-40
+passes. DAG product peeling with a non-empty abstract-equality list is now
+forbidden in `zero_smt` mode and runs through the cumulative `try_smt` budget in
+bounded mode. Opaque DAG probes run only on nodes with a bitwise/shift shell,
+only outside minimal and zero-SMT passes, and at most 16 times per invocation.
+Semi-linear replay is skipped unless the endpoints contain a mask, shift, cast,
+or restriction. Algebraic-complement inspection is capped at expression cost
+4096.
+
+Opaque interpolation now checks 24 deterministic independent values spanning
+the complete bit width, including 96-, 128-, and 224-bit inputs, then applies
+`Rewrite.samples_agree` once to the restored concrete candidate before returning
+it. Root probing accepts costs through 2048 while retaining the 256-node DAG
+cap, and follows an accepted opaque rewrite with product and semi-linear
+peeling. Product matching also lifts constant-mask forms such as
+`uext(x & C)` and `uext(x & ~C)` through one explicit abstract equality.
+
+`test/round41_test.ml` covers a 513–2048-cost/small-DAG opaque shell, 96- and
+224-bit recovery, constant-mask zero-extension peeling, independent certificate
+replay, and a strict zero-SMT non-invocation assertion. The complete
+warning-clean `make test` gate passes, and `src/proof/rewrite_proof.ml` remains
+unchanged.
+
+Final eight-worker artifacts:
+
+```text
+/tmp/r41-l5/out.jsonl
+/tmp/r41-core/out.jsonl
+/tmp/r41-smoke/out.jsonl
+/tmp/r41-l5-isolated/out.jsonl
+```
+
+| Gate | Established | Exact | Round-40 -> Round-41 quality | Better / equal / worse vs Round 40 |
+|---|---:|---:|---:|---:|
+| Tigress L5 all_non_exact | 450/450 | 179 | 3.5428x -> 4.0487x | 100 / 237 / 113 |
+| Refreshed core hard | 353/353 | 79 | 3.0877x -> 3.0512x | 37 / 278 / 38 |
+| Regression smoke | 62/62 | 54 | 0.8455x -> 0.7933x | 4 / 58 / 0 |
+
+There are zero refutations, unknowns, errors, or audit-process timeouts. The
+regression smoke gate returns to 62 strict decreases; in particular
+`oses__line_0000240` recovers from the Round-40 net-neutral 564,134-node output
+to 4,835 nodes. Core `qsynth_ea__line_0000458` returns to size 20,
+Tigress-L5 `target_6370` remains exact at size 5, and core Tigress-L6
+`target_1803` reaches its size-9 GT. The authoritative parallel L5 run contains
+one net-neutral row (`target_547`); its isolated replay is also established and
+net-neutral, so this is not a proof failure or worker-contention timeout.

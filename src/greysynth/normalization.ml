@@ -10,7 +10,52 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
   let memo = Nodes.create 256 in
   let constants = Sample_evaluator.make 1 in
   let cost = Greysynth_utils.Utils.size_of_expr in
-  let soft_stopped = ref false and smt_spent = ref 0.0 in
+  let soft_stopped = ref false and smt_spent = ref 0.0
+  and opaque_probe_calls = ref 0 in
+  let contains_probe_shell root =
+    let memo = Nodes.create 32 in
+    let rec visit node =
+      match Nodes.find_opt memo node with
+      | Some result -> result
+      | None ->
+          let result =
+            match node with
+            | E.Unary { f = E.Not; _ }
+            | E.Binary { f = (E.And | E.Or | E.Xor | E.Lsl); _ } -> true
+            | E.Unary { x; _ } -> visit x
+            | E.Binary { x; y; _ } -> visit x || visit y
+            | E.Ite { c; t; e; _ } -> visit c || visit t || visit e
+            | _ -> false
+          in
+          Nodes.add memo node result;
+          result
+    in
+    visit root
+  in
+  let semilinear_shape root =
+    let memo = Nodes.create 32 in
+    let rec visit node =
+      match Nodes.find_opt memo node with
+      | Some result -> result
+      | None ->
+          let result =
+            match node with
+            | E.Unary { f = (E.Uext _ | E.Sext _ | E.Restrict _); _ }
+            | E.Binary { f = E.Lsl; _ } -> true
+            | E.Binary { f = (E.And | E.Or | E.Xor);
+                         x = E.Cst _; _ }
+            | E.Binary { f = (E.And | E.Or | E.Xor);
+                         y = E.Cst _; _ } -> true
+            | E.Unary { x; _ } -> visit x
+            | E.Binary { x; y; _ } -> visit x || visit y
+            | E.Ite { c; t; e; _ } -> visit c || visit t || visit e
+            | _ -> false
+          in
+          Nodes.add memo node result;
+          result
+    in
+    visit root
+  in
   let should_stop () =
     let now = Unix.gettimeofday () in
     let local = Option.fold ~none:false ~some:(fun limit -> now >= limit) deadline in
@@ -84,11 +129,19 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
                  ~pass:"dag-abstract-slice" !result candidate) -> result := candidate
         | _ -> ());
         (match nonlinear_product_identity_candidate !result with
-        | Some (candidate, equalities, linear_mba_equalities,
+        | Some (candidate, [], linear_mba_equalities,
                 semilinear_mba_equalities, ring_equalities)
           when Rewrite.accepts_compositional ~pass:"dag-product-peel"
-                 ~equalities ~ring_equalities ~linear_mba_equalities
+                 ~equalities:[] ~ring_equalities ~linear_mba_equalities
                  ~semilinear_mba_equalities !result candidate -> result := candidate
+        | Some (candidate, equalities, linear_mba_equalities,
+                semilinear_mba_equalities, ring_equalities)
+          when not zero_smt
+               && try_smt (fun () ->
+                      Rewrite.accepts_compositional ~pass:"dag-product-peel"
+                        ~equalities ~ring_equalities ~linear_mba_equalities
+                        ~semilinear_mba_equalities !result candidate) ->
+            result := candidate
         | _ -> ());
         if Greysynth_utils.Utils.dag_size_bounded ~limit:512 !result <= 512 then (
           (match complementary_slice_refine_candidate cost !result with
@@ -136,14 +189,21 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
           Rewrite.accepts_compositional ~pass:"dag-semantic-probe-linear"
             ~equalities:[] ~linear_mba_equalities:[ !result, candidate ]
             !result candidate
-          || Rewrite.accepts_compositional ~pass:"dag-semantic-probe-semilinear"
-               ~equalities:[] ~semilinear_mba_equalities:[ !result, candidate ]
-               !result candidate
-          || try_smt (fun () -> Rewrite.accepts ~timeout:0.20
+          || ((semilinear_shape !result || semilinear_shape candidate)
+              && Rewrite.accepts_compositional
+                   ~pass:"dag-semantic-probe-semilinear" ~equalities:[]
+                   ~semilinear_mba_equalities:[ !result, candidate ]
+                   !result candidate)
+          || try_smt (fun () -> Rewrite.accepts ~timeout:0.15
                ~pass:"dag-semantic-probe" !result candidate)
         in
-        if cost !result >= 9 && cost !result <= 256 then
-          (match probe_opaque_atoms cost !result with
+        if not zero_smt && !smt_spent < smt_budget
+           && !opaque_probe_calls < 16
+           && cost !result >= 9 && cost !result <= 256
+           && contains_probe_shell !result
+        then (
+          incr opaque_probe_calls;
+          match probe_opaque_atoms cost !result with
           | Some candidate when accept_probe candidate -> result := candidate
           | _ -> ());
         if cost !result >= 5 && cost !result <= 64 then (
