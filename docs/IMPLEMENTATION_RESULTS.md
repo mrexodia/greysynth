@@ -1707,3 +1707,43 @@ workers and independent `mba_equiv` plus `mba_proof` replay:
 1,891/1,894 combined rows. All 1,894 rows establish in the authoritative
 parallel runs with zero refutations, unknowns, errors, or audit timeout
 verdicts. Consequently no isolated contention-timeout replay was required.
+
+## Round-43B authoritative non-Tigress sweep
+
+The remaining twelve `all_non_exact` suites were audited together with eight
+workers and the same R18 configuration, `mba_equiv`, and independent
+`mba_proof` replay. No source or configuration changes were made.
+
+```text
+/tmp/r43-other/out.jsonl
+/tmp/r43-other-isolated/out.jsonl
+```
+
+| Suite | Established | Exact <= GT | Quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| C-MBA Obfuscator | 65/65 | 11 | 26.9100x -> 4.0387x | 28 / 22 / 15 |
+| FloKI | 21/21 | 4 | 6.0119x -> 3.0589x | 6 / 15 / 0 |
+| Loki | 12/12 | 8 | 290.9011x -> 2.9768x | 11 / 1 / 0 |
+| Loki Tiny | 7/7 | 3 | 9.4468x -> 4.3087x | 3 / 2 / 2 |
+| MBA Flatten | 401/401 | 12 | 1.3979x -> 1.2884x | 22 / 364 / 15 |
+| MBA-Obfuscator nonlinear | 38/38 | 0 | 1.2663x -> 1.2833x | 1 / 35 / 2 |
+| NeuReduce | 24/24 | 0 | 1.1333x -> 1.1310x | 1 / 23 / 0 |
+| OMVLL | 177/177 | 45 | 15.5121x -> 3.2728x | 112 / 46 / 19 |
+| OSES | 30/30 | 3 | 2.1605x -> 1.6446x | 6 / 24 / 0 |
+| PLDI Non-Poly | 84/84 | 11 | 2.0075x -> 1.2490x | 13 / 64 / 7 |
+| PLDI Poly | 201/201 | 0 | 1.3008x -> 1.2995x | 4 / 196 / 1 |
+| QSynth EA | 145/146 | 34 | 2.3483x -> 1.6523x | 62 / 77 / 6 |
+| **Combined** | **1,205/1,206** | **131** | **2.7645x -> 1.6735x** | **269 / 869 / 67** |
+
+There are zero refutations, unknown proof verdicts, or audit timeouts. One
+QSynth EA row (`line_0000026`) fails before producing a candidate with a
+deterministic `Stack overflow`. A one-worker replay, an unlimited OS stack, and
+a larger `OCAMLRUNPARAM` stack reproduce the same error. Backtracing identifies
+a replacement cycle in
+`Norm_semilinear.nonlinear_product_identity_candidate.substitute_equalities.visit`.
+Because Round-43B explicitly prohibits source changes, this row remains the
+single unestablished case and must be fixed before pruning.
+
+Across Tigress and non-Tigress suites together, the authoritative sweep is
+`3,099/3,100` established with zero refutations, 866 exact-or-better results
+among 3,096 rows with usable GT, and quality `19.8529x -> 3.7931x`.
