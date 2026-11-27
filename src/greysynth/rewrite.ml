@@ -135,7 +135,7 @@ let samples_agree original candidate =
 
 let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
     ?(linear_mba_equalities = []) ?(semilinear_mba_equalities = [])
-    ~pass ~equalities original candidate =
+    ?(timeout = float_of_int !c_equiv_timeout) ~pass ~equalities original candidate =
   let record_equalities () =
     Option.iter
       (fun journal ->
@@ -180,7 +180,7 @@ let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
         if !g_total_timeout <= 0. then infinity
         else !g_total_timeout -. (Unix.gettimeofday () -. !g_start_time)
       in
-      let budget = min (float_of_int !c_equiv_timeout) (max 0.001 remaining) in
+      let budget = min timeout (max 0.001 remaining) in
       let cached = ExprPairTbl.find_opt proofs key in
       let compositional_key =
         let left, right = key in
@@ -224,7 +224,7 @@ let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
         semilinear_mba_equalities;
       let certificate = Rewrite_proof.finish proof candidate in
       let report =
-        Rewrite_proof.verify ~timeouts:[ float_of_int !c_equiv_timeout ]
+        Rewrite_proof.verify ~timeouts:[ timeout ]
           ~original ~candidate certificate
       in
       let open Yojson.Basic.Util in

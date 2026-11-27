@@ -1907,3 +1907,77 @@ The dev-only results show a substantial stress-panel quality gain and small
 ladders/extra-floor hit gains, alongside hit-count regressions in long-frontier,
 gaps, interactions, and projection. These regressions are retained explicitly
 rather than hidden by aggregate quality.
+
+## Round-46 associative scalars, AC atoms, and phase ordering
+
+Round 46 adds `linear_candidates_with_rings`, which extracts constants and
+signs through associative multiplication, canonically sorts non-constant
+factors, and canonicalizes bounded additive/multiplicative atoms. Every source
+canonicalization is carried by `ring_mod2w`; the rewritten source-to-candidate
+edge remains `linear_mba_mod2w`. The compatibility `linear_candidates` API
+retains its previous behavior, while DAG, root, and local normalization paths
+use proof-carrying ring bridges on bounded inputs.
+
+DAG linear and semi-linear passes now precede nonlinear polynomial expansion.
+Before root minterm expansion, highly shared roots receive the existing long
+zero-SMT fixpoint; bounded non-shared roots with an early product of substantial
+linear factors receive a one-second zero-SMT pass. Other non-shared roots incur
+no speculative DAG work, preserving polynomial and smoke budgets.
+
+Low-`k` pushdown now accepts direct `(inner & (2^k-1))` masks by recording an
+abstract bridge to `uext(restrict(0,k-1,inner))`. Small roots between cost 5 and
+256 invoke this pass directly from `Normalization.run`, with compositional
+verification capped at 0.4 seconds. `Rewrite.accepts_compositional` therefore
+accepts an optional timeout while preserving its existing default and fail-
+closed behavior.
+
+`test/round46_test.ml` covers associative scalar extraction, AC atom
+unification, linear-before-polynomial DAG ordering, direct low-bit masks on
+small roots, zero-SMT ring/linear replay, and independent certificate replay.
+The complete warning-clean `make test` gate passes. The held-out balanced panel
+was not evaluated.
+
+Final artifacts:
+
+```text
+/tmp/r46-leeky-dev64/out.jsonl
+/tmp/r46-l5/out.jsonl
+/tmp/r46-core/out.jsonl
+/tmp/r46-smoke/out.jsonl
+```
+
+Every row in all four parallel gates establishes with zero refutations,
+unknowns, errors, or audit timeouts. Leeky dev has 880 transformed rows and four
+unchanged controls; 857 transformed rows strictly decrease and 461 reach or
+beat reference after a strict reduction. Aggregate dev quality changes from
+`2.3475x` to `2.3586x`.
+
+| Leeky dev panel | Baseline hits -> R46 hits | Baseline quality -> R46 quality | R46 strict reductions |
+|---|---:|---:|---:|
+| mba-capabilities-v1 | 33 -> 33 | 3.3337x -> 3.3358x | 71/71 |
+| mba-capabilities-v2 | 34 -> 34 | 1.1037x -> 1.1062x | 43/44 |
+| mba-composition-v1 | 47 -> 47 | 1.1365x -> 1.1365x | 52/54 |
+| mba-extra-floor-v1 | 19 -> 23 | 1.4569x -> 1.3048x | 54/54 |
+| mba-frontier64-v1 | 3 -> 3 | 22.7000x -> 25.3726x | 87/96 |
+| mba-gaps-v1 | 55 -> 52 | 1.1124x -> 1.1309x | 72/72 |
+| mba-interactions-v1 | 23 -> 22 | 0.9364x -> 0.9476x | 33/33 |
+| mba-ladders-v1 | 39 -> 46 | 1.2743x -> 1.1651x | 72/72 |
+| mba-long-frontier-v1 | 44 -> 37 | 1.6318x -> 2.2062x | 70/72 |
+| mba-majority-v1 | 34 -> 34 | 1.3835x -> 1.3703x | 54/54 |
+| mba-projection-v1 | 51 -> 50 | 1.1375x -> 1.2001x | 54/54 |
+| mba-proof-context-v1 | 12 -> 12 | 1.5744x -> 1.5770x | 36/36 |
+| mba-stress64-v1 | 0 -> 0 | 11.2614x -> 9.1432x | 87/96 |
+| mba-tight-v1 | 68 -> 68 | 1.0377x -> 1.0377x | 72/72 |
+| **Overall transformed** | **462 -> 461** | **2.3475x -> 2.3586x** | **857/880** |
+
+| Regression gate | Established | Exact <= GT | Quality before -> after | Better / equal / worse | Strict decreases |
+|---|---:|---:|---:|---:|---:|
+| Shrunk Tigress L5 | 251/251 | 30 | 10.5590x -> 8.5292x | 106 / 79 / 66 | 248 |
+| Refreshed core hard | 342/342 | 18* | 7.0702x -> 5.6922x | 81 / 233 / 27 | 330 |
+| Regression smoke | 62/62 | 54* | 0.7846x -> 0.7921x | 7 / 50 / 5 | 62 |
+
+`*` Core exact counts cover 341 rows with usable GT; smoke exact counts cover 58.
+The largest robust improvements are on the shrunk Tigress and refreshed core
+frontiers plus Leeky ladders and extra-floor. Frontier, long-frontier, gaps,
+interactions, projection, and aggregate Leeky quality remain explicit
+regressions for subsequent work.

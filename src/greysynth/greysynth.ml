@@ -308,14 +308,22 @@ let run_preprocessing gt input =
        && (Normalization.linear_mba_compatible !best
            || (allow_opaque && contains_bitwise !best))
     then
+      let proposals =
+        if size_of_expr input <= 16_384 then
+          Normalization.linear_candidates_with_rings ~max_atoms:8 size_of_expr !best
+        else
+          Normalization.linear_candidates ~max_atoms:8 size_of_expr !best
+          |> List.map (fun candidate -> candidate, [], !best)
+      in
       match
-        Normalization.linear_candidates ~max_atoms:8 size_of_expr !best
-        |> List.sort (fun left right ->
+        proposals
+        |> List.sort (fun (left, _, _) (right, _, _) ->
                Int.compare (size_of_expr left) (size_of_expr right))
       with
-      | candidate :: _
+      | (candidate, ring_equalities, rewritten_source) :: _
         when Rewrite.accepts_compositional ~pass:"root-linear-group"
-               ~equalities:[] ~linear_mba_equalities:[ !best, candidate ]
+               ~equalities:[] ~ring_equalities
+               ~linear_mba_equalities:[ rewritten_source, candidate ]
                !best candidate -> best := candidate
       | _ -> ()
   in
@@ -473,12 +481,57 @@ let run_preprocessing gt input =
      && not !g_has_timedout
   then best := Normalization.dag_constant_cast_simplify !best;
   let early_dag_size = dag_size_bounded ~limit:4096 !best in
-  if size_of_expr !best > 1024
+  if size_of_expr !best > 512
      && early_dag_size <= 4096
-     && size_of_expr !best > 8 * early_dag_size
      && not !g_has_timedout
   then (
-    let local_deadline = Unix.gettimeofday () +. 1.5 in
+    let shared = size_of_expr !best > 8 * early_dag_size in
+    let rec has_product_of_linear_mbas depth node =
+      if depth > 8 then false
+      else
+        match node with
+        | Sexpr.Expr.Binary { f = Sexpr.Expr.Mul; x; y; _ }
+          when size_of_expr x >= 15 && size_of_expr x <= 512
+               && size_of_expr y >= 15 && size_of_expr y <= 512 -> true
+        | Sexpr.Expr.Unary { x; _ } -> has_product_of_linear_mbas (depth + 1) x
+        | Sexpr.Expr.Binary { x; y; _ } ->
+            has_product_of_linear_mbas (depth + 1) x
+            || has_product_of_linear_mbas (depth + 1) y
+        | Sexpr.Expr.Ite { c; t; e; _ } ->
+            has_product_of_linear_mbas (depth + 1) c
+            || has_product_of_linear_mbas (depth + 1) t
+            || has_product_of_linear_mbas (depth + 1) e
+        | _ -> false
+    in
+    let bitwise_memo = Sexpr.BvTbl.create 128 and bitwise_visits = ref 0 in
+    let rec contains_bitwise node =
+      if !bitwise_visits >= 16 then false
+      else
+        match Sexpr.BvTbl.find_opt bitwise_memo node with
+        | Some result -> result
+        | None ->
+            incr bitwise_visits;
+            let result =
+              match node with
+              | Sexpr.Expr.Unary { f = Sexpr.Expr.Not; _ }
+              | Sexpr.Expr.Binary {
+                  f = (Sexpr.Expr.And | Sexpr.Expr.Or | Sexpr.Expr.Xor); _ } -> true
+              | Sexpr.Expr.Unary { x; _ } -> contains_bitwise x
+              | Sexpr.Expr.Binary { x; y; _ } ->
+                  contains_bitwise x || contains_bitwise y
+              | Sexpr.Expr.Ite { c; t; e; _ } ->
+                  contains_bitwise c || contains_bitwise t || contains_bitwise e
+              | _ -> false
+            in
+            Sexpr.BvTbl.add bitwise_memo node result;
+            result
+    in
+    let exposed_product =
+      not shared && size_of_expr !best <= 16_384 && contains_bitwise !best
+      && has_product_of_linear_mbas 0 !best
+    in
+    let local_budget = if shared then 1.5 else if exposed_product then 1.0 else 0.0 in
+    let local_deadline = Unix.gettimeofday () +. local_budget in
     let rounds = ref 0 and improving = ref true in
     while !rounds < 12 && !improving && not !g_has_timedout
           && Unix.gettimeofday () < local_deadline do

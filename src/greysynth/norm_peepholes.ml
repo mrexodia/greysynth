@@ -45,6 +45,8 @@ let rec peepholes evaluate expression =
   | E.Unary { f; x; _ } -> (
       let composed =
         match f, x with
+        | E.Restrict { lo = 0; hi }, base when hi = E.sizeof base - 1 ->
+            [ base ]
         | E.Uext outer, E.Unary { f = E.Uext inner; x = base; _ } ->
             [ E.unary (E.Uext (outer + inner)) base ]
         | E.Sext outer, E.Unary { f = E.Sext inner; x = base; _ } ->
@@ -585,18 +587,35 @@ let bit0_restrict_pushdown expression =
     (unpack expression)
 
 let lowk_restrict_pushdown expression =
+  let low_mask value =
+    let value = Bitvector.value_of value in
+    let plus_one = Z.succ value in
+    if Z.sign value > 0 && Z.popcount plus_one = 1 then
+      Some (Z.trailing_zeros plus_one)
+    else None
+  in
   let unpack = function
     | E.Unary { f = E.Restrict { lo = 0; hi }; x; _ }
-      when hi >= 0 && hi < E.sizeof x - 1 -> Some (None, hi, x)
+      when hi >= 0 && hi < E.sizeof x - 1 -> Some (None, hi, x, [])
     | E.Unary { f = E.Uext amount;
                 x = E.Unary { f = E.Restrict { lo = 0; hi }; x; _ }; _ }
-      when hi >= 0 && hi < E.sizeof x - 1 -> Some (Some amount, hi, x)
+      when hi >= 0 && hi < E.sizeof x - 1 -> Some (Some amount, hi, x, [])
+    | E.Binary { f = E.And; x = inner; y = E.Cst mask; _ }
+    | E.Binary { f = E.And; x = E.Cst mask; y = inner; _ } ->
+        Option.bind (low_mask mask) (fun width ->
+            if width >= 1 && width < E.sizeof inner then
+              let hi = width - 1 and amount = E.sizeof inner - width in
+              let canonical =
+                E.unary (E.Uext amount) (E.restrict ~lo:0 ~hi inner)
+              in
+              Some (Some amount, hi, inner, [ expression, canonical ])
+            else None)
     | _ -> None
   in
-  Option.bind (unpack expression) (fun (extension, hi, inner) ->
+  Option.bind (unpack expression) (fun (extension, hi, inner, bridges) ->
       if hi = 0 then
         Option.map (fun (candidate, pushed, equalities, inner) ->
-            candidate, pushed, equalities, inner, true)
+            candidate, pushed, bridges @ equalities, inner, true)
           (bit0_restrict_pushdown expression)
       else
         let width = hi + 1 in
@@ -690,7 +709,8 @@ let lowk_restrict_pushdown expression =
           | None -> pushed
           | Some amount -> E.unary (E.Uext amount) pushed
         in
-        Some (candidate, pushed, List.rev !equalities, inner, !annihilated))
+        Some (candidate, pushed, bridges @ List.rev !equalities,
+              inner, !annihilated))
 
 let restrict_factoring_candidate expression =
   match expression with

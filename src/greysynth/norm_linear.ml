@@ -32,12 +32,68 @@ let rec demorgan_not expression =
   | E.Cst value when Bitvector.is_fill value -> E.constant (Bitvector.zeros (Bitvector.size_of value))
   | expression -> E.unary E.Not expression
 
-let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_atoms)
-    ?(semantic_bitwise = false) cost expression =
+let linear_candidates_with_rings ?(opaque_atoms = [])
+    ?(max_atoms = !c_normalization_max_atoms) ?(semantic_bitwise = false)
+    ?(ring_bridges = true) cost expression =
   let width = E.sizeof expression in
   let modulus = Z.shift_left Z.one width in
   let mask = Z.pred modulus in
   let normalize value = Z.logand value mask in
+  let ring_edges = ref [] and replacements = Nodes.create 32 in
+  let record_ring original rewritten =
+    if not (E.is_equal original rewritten) then (
+      ring_edges := (original, rewritten) :: !ring_edges;
+      Nodes.replace replacements original rewritten)
+  in
+  let scalar_expression coefficient base =
+    let coefficient = normalize coefficient in
+    if Z.equal coefficient Z.zero then zeros width
+    else if Z.equal coefficient Z.one then base
+    else if Z.equal coefficient mask then E.unary E.Minus base
+    else E.binary E.Mul (constant width coefficient) base
+  in
+  let extract_product_scalar root =
+    let steps = ref 0 in
+    let rec collect coefficient factors = function
+      | E.Cst value -> normalize (Z.mul coefficient (Bitvector.value_of value)), factors
+      | E.Unary { f = E.Minus; x; _ } -> collect (Z.neg coefficient) factors x
+      | E.Binary { f = E.Mul; x; y; _ } ->
+          incr steps;
+          if !steps > 64 then raise Too_complex;
+          let coefficient, factors = collect coefficient factors x in
+          collect coefficient factors y
+      | factor -> coefficient, factor :: factors
+    in
+    let coefficient, factors = collect Z.one [] root in
+    let factors = List.rev factors in
+    if List.length factors < 2 then None
+    else
+      let sorted = List.sort E.compare factors in
+      let reordered = List.exists2 (fun left right -> not (E.is_equal left right))
+          factors sorted in
+      if Z.equal (normalize coefficient) Z.one && not reordered then None
+      else
+        let base = build_balanced E.Mul sorted in
+        let rewritten = scalar_expression coefficient base in
+        Some (normalize coefficient, base, rewritten)
+  in
+  let canonical_ac_atom original =
+    if not ring_bridges then original else
+    let rec flatten operation acc = function
+      | E.Binary { f; x; y; _ } when f = operation ->
+          flatten operation (flatten operation acc x) y
+      | value -> value :: acc
+    in
+    match original with
+    | E.Binary { f = (E.Plus | E.Mul as operation); _ } ->
+        let terms = flatten operation [] original |> List.sort E.compare in
+        if List.length terms > 4 then original
+        else
+          let canonical = build_balanced operation terms in
+          record_ring original canonical;
+          canonical
+    | _ -> original
+  in
   let atoms = ref [] in
   let saw_nonlinear = ref false in
   let visited = ref 0 in
@@ -50,6 +106,7 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
   let atom expression =
     if E.sizeof expression <> width then raise Too_complex;
     let expression, complemented = canonical_bitwise_atom expression in
+    let expression = canonical_ac_atom expression in
     let rec lookup index = function
       | [] ->
           if index >= max_atoms then raise Too_complex;
@@ -80,7 +137,13 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
               match constant_value x, constant_value y with
               | Some k, _ -> Scale (Bitvector.value_of k, linear y)
               | _, Some k -> Scale (Bitvector.value_of k, linear x)
-              | _ -> saw_nonlinear := true; atom expression)
+              | _ ->
+                  (match if ring_bridges then extract_product_scalar expression else None with
+                  | Some (coefficient, base, rewritten) ->
+                      record_ring expression rewritten;
+                      saw_nonlinear := true;
+                      Scale (coefficient, atom base)
+                  | None -> saw_nonlinear := true; atom expression))
           | E.Binary { f = E.Lsl; x; y; _ } -> (
               match constant_value y with
               | Some count ->
@@ -523,8 +586,33 @@ let linear_candidates ?(opaque_atoms = []) ?(max_atoms = !c_normalization_max_at
           | Some old -> E.binary E.Plus old (scale coefficient term)))
     done;
     offer (Option.value !result ~default:(zeros width));
-    !results
+    let memo = Nodes.create 128 in
+    let rec substitute node =
+      match Nodes.find_opt replacements node with
+      | Some replacement -> replacement
+      | None ->
+          (match Nodes.find_opt memo node with
+          | Some result -> result
+          | None ->
+              let result =
+                match node with
+                | E.Unary { f; x; _ } -> E.unary f (substitute x)
+                | E.Binary { f; x; y; _ } -> E.binary f (substitute x) (substitute y)
+                | E.Ite { c; t; e; _ } -> E.ite (substitute c) (substitute t) (substitute e)
+                | value -> value
+              in
+              Nodes.add memo node result;
+              result)
+    in
+    let rewritten_source = substitute expression
+    and ring_edges = List.rev !ring_edges in
+    List.map (fun candidate -> candidate, ring_edges, rewritten_source) !results
   with Too_complex -> []
+
+let linear_candidates ?opaque_atoms ?max_atoms ?semantic_bitwise cost expression =
+  linear_candidates_with_rings ?opaque_atoms ?max_atoms ?semantic_bitwise
+    ~ring_bridges:false cost expression
+  |> List.map (fun (candidate, _, _) -> candidate)
 
 let is_semantically_bitwise cost expression =
   let memo = Nodes.create 32 in

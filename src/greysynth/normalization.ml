@@ -201,6 +201,43 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
                         ~semilinear_mba_equalities !result candidate) ->
             result := candidate
         | _ -> ());
+        let accept_linear (candidate, ring_equalities, rewritten_source) =
+          Rewrite.accepts_compositional ~pass:"dag-linear-mba"
+            ~equalities:[] ~ring_equalities
+            ~linear_mba_equalities:[ rewritten_source, candidate ]
+            !result candidate
+        in
+        if cost !result >= 3 then (
+          let max_atoms =
+            let expanded =
+              expression_cost <= 4096 && cost !result <= 4096
+              && contains_probe_shell !result
+            in
+            if not minimal && (cost !result <= 512 || expanded)
+               && Greysynth_utils.Utils.dag_size_bounded ~limit:1024 !result <= 1024
+            then 6 else 4
+          in
+          let proposals =
+            if expression_cost <= 16_384 then
+              linear_candidates_with_rings ~max_atoms cost !result
+            else
+              linear_candidates ~max_atoms cost !result
+              |> List.map (fun candidate -> candidate, [], !result)
+          in
+          match
+            proposals
+            |> List.sort (fun (left, _, _) (right, _, _) ->
+                   Int.compare (cost left) (cost right))
+          with
+          | (candidate, _, _ as proposal) :: _ when accept_linear proposal ->
+              result := candidate
+          | _ -> ());
+        (match semilinear_mba_candidate cost !result with
+        | Some candidate
+          when Rewrite.accepts_compositional ~pass:"dag-semilinear-mba"
+                 ~equalities:[] ~semilinear_mba_equalities:[ !result, candidate ]
+                 !result candidate -> result := candidate
+        | _ -> ());
         if Greysynth_utils.Utils.dag_size_bounded ~limit:512 !result <= 512 then (
           (match complementary_slice_refine_candidate cost !result with
           | Some (candidate, equalities, ring_equalities)
@@ -221,12 +258,6 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
           when Rewrite.accepts_compositional ~pass:"dag-minterm-ring-poly"
                  ~equalities:[] ~ring_equalities
                  ~linear_mba_equalities:(linear_mba_equalities @ final_linear_equalities)
-                 !result candidate -> result := candidate
-        | _ -> ());
-        (match semilinear_mba_candidate cost !result with
-        | Some candidate
-          when Rewrite.accepts_compositional ~pass:"dag-semilinear-mba"
-                 ~equalities:[] ~semilinear_mba_equalities:[ !result, candidate ]
                  !result candidate -> result := candidate
         | _ -> ());
         if not minimal then (
@@ -302,27 +333,6 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
                  ~equalities:[] ~ring_equalities ~linear_mba_equalities
                  !result candidate -> result := candidate
         | _ -> ()));
-        let accept_linear candidate =
-          Rewrite.accepts_compositional ~pass:"dag-linear-mba"
-            ~equalities:[] ~linear_mba_equalities:[ !result, candidate ]
-            !result candidate
-        in
-        if cost !result >= 3 then (
-          let max_atoms =
-            let expanded =
-              expression_cost <= 4096 && cost !result <= 4096
-              && contains_probe_shell !result
-            in
-            if not minimal && (cost !result <= 512 || expanded)
-               && Greysynth_utils.Utils.dag_size_bounded ~limit:1024 !result <= 1024
-            then 6 else 4
-          in
-          match
-            linear_candidates ~max_atoms cost !result
-            |> List.sort (fun left right -> Int.compare (cost left) (cost right))
-          with
-          | candidate :: _ when accept_linear candidate -> result := candidate
-          | _ -> ());
         (match reduce_modular_polynomial cost !result with
         | Some (candidate, equalities, poly_equalities)
           when Rewrite.accepts_compositional ~pass:"dag-poly-mod2w"
@@ -632,7 +642,22 @@ let run ?deadline expression =
                                !current candidate -> Some candidate
                    | _ -> None)
              in
+             let lowk_decomposed =
+               if cost !current < 5 || cost !current > 256 then None
+               else
+                 match lowk_restrict_homomorphism_candidate cost !current with
+                 | Some (candidate, equalities, linear_mba_equalities,
+                         ring_equalities)
+                   when Rewrite.accepts_compositional ~timeout:0.4
+                          ~pass:"normalize-lowk-homomorphism" ~equalities
+                          ~linear_mba_equalities ~ring_equalities
+                          !current candidate -> Some candidate
+                 | _ -> None
+             in
              let decomposed =
+               match lowk_decomposed with
+               | Some candidate -> Some candidate
+               | None ->
                match nonlinear_product_identity_candidate !current with
                | Some (candidate, equalities, linear_mba_equalities,
                        semilinear_mba_equalities, ring_equalities)
