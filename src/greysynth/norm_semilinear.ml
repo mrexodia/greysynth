@@ -609,13 +609,64 @@ let nonlinear_product_identity_candidate expression =
             (E.binary E.Mul a b,
              [ first, first_replacement; second, second_replacement;
                _intersection, u; union, union_replacement ],
-             [ substituted, E.binary E.Mul a b ]))
+             [],
+             [ E.binary E.Plus (E.binary E.Mul u union_replacement)
+                   (E.binary E.Mul first_replacement second_replacement), substituted;
+               substituted, E.binary E.Mul a b ]))
+          (parse_regular a b regular)
+    | None -> None
+  in
+  let build_constants cross regular =
+    let and_constant = function
+      | (E.Binary { f = E.And; x = term; y = E.Cst value; _ } as actual)
+      | (E.Binary { f = E.And; x = E.Cst value; y = term; _ } as actual) ->
+          Some (term, value, actual)
+      | _ -> None
+    in
+    let parse = function
+      | E.Binary { f = E.Mul; x; y; _ } ->
+          let try_pair plain complemented =
+            match and_constant plain, and_constant complemented with
+            | Some (a, complement, first),
+              Some (E.Unary { f = E.Not; x = other; _ }, base, second)
+              when same a other && Bitvector.equal complement (Bitvector.lognot base) ->
+                Some (a, E.constant base, first, second)
+            | _ -> None
+          in
+          (match try_pair x y with Some _ as result -> result | None -> try_pair y x)
+      | _ -> None
+    in
+    match parse cross with
+    | Some (a, b, first, second) ->
+        Option.map
+          (fun (intersection, union) ->
+            let u = E.binary E.And a b in
+            let first_replacement = E.binary E.Minus a u
+            and second_replacement = E.binary E.Minus b u
+            and union_replacement = E.binary E.Minus (E.binary E.Plus a b) u in
+            let substituted = E.binary E.Plus
+                (E.binary E.Mul first_replacement second_replacement)
+                (E.binary E.Mul u union_replacement) in
+            (E.binary E.Mul a b, [],
+             [ first, first_replacement; second, second_replacement;
+               intersection, u; union, union_replacement ],
+             [ E.binary E.Plus (E.binary E.Mul u union_replacement)
+                   (E.binary E.Mul first_replacement second_replacement), substituted;
+               substituted, E.binary E.Mul a b ]))
           (parse_regular a b regular)
     | None -> None
   in
   match expression with
   | E.Binary { f = E.Plus; x; y; _ } ->
-      (match build x y with Some _ as result -> result | None -> build y x)
+      (match build x y with
+      | Some _ as result -> result
+      | None ->
+          (match build y x with
+          | Some _ as result -> result
+          | None ->
+              (match build_constants x y with
+              | Some _ as result -> result
+              | None -> build_constants y x)))
   | _ -> None
 
 let known_bits_candidate cost expression =

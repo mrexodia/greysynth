@@ -494,6 +494,18 @@ let constant_cast_fold_candidate evaluate expression =
   | E.Unary { f = E.Minus; _ } -> None
   | E.Cst _ | E.Var _ | E.Binary _ | E.Ite _ | E.Load _ -> None
 
+let restrict_factoring_candidate expression =
+  match expression with
+  | E.Binary { f = (E.And | E.Or | E.Xor as operation);
+               x = E.Unary { f = E.Restrict left_slice; x = left; _ };
+               y = E.Unary { f = E.Restrict right_slice; x = right; _ }; _ }
+    when left_slice = right_slice ->
+      let candidate = E.unary (E.Restrict left_slice) (E.binary operation left right) in
+      if Greysynth_utils.Utils.cost_of_expr Greysynth_utils.Utils.PaperAst candidate
+         < Greysynth_utils.Utils.cost_of_expr Greysynth_utils.Utils.PaperAst expression
+      then Some candidate else None
+  | _ -> None
+
 let build_balanced op = function
   | [] -> invalid_arg "normalization: empty associative expression"
   | terms ->

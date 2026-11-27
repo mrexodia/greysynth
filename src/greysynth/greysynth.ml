@@ -268,17 +268,22 @@ let run_preprocessing gt input =
     then ()
     else
       let candidates =
-        [ Normalization.probe_low_width_exact size_of_expr !best;
+        [ Normalization.probe_opaque_atoms size_of_expr !best;
+          Normalization.probe_low_width_exact size_of_expr !best;
           Normalization.probe_semantic_linear_mba size_of_expr !best;
           Normalization.probe_semantic_poly size_of_expr !best ]
         |> List.filter_map Fun.id
         |> List.sort (fun left right -> Int.compare (size_of_expr left) (size_of_expr right))
       in
       match candidates with
-      | candidate :: _
-        when Rewrite.accepts ~timeout ~pass:"root-semantic-probe"
-               !best candidate ->
-          best := candidate
+      | candidate :: _ ->
+          let accepted =
+            Rewrite.accepts_compositional ~pass:"root-semantic-probe-linear"
+              ~equalities:[] ~linear_mba_equalities:[ !best, candidate ]
+              !best candidate
+            || Rewrite.accepts ~timeout ~pass:"root-semantic-probe" !best candidate
+          in
+          if accepted then best := candidate
       | _ -> ()
   in
   let run_root_semilinear () =

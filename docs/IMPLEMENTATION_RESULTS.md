@@ -1444,3 +1444,43 @@ refutations or remaining unresolved rows. Focused L5 results include target
 (`1705 -> 17`, GT 3), target 3500 (`4605 -> 13`, GT 11), and target 6367
 (`4907 -> 13`, GT 7). Opaque-atom and cast handling improve the aggregate
 substantially, although several deeply nested target forms remain above GT.
+
+## Round-38 opaque semantic interpolation and local structural cleanup
+
+Round 38 adds a bounded `probe_opaque_atoms` engine for one to three repeated
+opaque sub-DAGs. It tries strict operator-boundary and shared-subterm
+abstractions, reconstructs a compact conjunction-basis candidate, filters it on
+16 full-width abstract samples, restores the concrete atoms, and admits it only
+through decidable linear-MBA replay or the existing proof-gated SMT fallback.
+This keeps nonlinear multiplication, division, rotate and cast internals out of
+the abstract proof obligation.
+
+Complementary-constant product peeling now handles constant-folded `C`/`~C`
+factors using semi-linear bridge edges plus ring normalization. Product peeling
+is available in local portfolios as well as DAG traversal. Local candidates now
+include abstract slice cleanup and common `restrict(lo,hi)` factoring across
+`&`, `|`, and `^`. Unit coverage includes target-158-style opaque carries,
+shared one-atom offsets, constant-complement products, division-heavy slices,
+and restriction factoring; `make test` remains warning-clean.
+
+Final artifacts:
+
+```text
+/tmp/r38-l5/out.jsonl
+/tmp/r38-core/out.jsonl
+/tmp/r38-core-isolated/out.jsonl
+/tmp/r38-smoke/out.jsonl
+```
+
+| Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| Tigress L5 all_non_exact | 450/450 | 134 | 25.4124x -> 6.8957x | 324 / 37 / 89 |
+| Refreshed core hard | 353/353* | 63 | 24.3105x -> 6.5202x | 125 / 200 / 25 |
+| Regression smoke | 62/62 | 54 | 0.7846x -> 0.8232x | 5 / 50 / 7 |
+
+`*` Three Tigress-L8 rows timed out in the parallel core run and all three
+proved directly with net-neutral outputs on isolated replay. There are zero
+refutations or unresolved rows after isolation. Focused wins include Tigress-L5
+target 1373 (`4264 -> 5` exact), target 1499 (`9664 -> 5` exact), target 3500
+(`4605 -> 11` exact), and target 5498 (`41387 -> 7` exact). More deeply wrapped
+targets such as 158, 2968, 3728, and 2618 improve but remain above GT.

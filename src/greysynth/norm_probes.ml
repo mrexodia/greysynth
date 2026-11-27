@@ -51,6 +51,14 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
       candidates := direct "constant-cast" ~allow_equal_cost:true candidate :: !candidates)
     (constant_cast_fold_candidate constants.eval expression);
   Option.iter
+    (fun candidate ->
+      candidates := direct "restrict-factor" ~allow_equal_cost:true candidate :: !candidates)
+    (restrict_factoring_candidate expression);
+  Option.iter
+    (fun candidate ->
+      candidates := direct "abstract-slice" ~allow_equal_cost:true candidate :: !candidates)
+    (abstract_slice_candidate expression);
+  Option.iter
     (fun (candidate, equalities, ring_equalities) ->
       candidates :=
         { expr = candidate; pass = "complementary-slice"; equalities;
@@ -81,11 +89,12 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
     (fun candidate -> candidates := direct "demand-bits" candidate :: !candidates)
     (demand_bits_candidate cost expression);
   Option.iter
-    (fun (candidate, linear_mba_equalities, ring_equalities) ->
+    (fun (candidate, linear_mba_equalities, semilinear_mba_equalities,
+          ring_equalities) ->
       candidates :=
         { expr = candidate; pass = "product-peel"; equalities = [];
           ring_equalities; poly_equalities = []; linear_mba_equalities;
-          semilinear_mba_equalities = []; allow_equal_cost = false } :: !candidates)
+          semilinear_mba_equalities; allow_equal_cost = false } :: !candidates)
     (nonlinear_product_identity_candidate expression);
   if heavy_additive then (
   if ac then
@@ -808,3 +817,152 @@ let probe_semantic_poly cost expression =
            |> List.sort (fun left right -> Int.compare (cost left) (cost right))
            |> List.find_opt (fun candidate -> Rewrite.samples_agree expression candidate)
          with _ -> None))
+
+let probe_opaque_atoms cost expression =
+  if cost expression < 9 || cost expression > 512
+     || Greysynth_utils.Utils.dag_size_bounded ~limit:256 expression > 256
+  then None
+  else
+    let width = E.sizeof expression and frequencies = Nodes.create 128 in
+    let rec count node =
+      Nodes.replace frequencies node
+        (1 + Option.value (Nodes.find_opt frequencies node) ~default:0);
+      match node with
+      | E.Unary { x; _ } -> count x
+      | E.Binary { x; y; _ } -> count x; count y
+      | E.Ite { c; t; e; _ } -> count c; count t; count e
+      | _ -> ()
+    in
+    count expression;
+    let shell = function
+      | E.Cst _ -> true
+      | E.Unary { f = (E.Not | E.Minus); _ } -> true
+      | E.Binary { f = (E.Plus | E.Minus | E.And | E.Or | E.Xor); _ } -> true
+      | E.Binary { f = E.Mul; x; y; _ } ->
+          Option.is_some (constant_value x) || Option.is_some (constant_value y)
+      | E.Binary { f = E.Lsl; y; _ } -> Option.is_some (constant_value y)
+      | _ -> false
+    in
+    let attempt shared_boundary =
+      let atoms = Nodes.create 8 in
+      let rec collect is_root node =
+        let repeated =
+          shared_boundary && not is_root && cost node >= 3
+          && Option.value (Nodes.find_opt frequencies node) ~default:0 >= 2
+        in
+        if E.sizeof node <> width then Nodes.replace atoms node ()
+        else if repeated || not (shell node) then Nodes.replace atoms node ()
+        else
+          match node with
+          | E.Cst _ -> ()
+          | E.Unary { x; _ } -> collect false x
+          | E.Binary { f = E.Mul; x; y; _ } ->
+              (match constant_value x, constant_value y with
+              | Some _, _ -> collect false y
+              | _, Some _ -> collect false x
+              | _ -> Nodes.replace atoms node ())
+          | E.Binary { x; y; _ } -> collect false x; collect false y
+          | _ -> Nodes.replace atoms node ()
+      in
+      collect true expression;
+      let atoms = Nodes.fold (fun atom () result -> atom :: result) atoms []
+        |> List.filter (fun atom -> E.sizeof atom = width)
+        |> List.sort E.compare |> Array.of_list in
+      let count = Array.length atoms in
+      if count = 0 || count > 3 then None
+      else
+        let replacements = Nodes.create count and inverse = Nodes.create count in
+        Array.iteri (fun index atom ->
+            let name = Printf.sprintf "$greysynth.opaque.%d" index in
+            let variable = E.var name width name in
+            Nodes.add replacements atom variable;
+            Nodes.add inverse variable atom) atoms;
+        let rec substitute node =
+          match Nodes.find_opt replacements node with
+          | Some variable -> variable
+          | None ->
+              match node with
+              | E.Unary { f; x; _ } -> E.unary f (substitute x)
+              | E.Binary { f; x; y; _ } -> E.binary f (substitute x) (substitute y)
+              | E.Ite { c; t; e; _ } -> E.ite (substitute c) (substitute t) (substitute e)
+              | value -> value
+        and restore node =
+          match Nodes.find_opt inverse node with
+          | Some atom -> atom
+          | None ->
+              match node with
+              | E.Unary { f; x; _ } -> E.unary f (restore x)
+              | E.Binary { f; x; y; _ } -> E.binary f (restore x) (restore y)
+              | E.Ite { c; t; e; _ } -> E.ite (restore c) (restore t) (restore e)
+              | value -> value
+        in
+        let abstract_expression = substitute expression in
+        if cost abstract_expression <= 3 then None
+        else
+          let variables = Array.init count (fun index ->
+              let name = Printf.sprintf "$greysynth.opaque.%d" index in
+              E.var name width name) in
+          try
+            let assignments = 1 lsl count and modulus = Z.shift_left Z.one width in
+            let normalize value = Z.logand value (Z.pred modulus) in
+            let coefficients = Array.init assignments (fun assignment ->
+                let values = Array.init count (fun index ->
+                    if assignment land (1 lsl index) = 0 then Z.zero else Z.one) in
+                probe_evaluate abstract_expression variables values) in
+            for bit = 0 to count - 1 do
+              for subset = 0 to assignments - 1 do
+                if subset land (1 lsl bit) <> 0 then
+                  coefficients.(subset) <- normalize
+                      (Z.sub coefficients.(subset)
+                         coefficients.(subset lxor (1 lsl bit)))
+              done
+            done;
+            let terms = ref [] in
+            Array.iteri (fun subset coefficient ->
+                let coefficient = normalize coefficient in
+                if not (Z.equal coefficient Z.zero) then
+                  let body =
+                    if subset = 0 then None
+                    else
+                      Array.to_list variables
+                      |> List.mapi (fun index variable -> index, variable)
+                      |> List.filter_map (fun (index, variable) ->
+                             if subset land (1 lsl index) = 0 then None else Some variable)
+                      |> function head :: tail -> Some (List.fold_left (E.binary E.And) head tail)
+                                  | [] -> None
+                  in
+                  let term = match body with
+                    | None -> constant width coefficient
+                    | Some body when Z.equal coefficient Z.one -> body
+                    | Some body -> E.binary E.Mul (constant width coefficient) body
+                  in terms := term :: !terms) coefficients;
+            let raw = match !terms with
+              | [] -> zeros width
+              | head :: tail -> List.fold_left (E.binary E.Plus) head tail
+            in
+            let abstract_candidates =
+              raw :: linear_candidates ~max_atoms:3 cost raw
+            in
+            let samples =
+              [| Z.zero; Z.one; Z.pred modulus; Z.of_string "0x5555555555555555";
+                 Z.of_string "0xaaaaaaaaaaaaaaaa"; Z.of_int 3; Z.of_int 17; Z.of_int 255;
+                 Z.of_int 1024; Z.of_string "0x123456789abcdef";
+                 Z.of_string "0xfedcba987654321"; Z.of_int 7; Z.of_int 31;
+                 Z.of_int 63; Z.of_int 127; Z.of_int 511 |]
+            in
+            let agrees candidate =
+              Array.for_all (fun seed ->
+                  let values = Array.init count (fun index ->
+                      normalize (Z.add seed (Z.of_int (index * 0x9e37)))) in
+                  Z.equal (probe_evaluate abstract_expression variables values)
+                    (probe_evaluate candidate variables values)) samples
+            in
+            abstract_candidates
+            |> List.filter (fun candidate -> agrees candidate)
+            |> List.map restore
+            |> List.filter (fun candidate -> cost candidate < cost expression)
+            |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+            |> function candidate :: _ -> Some candidate | [] -> None
+          with _ -> None
+    in
+    match attempt true with Some _ as result -> result | None -> attempt false
