@@ -198,3 +198,10 @@
  (action
   (run %{test}
    %{dep:../datasets/hard_cases/all_non_exact/qsynth_ea/qsynth_ea__line_0000026.json})))
+
+(test
+ (name round45_test)
+ (modules round45_test)
+ (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
+            binsec.smt binsec.sse.term yojson unix)
+ (flags (:standard -open Binsec -open Libsse -open Libterm)))

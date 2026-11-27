@@ -257,14 +257,39 @@ let polysim_candidate cost expression =
                  if E.is_equal compact polynomial then [] else [ polynomial, compact ])
     with Ring_candidate_too_complex -> None
 
-let nonlinear_poly_candidate cost expression =
+let nonlinear_poly_candidate ?(max_cost = 16_384) cost expression =
   match minterm_ring_poly_candidate cost expression with
   | Some _ as candidate -> candidate
   | None ->
-      if cost expression <= 2048
-         && Greysynth_utils.Utils.dag_size_bounded ~limit:256 expression <= 256
-      then polysim_candidate cost expression
-      else None
+      let expression_cost = cost expression in
+      if expression_cost > max_cost then None
+      else
+        let has_bitwise =
+          if expression_cost <= 2048 then true
+          else
+            let memo = Nodes.create 128 in
+            let rec inspect node =
+              match Nodes.find_opt memo node with
+              | Some result -> result
+              | None ->
+                  let result =
+                    match node with
+                    | E.Unary { f = E.Not; _ }
+                    | E.Binary { f = (E.And | E.Or | E.Xor); _ } -> true
+                    | E.Unary { x; _ } -> inspect x
+                    | E.Binary { x; y; _ } -> inspect x || inspect y
+                    | E.Ite { c; t; e; _ } -> inspect c || inspect t || inspect e
+                    | _ -> false
+                  in
+                  Nodes.add memo node result;
+                  result
+            in
+            inspect expression
+        in
+        if has_bitwise
+           && Greysynth_utils.Utils.dag_size_bounded ~limit:1024 expression <= 1024
+        then polysim_candidate cost expression
+        else None
 
 let pair_complementary_atoms cost expression =
   if cost expression > 4096 then None else

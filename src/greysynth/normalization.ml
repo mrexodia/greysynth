@@ -59,6 +59,7 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
   let memo = Nodes.create 256 in
   let constants = Sample_evaluator.make 1 in
   let cost = Greysynth_utils.Utils.size_of_expr in
+  let expression_cost = cost expression in
   let soft_stopped = ref false and smt_spent = ref 0.0
   and opaque_probe_calls = ref 0 in
   let contains_probe_shell root =
@@ -178,12 +179,12 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
                  ~pass:"dag-abstract-slice" !result candidate) -> result := candidate
         | _ -> ());
         if not zero_smt then
-          (match bit0_restrict_homomorphism_candidate cost !result with
-          | Some (candidate, equalities, linear_mba_equalities)
+          (match lowk_restrict_homomorphism_candidate cost !result with
+          | Some (candidate, equalities, linear_mba_equalities, ring_equalities)
             when try_smt (fun () ->
-                     Rewrite.accepts_compositional ~pass:"dag-bit0-homomorphism"
-                       ~equalities ~linear_mba_equalities !result candidate) ->
-              result := candidate
+                     Rewrite.accepts_compositional ~pass:"dag-lowk-homomorphism"
+                       ~equalities ~linear_mba_equalities ~ring_equalities
+                       !result candidate) -> result := candidate
           | _ -> ());
         (match nonlinear_product_identity_candidate !result with
         | Some (candidate, [], linear_mba_equalities,
@@ -214,7 +215,7 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
                       ~pass:"dag-mask-lift" !result candidate) ->
               result := candidate
           | _ -> ()));
-        (match nonlinear_poly_candidate cost !result with
+        (match nonlinear_poly_candidate ~max_cost:2048 cost !result with
         | Some (candidate, linear_mba_equalities, ring_equalities,
                 final_linear_equalities)
           when Rewrite.accepts_compositional ~pass:"dag-minterm-ring-poly"
@@ -259,7 +260,7 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
            && cost !result >= 9 && cost !result <= 256
            && contains_probe_shell !result
         then
-          (match probe_opaque_atoms cost !result with
+          (match probe_opaque_atoms ~maximal_repeated:false cost !result with
           | Some candidate ->
               incr opaque_probe_calls;
               if accept_probe candidate then result := candidate
@@ -308,7 +309,13 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
         in
         if cost !result >= 3 then (
           let max_atoms =
-            if minimal then 4 else if cost !result <= 512 then 6 else 4
+            let expanded =
+              expression_cost <= 4096 && cost !result <= 4096
+              && contains_probe_shell !result
+            in
+            if not minimal && (cost !result <= 512 || expanded)
+               && Greysynth_utils.Utils.dag_size_bounded ~limit:1024 !result <= 1024
+            then 6 else 4
           in
           match
             linear_candidates ~max_atoms cost !result

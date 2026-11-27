@@ -282,13 +282,31 @@ let run_preprocessing gt input =
              !best candidate -> best := candidate
     | _ -> ()
   in
-  let run_root_linear_group () =
-    let root_variable_count =
-      List.length (Sample_evaluator.variables_of_expr !best)
+  let run_root_linear_group ?(allow_opaque = false) () =
+    let bitwise_memo = Sexpr.BvTbl.create 128 in
+    let rec contains_bitwise node =
+      match Sexpr.BvTbl.find_opt bitwise_memo node with
+      | Some result -> result
+      | None ->
+          let result =
+            match node with
+            | Sexpr.Expr.Unary { f = Sexpr.Expr.Not; _ }
+            | Sexpr.Expr.Binary {
+                f = (Sexpr.Expr.And | Sexpr.Expr.Or | Sexpr.Expr.Xor); _ } -> true
+            | Sexpr.Expr.Unary { x; _ } -> contains_bitwise x
+            | Sexpr.Expr.Binary { x; y; _ } ->
+                contains_bitwise x || contains_bitwise y
+            | Sexpr.Expr.Ite { c; t; e; _ } ->
+                contains_bitwise c || contains_bitwise t || contains_bitwise e
+            | _ -> false
+          in
+          Sexpr.BvTbl.add bitwise_memo node result;
+          result
     in
     if size_of_expr !best >= 15
-       && root_variable_count <= 8
-       && Normalization.linear_mba_compatible !best
+       && dag_size_bounded ~limit:2048 !best <= 2048
+       && (Normalization.linear_mba_compatible !best
+           || (allow_opaque && contains_bitwise !best))
     then
       match
         Normalization.linear_candidates ~max_atoms:8 size_of_expr !best
@@ -424,7 +442,10 @@ let run_preprocessing gt input =
          && (size_of_expr !best <= 32_768
              || size_of_expr !best > 1_000_000
              || Sexpr.Expr.sizeof !best <= 32)
-      then Normalization.nonlinear_poly_candidate size_of_expr !best
+      then
+        Normalization.nonlinear_poly_candidate
+          ~max_cost:(if size_of_expr input <= 16_384 then 16_384 else 2048)
+          size_of_expr !best
       else None
     with
     | Some (candidate, linear_mba_equalities, ring_equalities,
@@ -479,7 +500,8 @@ let run_preprocessing gt input =
   run_root_disjoint_components ();
   if size_of_expr !best <= 10_000
      || size_of_expr !best < size_of_expr input / 4
-  then run_root_linear_group ();
+  then run_root_linear_group
+      ~allow_opaque:(size_of_expr !best <= 10_000) ();
   run_root_complementary_slice ();
   run_root_complementary_atoms ();
   run_root_correlated_null ();

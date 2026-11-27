@@ -1838,3 +1838,72 @@ references (`12/12` for both checks).
 
 This is a zero-tuning baseline: no implementation, configuration, learned-rule,
 or dataset-specific changes were made before or during the audit.
+
+## Round-45 low-k homomorphism and opaque nonlinear recovery
+
+Round 45 generalizes bit-zero pushdown to exact low-`k` modular pushdown for
+`restrict(0,hi)` and zero-extended low slices. The DAG pass preserves modular
+addition, subtraction, multiplication, and bitwise operations while eliminating
+multiples and masks that are zero modulo `2^k`, full low-bit OR masks, and left
+shifts by at least `k`. Each pushed node is certified by a local abstract SMT
+edge; final one-bit or `k`-bit cleanup uses the existing linear-MBA and ring
+kernels.
+
+Root linear grouping can now recover up to eight opaque nonlinear/bitwise atoms
+on bounded roots. Six-atom DAG normalization extends through cost 4096 for
+bounded bitwise shells, while local DAG portfolios retain the previous cap to
+protect large shared inputs. Root PolySim accepts cost through 16,384 and DAG
+size 1024 for bitwise nonlinear MBAs; local portfolios retain their prior 2,048
+cap. Opaque probing adds a maximal non-overlapping repeated-subterm fallback,
+kept out of per-node DAG probing to preserve budgets.
+
+`test/round45_test.ml` covers low-7-bit annihilation, a >1,000-cost linear MBA
+over opaque nonlinear atoms, a >2,500-cost nonlinear PolySim identity, maximal
+repeated abstraction, and independent certificate replay. The complete
+warning-clean `make test` gate passes. The held-out `mba-balanced-v1` directory
+was not evaluated during Round 45.
+
+Final artifacts:
+
+```text
+/tmp/r45-leeky-dev64/out.jsonl
+/tmp/r45-l5/out.jsonl
+/tmp/r45-core/out.jsonl
+/tmp/r45-smoke/out.jsonl
+```
+
+All four parallel gates have zero refutations, unknowns, errors, or audit
+timeouts. The Leeky dev set establishes all 884 rows: 880 transformed and four
+controls. All controls remain unchanged and no larger than reference. Among
+transformed cases, 858 strictly decrease and 458 reach or beat reference after
+a strict reduction; geometric quality improves from `2.3475x` to `2.3235x`.
+
+| Leeky dev panel | Baseline hits -> R45 hits | Baseline quality -> R45 quality | R45 strict reductions |
+|---|---:|---:|---:|
+| mba-capabilities-v1 | 33 -> 33 | 3.3337x -> 3.3337x | 71/71 |
+| mba-capabilities-v2 | 34 -> 34 | 1.1037x -> 1.1062x | 43/44 |
+| mba-composition-v1 | 47 -> 46 | 1.1365x -> 1.1395x | 52/54 |
+| mba-extra-floor-v1 | 19 -> 21 | 1.4569x -> 1.4110x | 54/54 |
+| mba-frontier64-v1 | 3 -> 3 | 22.7000x -> 23.1109x | 87/96 |
+| mba-gaps-v1 | 55 -> 54 | 1.1124x -> 1.1071x | 72/72 |
+| mba-interactions-v1 | 23 -> 23 | 0.9364x -> 0.9262x | 33/33 |
+| mba-ladders-v1 | 39 -> 41 | 1.2743x -> 1.2676x | 72/72 |
+| mba-long-frontier-v1 | 44 -> 37 | 1.6318x -> 1.9813x | 71/72 |
+| mba-majority-v1 | 34 -> 34 | 1.3835x -> 1.3835x | 54/54 |
+| mba-projection-v1 | 51 -> 51 | 1.1375x -> 1.1375x | 54/54 |
+| mba-proof-context-v1 | 12 -> 12 | 1.5744x -> 1.5770x | 36/36 |
+| mba-stress64-v1 | 0 -> 1 | 11.2614x -> 8.9334x | 87/96 |
+| mba-tight-v1 | 68 -> 68 | 1.0377x -> 1.0377x | 72/72 |
+| **Overall transformed** | **462 -> 458** | **2.3475x -> 2.3235x** | **858/880** |
+
+| Regression gate | Established | Exact <= GT | Quality before -> after | Better / equal / worse | Strict decreases |
+|---|---:|---:|---:|---:|---:|
+| Shrunk Tigress L5 | 251/251 | 2 | 10.5590x -> 10.0374x | 52 / 166 / 33 | 248 |
+| Refreshed core hard | 342/342 | 9* | 7.0702x -> 6.6509x | 47 / 277 / 17 | 324 |
+| Regression smoke | 62/62 | 54* | 0.7846x -> 0.7968x | 5 / 51 / 6 | 62 |
+
+`*` Core exact counts cover 341 rows with usable GT; smoke exact counts cover 58.
+The dev-only results show a substantial stress-panel quality gain and small
+ladders/extra-floor hit gains, alongside hit-count regressions in long-frontier,
+gaps, interactions, and projection. These regressions are retained explicitly
+rather than hidden by aggregate quality.

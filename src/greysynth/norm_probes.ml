@@ -15,14 +15,19 @@ type local_candidate = {
   allow_equal_cost : bool;
 }
 
-let bit0_restrict_homomorphism_candidate cost expression =
-  match bit0_restrict_pushdown expression with
-  | Some (_baseline, pushed, equalities, inner)
+let lowk_restrict_homomorphism_candidate cost expression =
+  match lowk_restrict_pushdown expression with
+  | Some (_baseline, pushed, equalities, inner, annihilated)
     when cost inner >= 3
          && Greysynth_utils.Utils.dag_size_bounded ~limit:1024 inner <= 1024 ->
-      let minimized =
-        pushed :: linear_candidates ~max_atoms:5 cost pushed
-        |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+      let options = ref [ pushed, `None ] in
+      List.iter (fun candidate -> options := (candidate, `Linear) :: !options)
+        (linear_candidates ~max_atoms:5 cost pushed);
+      Option.iter (fun candidate -> options := (candidate, `Ring) :: !options)
+        (ring_polynomial_candidate cost pushed);
+      let minimized, proof =
+        !options
+        |> List.sort (fun (left, _) (right, _) -> Int.compare (cost left) (cost right))
         |> List.hd
       in
       let candidate =
@@ -30,13 +35,24 @@ let bit0_restrict_homomorphism_candidate cost expression =
         | E.Unary { f = E.Uext amount; _ } -> E.unary (E.Uext amount) minimized
         | _ -> minimized
       in
-      if cost candidate < cost expression then
-        let linear_mba_equalities =
-          if E.is_equal pushed minimized then [] else [ pushed, minimized ]
+      if cost candidate < cost expression
+         && (annihilated || cost pushed < cost expression || proof <> `None)
+      then
+        let linear_mba_equalities, ring_equalities =
+          match proof with
+          | `Linear -> [ pushed, minimized ], []
+          | `Ring -> [], [ pushed, minimized ]
+          | `None -> [], []
         in
-        Some (candidate, equalities, linear_mba_equalities)
+        Some (candidate, equalities, linear_mba_equalities, ring_equalities)
       else None
   | _ -> None
+
+let bit0_restrict_homomorphism_candidate cost expression =
+  Option.map
+    (fun (candidate, equalities, linear_mba_equalities, _ring_equalities) ->
+      candidate, equalities, linear_mba_equalities)
+    (lowk_restrict_homomorphism_candidate cost expression)
 
 let local_candidates ~cost ~(constants : Sample_evaluator.t)
     ?(heavy_additive = true) ~ac expression =
@@ -82,13 +98,13 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
       candidates := direct "abstract-slice" ~allow_equal_cost:true candidate :: !candidates)
     (abstract_slice_candidate expression);
   Option.iter
-    (fun (candidate, equalities, linear_mba_equalities) ->
+    (fun (candidate, equalities, linear_mba_equalities, ring_equalities) ->
       candidates :=
-        { expr = candidate; pass = "bit0-homomorphism"; equalities;
-          ring_equalities = []; poly_equalities = []; linear_mba_equalities;
+        { expr = candidate; pass = "lowk-homomorphism"; equalities;
+          ring_equalities; poly_equalities = []; linear_mba_equalities;
           semilinear_mba_equalities = []; allow_equal_cost = false }
         :: !candidates)
-    (bit0_restrict_homomorphism_candidate cost expression);
+    (lowk_restrict_homomorphism_candidate cost expression);
   Option.iter
     (fun (candidate, equalities, ring_equalities) ->
       candidates :=
@@ -148,7 +164,8 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
             ring_equalities; poly_equalities = [];
             linear_mba_equalities = linear_mba_equalities @ final_linear_equalities;
             semilinear_mba_equalities = []; allow_equal_cost = false } :: !candidates)
-      (if cost expression > 256 then nonlinear_poly_candidate cost expression else None);
+      (if cost expression > 256
+       then nonlinear_poly_candidate ~max_cost:2048 cost expression else None);
     Option.iter
       (fun (candidate, equalities, ring_equalities) ->
         candidates :=
@@ -849,7 +866,8 @@ let probe_semantic_poly cost expression =
            |> List.find_opt (fun candidate -> Rewrite.samples_agree expression candidate)
          with _ -> None))
 
-let probe_opaque_atoms ?(max_cost = 512) cost expression =
+let probe_opaque_atoms ?(max_cost = 512) ?(maximal_repeated = true)
+    cost expression =
   if cost expression < 9 || cost expression > max_cost
      || Greysynth_utils.Utils.dag_size_bounded ~limit:256 expression > 256
   then None
@@ -902,14 +920,35 @@ let probe_opaque_atoms ?(max_cost = 512) cost expression =
           Nodes.add has_shell_bits node result;
           result
     in
+    let maximal_atoms = Nodes.create 16 and selected_walk = Nodes.create 128
+    and maximal_ready = ref false in
+    let rec select_maximal is_root node =
+      if not (Nodes.mem selected_walk node) then (
+        Nodes.add selected_walk node ();
+        let frequency = Option.value (Nodes.find_opt frequencies node) ~default:0 in
+        if not is_root && E.sizeof node = width && cost node >= 5 && frequency >= 2
+        then Nodes.replace maximal_atoms node ()
+        else
+          match node with
+          | E.Unary { x; _ } -> select_maximal false x
+          | E.Binary { x; y; _ } ->
+              select_maximal false x; select_maximal false y
+          | E.Ite { c; t; e; _ } ->
+              select_maximal false c; select_maximal false t; select_maximal false e
+          | _ -> ())
+    in
     let attempt mode =
+      if mode = `Maximal && not !maximal_ready then (
+        maximal_ready := true;
+        select_maximal true expression);
       let atoms = Nodes.create 8 in
       let rec collect ~inside_bw is_root node =
         let frequency =
           Option.value (Nodes.find_opt frequencies node) ~default:0
         in
         let repeated =
-          mode = `Shared && not is_root && cost node >= 3 && frequency >= 2
+          (mode = `Shared && not is_root && cost node >= 3 && frequency >= 2)
+          || (mode = `Maximal && Nodes.mem maximal_atoms node)
         and arithmetic_boundary =
           mode = `Arithmetic && not is_root
           && not (has_bitwise_or_shift node)
@@ -1102,4 +1141,7 @@ let probe_opaque_atoms ?(max_cost = 512) cost expression =
     | None ->
         (match attempt `Shared with
         | Some _ as result -> result
-        | None -> attempt `Operator)
+        | None ->
+            (match attempt `Operator with
+            | Some _ as result -> result
+            | None -> if maximal_repeated then attempt `Maximal else None))

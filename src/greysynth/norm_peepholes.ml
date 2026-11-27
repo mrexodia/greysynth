@@ -584,6 +584,114 @@ let bit0_restrict_pushdown expression =
       candidate, pushed, List.rev !equalities, inner)
     (unpack expression)
 
+let lowk_restrict_pushdown expression =
+  let unpack = function
+    | E.Unary { f = E.Restrict { lo = 0; hi }; x; _ }
+      when hi >= 0 && hi < E.sizeof x - 1 -> Some (None, hi, x)
+    | E.Unary { f = E.Uext amount;
+                x = E.Unary { f = E.Restrict { lo = 0; hi }; x; _ }; _ }
+      when hi >= 0 && hi < E.sizeof x - 1 -> Some (Some amount, hi, x)
+    | _ -> None
+  in
+  Option.bind (unpack expression) (fun (extension, hi, inner) ->
+      if hi = 0 then
+        Option.map (fun (candidate, pushed, equalities, inner) ->
+            candidate, pushed, equalities, inner, true)
+          (bit0_restrict_pushdown expression)
+      else
+        let width = hi + 1 in
+        let mask = Z.pred (Z.shift_left Z.one width) in
+        let zero = constant width Z.zero and fill = constant width mask in
+        let is_zero = function E.Cst value -> Bitvector.is_zeros value | _ -> false
+        and is_fill = function E.Cst value -> Bitvector.is_fill value | _ -> false in
+        let normalize value = Z.logand value mask in
+        let simp_add left right =
+          if is_zero left then right else if is_zero right then left
+          else E.binary E.Plus left right
+        and simp_sub left right =
+          if is_zero right then left else if E.is_equal left right then zero
+          else E.binary E.Minus left right
+        and simp_mul left right =
+          if is_zero left || is_zero right then zero
+          else E.binary E.Mul left right
+        and simp_and left right =
+          if is_zero left || is_zero right then zero
+          else if is_fill left then right else if is_fill right then left
+          else if E.is_equal left right then left else E.binary E.And left right
+        and simp_or left right =
+          if is_fill left || is_fill right then fill
+          else if is_zero left then right else if is_zero right then left
+          else if E.is_equal left right then left else E.binary E.Or left right
+        and simp_xor left right =
+          if is_zero left then right else if is_zero right then left
+          else if E.is_equal left right then zero else E.binary E.Xor left right
+        in
+        let memo = Nodes.create 128 and equalities = ref [] and annihilated = ref false in
+        let rec low node =
+          match Nodes.find_opt memo node with
+          | Some result -> result
+          | None ->
+              let lhs = E.restrict ~lo:0 ~hi node in
+              let constant_mod value = normalize (Bitvector.value_of value) in
+              let divisible value = Z.equal (constant_mod value) Z.zero in
+              let full value = Z.equal (constant_mod value) mask in
+              let result =
+                match node with
+                | E.Cst value -> constant width (constant_mod value)
+                | E.Unary { f = E.Not; x; _ } -> E.unary E.Not (low x)
+                | E.Unary { f = E.Minus; x; _ } -> E.unary E.Minus (low x)
+                | E.Unary { f = (E.Uext _ | E.Sext _); x; _ }
+                  when E.sizeof x >= width -> low x
+                | E.Unary { f = E.Restrict { lo = 0; hi = outer_hi }; x; _ }
+                  when outer_hi >= hi -> low x
+                | E.Binary { f = E.Plus; x; y; _ } -> simp_add (low x) (low y)
+                | E.Binary { f = E.Minus; x; y; _ } -> simp_sub (low x) (low y)
+                | E.Binary { f = E.Mul; x = E.Cst value; y; _ }
+                  when divisible value ->
+                    annihilated := true; E.binary E.Mul (low y) zero
+                | E.Binary { f = E.Mul; x; y = E.Cst value; _ }
+                  when divisible value ->
+                    annihilated := true; E.binary E.Mul (low x) zero
+                | E.Binary { f = E.Mul; x; y; _ } -> simp_mul (low x) (low y)
+                | E.Binary { f = E.And; x = E.Cst value; y; _ }
+                  when divisible value ->
+                    annihilated := true; E.binary E.And (low y) zero
+                | E.Binary { f = E.And; x; y = E.Cst value; _ }
+                  when divisible value ->
+                    annihilated := true; E.binary E.And (low x) zero
+                | E.Binary { f = E.And; x; y; _ } -> simp_and (low x) (low y)
+                | E.Binary { f = E.Or; x = E.Cst value; y; _ }
+                  when full value ->
+                    annihilated := true; E.binary E.Or (low y) fill
+                | E.Binary { f = E.Or; x; y = E.Cst value; _ }
+                  when full value ->
+                    annihilated := true; E.binary E.Or (low x) fill
+                | E.Binary { f = E.Or; x; y; _ } -> simp_or (low x) (low y)
+                | E.Binary { f = E.Xor; x; y; _ } -> simp_xor (low x) (low y)
+                | E.Binary { f = E.Lsl; x; y; _ } ->
+                    (match constant_value y with
+                    | Some count ->
+                        let count = Bitvector.value_of count in
+                        if Z.sign count >= 0 && Z.geq count (Z.of_int width) then (
+                          annihilated := true; E.binary E.And (low x) zero)
+                        else if Z.sign count >= 0 then
+                          E.binary E.Lsl (low x) (constant width count)
+                        else lhs
+                    | None -> lhs)
+                | _ -> lhs
+              in
+              if not (E.is_equal lhs result) then
+                equalities := (lhs, result) :: !equalities;
+              Nodes.add memo node result;
+              result
+        in
+        let pushed = low inner in
+        let candidate = match extension with
+          | None -> pushed
+          | Some amount -> E.unary (E.Uext amount) pushed
+        in
+        Some (candidate, pushed, List.rev !equalities, inner, !annihilated))
+
 let restrict_factoring_candidate expression =
   match expression with
   | E.Binary { f = (E.And | E.Or | E.Xor as operation);
