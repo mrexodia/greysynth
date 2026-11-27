@@ -574,58 +574,163 @@ let nonlinear_product_identity_candidate expression =
         (same x left && same y right) || (same x right && same y left)
     | _ -> false
   in
+  let affine_complements left right =
+    let width = E.sizeof left and modulus = Z.shift_left Z.one (E.sizeof left) in
+    let normalize value = Z.logand value (Z.pred modulus) in
+    let add_term atom coefficient terms =
+      let rec merge prefix = function
+        | [] -> List.rev ((atom, normalize coefficient) :: prefix)
+        | (old_atom, old) :: rest when same atom old_atom ->
+            List.rev_append prefix ((old_atom, normalize (Z.add old coefficient)) :: rest)
+        | item :: rest -> merge (item :: prefix) rest
+      in
+      merge [] terms
+    in
+    let rec affine scale node (constant, terms) =
+      match node with
+      | E.Cst value ->
+          normalize (Z.add constant (Z.mul scale (Bitvector.value_of value))), terms
+      | E.Unary { f = E.Minus; x; _ } -> affine (Z.neg scale) x (constant, terms)
+      | E.Binary { f = E.Plus; x; y; _ } ->
+          affine scale y (affine scale x (constant, terms))
+      | E.Binary { f = E.Minus; x; y; _ } ->
+          affine (Z.neg scale) y (affine scale x (constant, terms))
+      | atom -> constant, add_term atom scale terms
+    in
+    if E.sizeof right <> width then false
+    else
+      let constant, terms = affine Z.one right (affine Z.one left (Z.zero, [])) in
+      Z.equal (normalize constant) (Z.pred modulus)
+      && List.for_all (fun (_, coefficient) -> Z.equal coefficient Z.zero) terms
+  in
+  let complement_info base complement =
+    match complement with
+    | E.Unary { f = E.Not; x; _ } when same base x ->
+        Some (complement, [], [])
+    | _ when affine_complements base complement ->
+        let width = E.sizeof base in
+        let canonical = E.binary E.Minus (E.unary E.Minus base) (integer width 1) in
+        Some (E.unary E.Not base,
+              [ canonical, E.unary E.Not base ], [ complement, canonical ])
+    | _ -> None
+  in
   let parse_cross = function
     | E.Binary { f = E.Mul; x; y; _ } ->
-        let masked = function
-          | (E.Binary { f = E.And; x = a;
-                        y = E.Unary { f = E.Not; x = b; _ }; _ } as actual)
-          | (E.Binary { f = E.And; x = E.Unary { f = E.Not; x = b; _ };
-                        y = a; _ } as actual) -> Some (a, b, actual)
-          | _ -> None
+        let operands = function
+          | E.Binary { f = E.And; x; y; _ } -> [ x, y; y, x ]
+          | _ -> []
         in
-        let parse left right =
-          match masked left, masked right with
-          | Some (a, b, first), Some (c, d, second)
-            when same a d && same b c -> Some (a, b, first, second)
-          | _ -> None
+        let replace_complement actual old_value new_value =
+          match actual with
+          | E.Binary { f = E.And; x; y; _ } ->
+              E.binary E.And
+                (if same x old_value then new_value else x)
+                (if same y old_value then new_value else y)
+          | _ -> actual
+        in
+        let parse first second =
+          operands first
+          |> List.find_map (fun (a, b_complement) ->
+                 operands second
+                 |> List.find_map (fun (b, a_complement) ->
+                        match complement_info b b_complement,
+                              complement_info a a_complement with
+                        | Some (not_b, linear_b, ring_b),
+                          Some (not_a, linear_a, ring_a) ->
+                            let first_canonical =
+                              replace_complement first b_complement not_b
+                            and second_canonical =
+                              replace_complement second a_complement not_a
+                            in
+                            Some (a, b, first_canonical, second_canonical,
+                                  linear_a @ linear_b, ring_a @ ring_b)
+                        | _ -> None))
         in
         (match parse x y with Some _ as result -> result | None -> parse y x)
     | _ -> None
   in
+  let lifted_intersection a b actual =
+    if commutative E.And a b actual then Some []
+    else
+      match a, b, actual with
+      | E.Unary { f = E.Uext amount_a; x = low_a; _ },
+        E.Unary { f = E.Uext amount_b; x = low_b; _ },
+        E.Unary { f = E.Uext amount; x = low_and; _ }
+        when amount = amount_a && amount = amount_b
+             && commutative E.And low_a low_b low_and ->
+          Some [ actual, E.binary E.And a b ]
+      | _ -> None
+  in
   let parse_regular a b = function
     | E.Binary { f = E.Mul; x; y; _ } ->
-        if commutative E.And a b x && commutative E.Or a b y then Some (x, y)
-        else if commutative E.And a b y && commutative E.Or a b x then Some (y, x)
+        if commutative E.Or a b y then
+          Option.map (fun equalities -> x, y, equalities)
+            (lifted_intersection a b x)
+        else if commutative E.Or a b x then
+          Option.map (fun equalities -> y, x, equalities)
+            (lifted_intersection a b y)
         else None
     | _ -> None
   in
-  let build cross regular =
+  let substitute_equalities equalities root =
+    let replacements = Nodes.create 16 and memo = Nodes.create 32 in
+    List.iter (fun (left, right) -> Nodes.replace replacements left right) equalities;
+    let rec visit node =
+      match Nodes.find_opt replacements node with
+      | Some result -> if E.is_equal result node then result else visit result
+      | None ->
+          (match Nodes.find_opt memo node with
+          | Some result -> result
+          | None ->
+              let rebuilt =
+                match node with
+                | E.Unary { f; x; _ } -> E.unary f (visit x)
+                | E.Binary { f; x; y; _ } -> E.binary f (visit x) (visit y)
+                | E.Ite { c; t; e; _ } -> E.ite (visit c) (visit t) (visit e)
+                | value -> value
+              in
+              let result =
+                match Nodes.find_opt replacements rebuilt with
+                | Some replacement when not (E.is_equal replacement rebuilt) ->
+                    visit replacement
+                | _ -> rebuilt
+              in
+              Nodes.add memo node result;
+              result)
+    in
+    visit root
+  in
+  let build make_candidate cross regular =
     match parse_cross cross with
-    | Some (a, b, first, second) ->
+    | Some (a, b, first, second, complement_linear, complement_ring) ->
         Option.map
-          (fun (_intersection, union) ->
+          (fun (_intersection, union, lifted_equalities) ->
             let u = E.binary E.And a b in
             let first_replacement = E.binary E.Minus a u
             and second_replacement = E.binary E.Minus b u
             and union_replacement =
               E.binary E.Minus (E.binary E.Plus a b) u
             in
-            let substituted =
-              E.binary E.Plus
-                (E.binary E.Mul first_replacement second_replacement)
-                (E.binary E.Mul u union_replacement)
+            let intersection_equalities =
+              if lifted_equalities = [] then [ _intersection, u ] else []
             in
-            (E.binary E.Mul a b,
-             [ first, first_replacement; second, second_replacement;
-               _intersection, u; union, union_replacement ],
-             [],
-             [ E.binary E.Plus (E.binary E.Mul u union_replacement)
-                   (E.binary E.Mul first_replacement second_replacement), substituted;
-               substituted, E.binary E.Mul a b ]))
+            let equalities =
+              [ first, first_replacement; second, second_replacement;
+                union, union_replacement ]
+              @ intersection_equalities @ complement_linear
+            in
+            let product = E.binary E.Mul a b in
+            let candidate = make_candidate product in
+            let substituted =
+              substitute_equalities
+                (lifted_equalities @ equalities @ complement_ring) expression
+            in
+            (candidate, lifted_equalities, equalities, [],
+             complement_ring @ [ substituted, candidate ]))
           (parse_regular a b regular)
     | None -> None
   in
-  let build_constants cross regular =
+  let build_constants make_candidate cross regular =
     let and_constant = function
       | (E.Binary { f = E.And; x = term; y = E.Cst value; _ } as actual)
       | (E.Binary { f = E.And; x = E.Cst value; y = term; _ } as actual) ->
@@ -648,35 +753,85 @@ let nonlinear_product_identity_candidate expression =
     match parse cross with
     | Some (a, b, first, second) ->
         Option.map
-          (fun (intersection, union) ->
+          (fun (intersection, union, lifted_equalities) ->
             let u = E.binary E.And a b in
             let first_replacement = E.binary E.Minus a u
             and second_replacement = E.binary E.Minus b u
             and union_replacement = E.binary E.Minus (E.binary E.Plus a b) u in
-            let substituted = E.binary E.Plus
-                (E.binary E.Mul first_replacement second_replacement)
-                (E.binary E.Mul u union_replacement) in
-            (E.binary E.Mul a b, [],
-             [ first, first_replacement; second, second_replacement;
-               intersection, u; union, union_replacement ],
-             [ E.binary E.Plus (E.binary E.Mul u union_replacement)
-                   (E.binary E.Mul first_replacement second_replacement), substituted;
-               substituted, E.binary E.Mul a b ]))
+            let intersection_equalities =
+              if lifted_equalities = [] then [ intersection, u ] else []
+            in
+            let semilinear_equalities =
+              [ first, first_replacement; second, second_replacement;
+                union, union_replacement ] @ intersection_equalities
+            in
+            let product = E.binary E.Mul a b in
+            let candidate = make_candidate product in
+            let substituted =
+              substitute_equalities
+                (lifted_equalities @ semilinear_equalities) expression
+            in
+            (candidate, lifted_equalities, [], semilinear_equalities,
+             [ substituted, candidate ]))
           (parse_regular a b regular)
     | None -> None
   in
-  match expression with
-  | E.Binary { f = E.Plus; x; y; _ } ->
-      (match build x y with
-      | Some _ as result -> result
-      | None ->
-          (match build y x with
-          | Some _ as result -> result
-          | None ->
-              (match build_constants x y with
-              | Some _ as result -> result
-              | None -> build_constants y x)))
-  | _ -> None
+  let rec additive sign node result =
+    if List.length result > 8 then result
+    else
+      match node with
+      | E.Binary { f = E.Plus; x; y; _ } ->
+          additive sign y (additive sign x result)
+      | E.Binary { f = E.Minus; x; y; _ } ->
+          additive (not sign) y (additive sign x result)
+      | E.Unary { f = E.Minus; x; _ } -> additive (not sign) x result
+      | term -> (sign, term) :: result
+  in
+  let terms = List.rev (additive true expression []) in
+  let rebuild terms =
+    match terms with
+    | [] -> zeros (E.sizeof expression)
+    | (sign, term) :: rest ->
+        let initial = if sign then term else E.unary E.Minus term in
+        List.fold_left (fun total (positive, value) ->
+            E.binary (if positive then E.Plus else E.Minus) total value)
+          initial rest
+  in
+  let rec scan_left index = function
+    | [] -> None
+    | (sign, left) :: rest ->
+        let rec scan_right offset = function
+          | [] -> None
+          | (other_sign, right) :: tail when sign = other_sign ->
+              let make_candidate product =
+                terms
+                |> List.mapi (fun position item ->
+                       if position = index then Some (sign, product)
+                       else if position = index + offset + 1 then None
+                       else Some item)
+                |> List.filter_map Fun.id |> rebuild
+              in
+              let result =
+                match build make_candidate left right with
+                | Some _ as result -> result
+                | None ->
+                    (match build make_candidate right left with
+                    | Some _ as result -> result
+                    | None ->
+                        (match build_constants make_candidate left right with
+                        | Some _ as result -> result
+                        | None -> build_constants make_candidate right left))
+              in
+              (match result with
+              | Some _ -> result
+              | None -> scan_right (offset + 1) tail)
+          | _ :: tail -> scan_right (offset + 1) tail
+        in
+        (match scan_right 0 rest with
+        | Some _ as result -> result
+        | None -> scan_left (index + 1) rest)
+  in
+  if List.length terms > 8 then None else scan_left 0 terms
 
 let known_bits_candidate cost expression =
   let candidate =

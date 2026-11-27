@@ -65,9 +65,9 @@ let () =
       (mul (band x complement) (band (E.unary E.Not x) base)) in
   setup product;
   (match N.nonlinear_product_identity_candidate product with
-  | Some (candidate, linear_edges, semi_edges, ring_edges) ->
+  | Some (candidate, equalities, linear_edges, semi_edges, ring_edges) ->
       let accepted =
-        R.accepts_compositional ~pass:"constant-product" ~equalities:[]
+        R.accepts_compositional ~pass:"constant-product" ~equalities
           ~linear_mba_equalities:linear_edges
           ~semilinear_mba_equalities:semi_edges ~ring_equalities:ring_edges
           product candidate

@@ -89,10 +89,10 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
     (fun candidate -> candidates := direct "demand-bits" candidate :: !candidates)
     (demand_bits_candidate cost expression);
   Option.iter
-    (fun (candidate, linear_mba_equalities, semilinear_mba_equalities,
-          ring_equalities) ->
+    (fun (candidate, equalities, linear_mba_equalities,
+          semilinear_mba_equalities, ring_equalities) ->
       candidates :=
-        { expr = candidate; pass = "product-peel"; equalities = [];
+        { expr = candidate; pass = "product-peel"; equalities;
           ring_equalities; poly_equalities = []; linear_mba_equalities;
           semilinear_mba_equalities; allow_equal_cost = false } :: !candidates)
     (nonlinear_product_identity_candidate expression);
@@ -846,28 +846,62 @@ let probe_opaque_atoms cost expression =
       | E.Binary { f = E.Lsl; y; _ } -> Option.is_some (constant_value y)
       | _ -> false
     in
-    let attempt shared_boundary =
+    let bitwise_or_shift = function
+      | E.Unary { f = E.Not; _ }
+      | E.Binary { f = (E.And | E.Or | E.Xor | E.Lsl); _ } -> true
+      | _ -> false
+    in
+    let has_shell_bits = Nodes.create 128 in
+    let rec has_bitwise_or_shift node =
+      match Nodes.find_opt has_shell_bits node with
+      | Some result -> result
+      | None ->
+          let child child =
+            E.sizeof child = E.sizeof node && has_bitwise_or_shift child
+          in
+          let result =
+            if bitwise_or_shift node then true
+            else
+              match node with
+              | E.Unary { f = E.Minus; x; _ } -> child x
+              | E.Binary { f = (E.Plus | E.Minus | E.Mul); x; y; _ } ->
+                  child x || child y
+              | _ -> false
+          in
+          Nodes.add has_shell_bits node result;
+          result
+    in
+    let attempt mode =
       let atoms = Nodes.create 8 in
-      let rec collect is_root node =
+      let rec collect ~inside_bw is_root node =
+        let frequency =
+          Option.value (Nodes.find_opt frequencies node) ~default:0
+        in
         let repeated =
-          shared_boundary && not is_root && cost node >= 3
-          && Option.value (Nodes.find_opt frequencies node) ~default:0 >= 2
+          mode = `Shared && not is_root && cost node >= 3 && frequency >= 2
+        and arithmetic_boundary =
+          mode = `Arithmetic && not is_root
+          && not (has_bitwise_or_shift node)
+          && (inside_bw || (cost node >= 3 && frequency >= 2))
         in
         if E.sizeof node <> width then Nodes.replace atoms node ()
-        else if repeated || not (shell node) then Nodes.replace atoms node ()
+        else if arithmetic_boundary || repeated || not (shell node) then
+          Nodes.replace atoms node ()
         else
+          let inside_bw = inside_bw || bitwise_or_shift node in
           match node with
           | E.Cst _ -> ()
-          | E.Unary { x; _ } -> collect false x
+          | E.Unary { x; _ } -> collect ~inside_bw false x
           | E.Binary { f = E.Mul; x; y; _ } ->
               (match constant_value x, constant_value y with
-              | Some _, _ -> collect false y
-              | _, Some _ -> collect false x
+              | Some _, _ -> collect ~inside_bw false y
+              | _, Some _ -> collect ~inside_bw false x
               | _ -> Nodes.replace atoms node ())
-          | E.Binary { x; y; _ } -> collect false x; collect false y
+          | E.Binary { x; y; _ } ->
+              collect ~inside_bw false x; collect ~inside_bw false y
           | _ -> Nodes.replace atoms node ()
       in
-      collect true expression;
+      collect ~inside_bw:false true expression;
       let atoms = Nodes.fold (fun atom () result -> atom :: result) atoms []
         |> List.filter (fun atom -> E.sizeof atom = width)
         |> List.sort E.compare |> Array.of_list in
@@ -880,24 +914,41 @@ let probe_opaque_atoms cost expression =
             let variable = E.var name width name in
             Nodes.add replacements atom variable;
             Nodes.add inverse variable atom) atoms;
+        let substituted = Nodes.create 64 and restored = Nodes.create 64 in
         let rec substitute node =
           match Nodes.find_opt replacements node with
           | Some variable -> variable
           | None ->
-              match node with
-              | E.Unary { f; x; _ } -> E.unary f (substitute x)
-              | E.Binary { f; x; y; _ } -> E.binary f (substitute x) (substitute y)
-              | E.Ite { c; t; e; _ } -> E.ite (substitute c) (substitute t) (substitute e)
-              | value -> value
+              (match Nodes.find_opt substituted node with
+              | Some result -> result
+              | None ->
+                  let result =
+                    match node with
+                    | E.Unary { f; x; _ } -> E.unary f (substitute x)
+                    | E.Binary { f; x; y; _ } ->
+                        E.binary f (substitute x) (substitute y)
+                    | E.Ite { c; t; e; _ } ->
+                        E.ite (substitute c) (substitute t) (substitute e)
+                    | value -> value
+                  in
+                  Nodes.add substituted node result;
+                  result)
         and restore node =
           match Nodes.find_opt inverse node with
           | Some atom -> atom
           | None ->
-              match node with
-              | E.Unary { f; x; _ } -> E.unary f (restore x)
-              | E.Binary { f; x; y; _ } -> E.binary f (restore x) (restore y)
-              | E.Ite { c; t; e; _ } -> E.ite (restore c) (restore t) (restore e)
-              | value -> value
+              (match Nodes.find_opt restored node with
+              | Some result -> result
+              | None ->
+                  let result =
+                    match node with
+                    | E.Unary { f; x; _ } -> E.unary f (restore x)
+                    | E.Binary { f; x; y; _ } -> E.binary f (restore x) (restore y)
+                    | E.Ite { c; t; e; _ } -> E.ite (restore c) (restore t) (restore e)
+                    | value -> value
+                  in
+                  Nodes.add restored node result;
+                  result)
         in
         let abstract_expression = substitute expression in
         if cost abstract_expression <= 3 then None
@@ -943,8 +994,37 @@ let probe_opaque_atoms cost expression =
               | [] -> zeros width
               | head :: tail -> List.fold_left (E.binary E.Plus) head tail
             in
+            let offset body value =
+              if Z.equal value Z.zero then body
+              else E.binary E.Plus body (constant width value)
+            in
+            let analytical =
+              if count <> 1 then []
+              else
+                let values =
+                  [| Z.zero; Z.one; Z.of_int 2; Z.of_int 3; Z.of_int 7;
+                     Z.of_int 17; Z.of_int 63; Z.of_int 255 |]
+                  |> Array.map normalize
+                in
+                let target = Array.map (fun value ->
+                    probe_evaluate abstract_expression variables [| value |]) values
+                in
+                Smir_interp.analytical_candidates ~width ~target
+                  ~expression:variables.(0) ~values
+            in
+            let binary_templates =
+              if count <> 2 then []
+              else
+                let x = variables.(0) and y = variables.(1)
+                and c0 = normalize coefficients.(0) in
+                [ E.binary E.Plus x y; E.binary E.Minus x y;
+                  E.binary E.Minus y x; E.binary E.Or x y;
+                  E.binary E.And x y; E.binary E.Xor x y ]
+                |> List.map (fun body -> offset body c0)
+            in
             let abstract_candidates =
-              raw :: linear_candidates ~max_atoms:3 cost raw
+              raw :: (linear_candidates ~max_atoms:3 cost raw
+                      @ analytical @ binary_templates)
             in
             let samples =
               [| Z.zero; Z.one; Z.pred modulus; Z.of_string "0x5555555555555555";
@@ -954,11 +1034,17 @@ let probe_opaque_atoms cost expression =
                  Z.of_int 63; Z.of_int 127; Z.of_int 511 |]
             in
             let agrees candidate =
-              Array.for_all (fun seed ->
+              Array.mapi (fun sample_index seed ->
                   let values = Array.init count (fun index ->
-                      normalize (Z.add seed (Z.of_int (index * 0x9e37)))) in
+                      let multiplier = Z.of_int (2 * index + 1) in
+                      let salt = Z.shift_left
+                          (Z.of_int ((sample_index + 1) * (index + 3)))
+                          ((11 * index + 7) mod (max 1 width))
+                      in
+                      normalize (Z.logxor (Z.mul seed multiplier) salt)) in
                   Z.equal (probe_evaluate abstract_expression variables values)
                     (probe_evaluate candidate variables values)) samples
+              |> Array.for_all Fun.id
             in
             abstract_candidates
             |> List.filter (fun candidate -> agrees candidate)
@@ -968,4 +1054,9 @@ let probe_opaque_atoms cost expression =
             |> function candidate :: _ -> Some candidate | [] -> None
           with _ -> None
     in
-    match attempt true with Some _ as result -> result | None -> attempt false
+    match attempt `Arithmetic with
+    | Some _ as result -> result
+    | None ->
+        (match attempt `Shared with
+        | Some _ as result -> result
+        | None -> attempt `Operator)

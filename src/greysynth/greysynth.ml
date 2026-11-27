@@ -107,10 +107,10 @@ let run_cleanup ?(whole = true) expression =
     let expression =
       if not !g_has_timedout then
         match Normalization.nonlinear_product_identity_candidate expression with
-        | Some (candidate, linear_mba_equalities, semilinear_mba_equalities,
-                ring_equalities)
+        | Some (candidate, equalities, linear_mba_equalities,
+                semilinear_mba_equalities, ring_equalities)
           when Rewrite.accepts_compositional ~pass:"cleanup-product-peel"
-                 ~equalities:[] ~ring_equalities ~linear_mba_equalities
+                 ~equalities ~ring_equalities ~linear_mba_equalities
                  ~semilinear_mba_equalities expression candidate -> candidate
         | _ -> expression
       else expression
@@ -123,6 +123,10 @@ let run_cleanup ?(whole = true) expression =
             Rewrite.accepts_compositional ~pass:"cleanup-opaque-linear"
               ~equalities:[] ~linear_mba_equalities:[ expression, candidate ]
               expression candidate
+            || Rewrite.accepts_compositional ~pass:"cleanup-opaque-semilinear"
+                 ~equalities:[]
+                 ~semilinear_mba_equalities:[ expression, candidate ]
+                 expression candidate
             || Rewrite.accepts ~timeout:0.20 ~pass:"cleanup-opaque"
                  expression candidate
           in
@@ -162,10 +166,10 @@ let chs gt best =
         else if !c_oes then (
           best := oes_quiet !best;
           match Normalization.nonlinear_product_identity_candidate !best with
-          | Some (candidate, linear_mba_equalities, semilinear_mba_equalities,
-                  ring_equalities)
+          | Some (candidate, equalities, linear_mba_equalities,
+                  semilinear_mba_equalities, ring_equalities)
             when Rewrite.accepts_compositional ~pass:"chs-product-peel"
-                   ~equalities:[] ~ring_equalities ~linear_mba_equalities
+                   ~equalities ~ring_equalities ~linear_mba_equalities
                    ~semilinear_mba_equalities !best candidate -> best := candidate
           | _ -> ()));
       if size_of_expr !best < before then horizon := 2 else incr horizon
@@ -316,6 +320,9 @@ let run_preprocessing gt input =
             Rewrite.accepts_compositional ~pass:"root-semantic-probe-linear"
               ~equalities:[] ~linear_mba_equalities:[ !best, candidate ]
               !best candidate
+            || Rewrite.accepts_compositional ~pass:"root-semantic-probe-semilinear"
+                 ~equalities:[] ~semilinear_mba_equalities:[ !best, candidate ]
+                 !best candidate
             || Rewrite.accepts ~timeout ~pass:"root-semantic-probe" !best candidate
           in
           if accepted then best := candidate
@@ -699,10 +706,10 @@ let run_passes gt obf =
      _log_warn "greysynth" "timeout reached");
   if not !g_has_timedout then
     (match Normalization.nonlinear_product_identity_candidate !best with
-    | Some (candidate, linear_mba_equalities, semilinear_mba_equalities,
-            ring_equalities)
+    | Some (candidate, equalities, linear_mba_equalities,
+            semilinear_mba_equalities, ring_equalities)
       when Rewrite.accepts_compositional ~pass:"final-product-peel"
-             ~equalities:[] ~ring_equalities ~linear_mba_equalities
+             ~equalities ~ring_equalities ~linear_mba_equalities
              ~semilinear_mba_equalities !best candidate -> best := candidate
     | _ -> ());
   !best

@@ -84,10 +84,10 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
                  ~pass:"dag-abstract-slice" !result candidate) -> result := candidate
         | _ -> ());
         (match nonlinear_product_identity_candidate !result with
-        | Some (candidate, linear_mba_equalities, semilinear_mba_equalities,
-                ring_equalities)
+        | Some (candidate, equalities, linear_mba_equalities,
+                semilinear_mba_equalities, ring_equalities)
           when Rewrite.accepts_compositional ~pass:"dag-product-peel"
-                 ~equalities:[] ~ring_equalities ~linear_mba_equalities
+                 ~equalities ~ring_equalities ~linear_mba_equalities
                  ~semilinear_mba_equalities !result candidate -> result := candidate
         | _ -> ());
         if Greysynth_utils.Utils.dag_size_bounded ~limit:512 !result <= 512 then (
@@ -132,25 +132,30 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
                  ~equalities:[] ~semilinear_mba_equalities:[ !result, candidate ]
                  !result candidate -> result := candidate
         | _ -> ());
+        let accept_probe candidate =
+          Rewrite.accepts_compositional ~pass:"dag-semantic-probe-linear"
+            ~equalities:[] ~linear_mba_equalities:[ !result, candidate ]
+            !result candidate
+          || Rewrite.accepts_compositional ~pass:"dag-semantic-probe-semilinear"
+               ~equalities:[] ~semilinear_mba_equalities:[ !result, candidate ]
+               !result candidate
+          || try_smt (fun () -> Rewrite.accepts ~timeout:0.20
+               ~pass:"dag-semantic-probe" !result candidate)
+        in
+        if cost !result >= 9 && cost !result <= 256 then
+          (match probe_opaque_atoms cost !result with
+          | Some candidate when accept_probe candidate -> result := candidate
+          | _ -> ());
         if cost !result >= 5 && cost !result <= 64 then (
           let probes =
-            [ probe_opaque_atoms cost !result;
-              probe_low_width_exact cost !result;
+            [ probe_low_width_exact cost !result;
               probe_semantic_linear_mba cost !result;
               probe_semantic_poly cost !result ]
             |> List.filter_map Fun.id
             |> List.sort (fun left right -> Int.compare (cost left) (cost right))
           in
           match probes with
-          | candidate :: _ ->
-              let accepted =
-                Rewrite.accepts_compositional ~pass:"dag-semantic-probe-linear"
-                  ~equalities:[] ~linear_mba_equalities:[ !result, candidate ]
-                  !result candidate
-                || try_smt (fun () -> Rewrite.accepts ~timeout:0.15
-                     ~pass:"dag-semantic-probe" !result candidate)
-              in
-              if accepted then result := candidate
+          | candidate :: _ when accept_probe candidate -> result := candidate
           | _ -> ());
         (match power2_pullout_candidate cost !result with
         | Some candidate
@@ -504,11 +509,11 @@ let run ?deadline expression =
              in
              let decomposed =
                match nonlinear_product_identity_candidate !current with
-               | Some (candidate, linear_mba_equalities,
+               | Some (candidate, equalities, linear_mba_equalities,
                        semilinear_mba_equalities, ring_equalities)
                  when cost candidate < cost !current
                       && Rewrite.accepts_compositional ~pass:"product-peel"
-                           ~equalities:[] ~ring_equalities
+                           ~equalities ~ring_equalities
                            ~linear_mba_equalities ~semilinear_mba_equalities
                            !current candidate -> Some candidate
                | _ ->

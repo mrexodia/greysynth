@@ -1530,3 +1530,50 @@ non-Tigress rows remain net-neutral. Giant Tigress-L8 reductions include
 `target_3601: 2,666,519 -> 80`, `target_126: 2,486,999 -> 80`, and
 `target_2790: 2,463,063 -> 7` exact. Tigress-L5 `target_158` now reaches its
 size-9 GT.
+
+## Round-40 arithmetic atom boundaries and generalized product peeling
+
+Round 40 makes opaque interpolation preserve pure-arithmetic sub-DAGs that are
+used beneath bitwise or shift shells. A DAG-memoized shell analysis chooses
+arithmetic boundaries before the shared-node and operator-boundary fallbacks,
+preventing carry-sensitive atoms from being split into unrelated variables.
+One-atom abstractions additionally use analytical XSMIR candidates; two-atom
+abstractions add direct affine/bitwise offset templates. Candidate filtering now
+uses 16 independently varied full-width assignments. DAG probing covers costs
+through 256 and tries linear-MBA, semi-linear-MBA, then bounded abstract SMT in
+that order.
+
+The zero-SMT product peeler now preserves exact product and sum operand order,
+scans signed additive trees with up to eight terms, recognizes affine algebraic
+complements modulo `2^w`, and emits explicit ring/linear bridges for those
+complements. It also recognizes zero-extension of a low-width intersection and
+records the existing abstract-SMT equality needed to distribute `uext` over
+`&`. Final product proofs continue to compose from existing SMT, linear-MBA,
+semi-linear-MBA, and ring rules; `src/proof/rewrite_proof.ml` is unchanged.
+
+`test/round40_test.ml` covers arithmetic-boundary interpolation, one-variable
+XSMIR, operand-order preservation, algebraic-complement matching under two
+negative additive terms, zero-extension lifting, and independent certificate
+replay. The complete warning-clean `make test` gate passes.
+
+Final eight-worker artifacts:
+
+```text
+/tmp/r40-l5/out.jsonl
+/tmp/r40-core/out.jsonl
+/tmp/r40-smoke/out.jsonl
+```
+
+| Gate | Established | Exact | Round-39 -> Round-40 quality | Better / equal / worse vs Round 39 |
+|---|---:|---:|---:|---:|
+| Tigress L5 all_non_exact | 450/450 | 207 | 5.2131x -> 3.5428x | 159 / 221 / 70 |
+| Refreshed core hard | 353/353 | 82 | 3.4329x -> 3.0877x | 43 / 287 / 23 |
+| Regression smoke | 62/62 | 52 | 0.8304x -> 0.8455x | 0 / 58 / 4 |
+
+There are zero refutations, unknowns, errors, or audit timeouts. All 450
+Tigress-L5 rows remain strict decreases, and all 353 core rows establish
+directly in the parallel run. Exact Tigress-L5 wins include `target_126: 7`,
+`target_1349: 5`, `target_2127: 5`, `target_2136: 5`, `target_2618: 3`,
+`target_2818: 3`, `target_3728: 5`, and the three related targets
+`6014/6027/6086: 5`; `target_2968` reaches size 3, beating its size-5 GT.
+Core Tigress-L8 `target_1349` and `target_2818` also reach exact GT.
