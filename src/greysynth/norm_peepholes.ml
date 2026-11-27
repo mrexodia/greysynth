@@ -64,6 +64,25 @@ let rec peepholes evaluate expression =
       match constant_value x with
       | Some value -> composed @ (try [ E.constant (Term.Bv.unary f value) ] with _ -> [])
       | None -> composed)
+  | E.Binary { f = E.Minus; x = E.Cst fill;
+               y = E.Binary { f = E.Mul; x = E.Cst coefficient; y = body; _ }; _ }
+  | E.Binary { f = E.Minus; x = E.Cst fill;
+               y = E.Binary { f = E.Mul; x = body; y = E.Cst coefficient; _ }; _ }
+    when Bitvector.is_fill fill ->
+      [ E.unary E.Not (E.binary E.Mul (E.constant coefficient) body) ]
+  | E.Binary { f = E.Plus; x = E.Cst fill;
+               y = E.Binary { f = E.Mul; x = E.Cst coefficient; y = body; _ }; _ }
+  | E.Binary { f = E.Plus;
+               x = E.Binary { f = E.Mul; x = E.Cst coefficient; y = body; _ };
+               y = E.Cst fill; _ }
+  | E.Binary { f = E.Plus; x = E.Cst fill;
+               y = E.Binary { f = E.Mul; x = body; y = E.Cst coefficient; _ }; _ }
+  | E.Binary { f = E.Plus;
+               x = E.Binary { f = E.Mul; x = body; y = E.Cst coefficient; _ };
+               y = E.Cst fill; _ }
+    when Bitvector.is_fill fill ->
+      let positive = Bitvector.neg coefficient in
+      [ E.unary E.Not (E.binary E.Mul (E.constant positive) body) ]
   | E.Binary { f; x; y; _ } ->
       let folded =
         match constant_value x, constant_value y with

@@ -242,6 +242,54 @@ let semilinear_mba_candidate cost expression =
           !candidates;
         !best
 
+let abstract_slice_candidate expression =
+  let low_mask bits = Z.pred (Z.shift_left Z.one bits) in
+  match expression with
+  | E.Unary { f = E.Restrict { lo = 0; hi };
+              x = E.Binary { f = E.Lsl; x = _base; y = E.Cst amount; _ }; _ }
+    when Z.gt (Bitvector.value_of amount) (Z.of_int hi) ->
+      Some (zeros (hi + 1))
+  | E.Binary { f = E.And;
+               x = E.Unary { f = E.Uext amount;
+                     x = E.Unary { f = E.Restrict { lo = 0; hi }; _ }; _ };
+               y = E.Cst bits; _ }
+  | E.Binary { f = E.And; x = E.Cst bits;
+               y = E.Unary { f = E.Uext amount;
+                     x = E.Unary { f = E.Restrict { lo = 0; hi }; _ }; _ }; _ }
+    when amount > 0
+         && Z.equal
+              (Z.logand (Bitvector.value_of bits) (low_mask (hi + 1))) Z.zero ->
+      Some (zeros (E.sizeof expression))
+  | E.Unary { f = E.Restrict { lo = 0; hi };
+              x = E.Binary { f = (E.Or | E.Xor | E.Plus);
+                    x = base; y = E.Cst bits; _ }; _ }
+    when Z.equal
+           (Z.logand (Bitvector.value_of bits) (low_mask (hi + 1))) Z.zero ->
+      Some (E.restrict ~lo:0 ~hi base)
+  | E.Unary { f = E.Restrict { lo = 0; hi };
+              x = E.Binary { f = (E.Or | E.Xor | E.Plus);
+                    x = E.Cst bits; y = base; _ }; _ }
+    when Z.equal
+           (Z.logand (Bitvector.value_of bits) (low_mask (hi + 1))) Z.zero ->
+      Some (E.restrict ~lo:0 ~hi base)
+  | E.Unary { f = E.Restrict { lo = 0; hi };
+              x = E.Binary { f = E.And; x = base; y = E.Cst bits; _ }; _ }
+    when Z.equal
+           (Z.logand (Bitvector.value_of bits) (low_mask (hi + 1)))
+           (low_mask (hi + 1)) ->
+      Some (E.restrict ~lo:0 ~hi base)
+  | E.Unary { f = E.Restrict { lo = 0; hi };
+              x = E.Binary { f = E.And; x = E.Cst bits; y = base; _ }; _ }
+    when Z.equal
+           (Z.logand (Bitvector.value_of bits) (low_mask (hi + 1)))
+           (low_mask (hi + 1)) ->
+      Some (E.restrict ~lo:0 ~hi base)
+  | E.Unary { f = E.Restrict { lo = 0; hi };
+              x = E.Unary { f = E.Uext _; x = base; _ }; _ }
+    when E.sizeof base >= hi + 1 ->
+      Some (if E.sizeof base = hi + 1 then base else E.restrict ~lo:0 ~hi base)
+  | _ -> None
+
 let power2_pullout_candidate cost expression =
   let width = E.sizeof expression in
   let factor = function

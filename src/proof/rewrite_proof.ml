@@ -1116,6 +1116,11 @@ let semilinear_mba_equal g left right =
         match (node g id).shape, (node g id).expr with
         | Value _, E.Cst value -> Hashtbl.replace constants id value
         | Unary ("bvnot", [], child), _ -> collect_bitwise child
+        | Unary ("zero_extend", [amount], child), _ when amount > 0 ->
+            (match (node g child).shape with
+            | Unary ("extract", [0; hi], inner)
+              when hi + 1 + amount = (node g inner).width -> collect_bitwise inner
+            | _ -> add_atom id)
         | Binary (("bvand" | "bvor" | "bvxor"), x, y), _ ->
             collect_bitwise x;
             collect_bitwise y
@@ -1125,6 +1130,11 @@ let semilinear_mba_equal g left right =
         match (node g id).shape, (node g id).expr with
         | Value _, E.Cst _ -> ()
         | Unary (("bvneg" | "bvnot"), [], child), _ -> collect_linear child
+        | Unary ("zero_extend", [amount], child), _ when amount > 0 ->
+            (match (node g child).shape with
+            | Unary ("extract", [0; hi], inner)
+              when hi + 1 + amount = (node g inner).width -> collect_linear inner
+            | _ -> add_atom id)
         | Binary (("bvadd" | "bvsub"), x, y), _ ->
             collect_linear x;
             collect_linear y
@@ -1178,6 +1188,12 @@ let semilinear_mba_equal g left right =
                 match (node g id).shape, (node g id).expr with
                 | Value _, E.Cst value -> Bitvector.value_of value
                 | Unary ("bvnot", [], child), _ -> Z.logxor mask (bitwise child)
+                | Unary ("zero_extend", [amount], child), _ when amount > 0 ->
+                    (match (node g child).shape with
+                    | Unary ("extract", [0; hi], inner)
+                      when hi + 1 + amount = (node g inner).width ->
+                        Z.logand (bitwise inner) (Z.pred (Z.shift_left Z.one (hi + 1)))
+                    | _ -> raise Ring_limit)
                 | Binary ("bvand", x, y), _ -> Z.logand (bitwise x) (bitwise y)
                 | Binary ("bvor", x, y), _ -> Z.logor (bitwise x) (bitwise y)
                 | Binary ("bvxor", x, y), _ -> Z.logxor (bitwise x) (bitwise y)
@@ -1199,6 +1215,12 @@ let semilinear_mba_equal g left right =
                 | Value _, E.Cst value -> Bitvector.value_of value
                 | Unary ("bvneg", [], child), _ -> Z.neg (linear child)
                 | Unary ("bvnot", [], child), _ -> Z.sub (Z.neg Z.one) (linear child)
+                | Unary ("zero_extend", [amount], child), _ when amount > 0 ->
+                    (match (node g child).shape with
+                    | Unary ("extract", [0; hi], inner)
+                      when hi + 1 + amount = (node g inner).width ->
+                        Z.logand (linear inner) (Z.pred (Z.shift_left Z.one (hi + 1)))
+                    | _ -> raise Ring_limit)
                 | Binary ("bvadd", x, y), _ -> Z.add (linear x) (linear y)
                 | Binary ("bvsub", x, y), _ -> Z.sub (linear x) (linear y)
                 | Binary ("bvmul", x, y), _ ->

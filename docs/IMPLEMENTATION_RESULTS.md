@@ -1351,3 +1351,53 @@ replay restores the same 52 exact-GT count and <=0.95x quality envelope without
 altering the parallel record. Core-hard contains the already documented OMVLL
 1082 proof unknown; there are no refutations or malformed-input errors in the
 refreshed 353-case slice.
+
+## Round-36 shift/slice-aware opaque-atom peeling
+
+The linear and semi-linear proof kernels now explicitly support constant `Lsl`
+as scalar multiplication in arithmetic position while retaining shifts as
+strict opaque atoms under bitwise operators. `semilinear_mba_mod2w` additionally
+recognizes only the sound low-slice form
+`uext(amount, restrict(0, hi, x)) == x & ((1 << (hi+1))-1)` when the widths match;
+non-zero extracts and sign extension remain opaque. Positive carry/borrow and
+low-slice identities, plus negative shift-under-bitwise, non-zero-extract and
+sign-extension traps, are cross-checked against Bitwuzla.
+
+Bottom-up linear peeling no longer counts variables buried inside nonlinear or
+cast children: it invokes the bounded opaque-atom reconstructor directly and
+certifies successful rewrites with `linear_mba_mod2w`. Semi-linear candidates
+also run in minimal giant-DAG mode. Abstract slice rules cover shifted-away low
+bits, masks disjoint from zero-extended slices, low restrictions with identity
+constants, and restrictions through zero extension. Complemented scaled terms
+are canonicalized before bitwise cancellation, and a final small ring polish is
+run before preprocessing returns.
+
+The new synthetic `round36_test` covers large opaque children, arithmetic
+shifts, low slices, shifted-away restrictions and complemented scaled terms;
+`make test` remains warning-clean and fully green.
+
+Parity and target artifacts:
+
+```text
+/tmp/r36-l5/out.jsonl
+/tmp/r36-core/out.jsonl
+/tmp/r36-core-isolated/out.jsonl
+/tmp/r36-smoke/out.jsonl
+/tmp/r36-smoke-isolated/out.jsonl
+```
+
+| Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| Tigress L5 all_non_exact | 450/450 | 61 | 25.4124x -> 13.7133x | 242 / 113 / 95 |
+| Refreshed core hard | 353/353* | 13 | 24.3105x -> 17.2171x | 52 / 273 / 25 |
+| Regression smoke | 62/62 | 52 | 0.7846x -> 0.8969x | 3 / 49 / 10 |
+
+`*` The eight-worker core run had six Tigress-L8 process timeouts; all six
+proved directly on isolated one-worker rerun with net-neutral outputs. The raw
+parallel smoke run was 62/62 established but contained one severe
+Multivariate64 contention result (1.0089x); isolated replay restored `2403 -> 3`
+and the 0.8969x overlay quality shown above. There are zero refutations or
+remaining timeout/error verdicts after isolated replay. Focused Tigress-L5
+results include target 6533 exact (`564 -> 5`), target 3126 (`5639 -> 19`, GT
+19), target 3500 (`4605 -> 13`, GT 11), and target 4671 (`2421 -> 10`, GT 7).
+The deeply wrapped Tigress-L8 giant targets still require further exposure.

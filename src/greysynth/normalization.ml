@@ -34,6 +34,11 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
           | _ -> node
         in
         let result = ref rebuilt in
+        (match abstract_slice_candidate !result with
+        | Some candidate
+          when Rewrite.accepts ~timeout:0.15 ~pass:"dag-abstract-slice"
+                 !result candidate -> result := candidate
+        | _ -> ());
         (match nonlinear_product_identity_candidate !result with
         | Some (candidate, linear_mba_equalities, ring_equalities)
           when Rewrite.accepts_compositional ~pass:"dag-product-peel"
@@ -59,6 +64,12 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
           when Rewrite.accepts_compositional ~pass:"dag-minterm-ring-poly"
                  ~equalities:[] ~ring_equalities
                  ~linear_mba_equalities:(linear_mba_equalities @ final_linear_equalities)
+                 !result candidate -> result := candidate
+        | _ -> ());
+        (match semilinear_mba_candidate cost !result with
+        | Some candidate
+          when Rewrite.accepts_compositional ~pass:"dag-semilinear-mba"
+                 ~equalities:[] ~semilinear_mba_equalities:[ !result, candidate ]
                  !result candidate -> result := candidate
         | _ -> ());
         if not minimal then (
@@ -87,12 +98,6 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
             when Rewrite.accepts ~pass:"dag-semantic-probe" !result candidate ->
               result := candidate
           | _ -> ());
-        (match semilinear_mba_candidate cost !result with
-        | Some candidate
-          when Rewrite.accepts_compositional ~pass:"dag-semilinear-mba"
-                 ~equalities:[] ~semilinear_mba_equalities:[ !result, candidate ]
-                 !result candidate -> result := candidate
-        | _ -> ());
         (match power2_pullout_candidate cost !result with
         | Some candidate
           when cost !result <= 512
@@ -122,14 +127,14 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
             ~equalities:[] ~linear_mba_equalities:[ !result, candidate ]
             !result candidate
         in
-        if cost !result >= 3
-           && List.length (Sample_evaluator.variables_of_expr !result) <= 8
-           && linear_mba_compatible !result
-        then
-          (match
-             linear_candidates ~max_atoms:8 cost !result
-             |> List.sort (fun left right -> Int.compare (cost left) (cost right))
-           with
+        if cost !result >= 3 then (
+          let max_atoms =
+            if minimal then 4 else if cost !result <= 512 then 6 else 4
+          in
+          match
+            linear_candidates ~max_atoms cost !result
+            |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+          with
           | candidate :: _ when accept_linear candidate -> result := candidate
           | _ -> ());
         (match reduce_modular_polynomial cost !result with

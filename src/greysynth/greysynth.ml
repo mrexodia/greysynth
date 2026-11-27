@@ -384,8 +384,8 @@ let run_preprocessing gt input =
   if (size_of_expr !best > 256 || input_dag_size > 128) && input_dag_size <= 2048
   then (
     let giant = size_of_expr !best > 100_000 in
-    let maximum_rounds = if giant then 8 else 4
-    and local_deadline = Unix.gettimeofday () +. (if giant then 4.5 else 10.) in
+    let maximum_rounds = if giant then 12 else 4
+    and local_deadline = Unix.gettimeofday () +. (if giant then 4.0 else 10.) in
     let rounds = ref 0 and improving = ref true in
     while !rounds < maximum_rounds && !improving && not !g_has_timedout
           && Unix.gettimeofday () < local_deadline do
@@ -459,6 +459,13 @@ let run_preprocessing gt input =
         (fun () -> c_ac_normalization := false; standard ()))
     else check_equiv gt ~tag:"egraph" log_normalization_is_equiv !best)
   else standard ();
+  if size_of_expr !best <= 256 && not !g_has_timedout then
+    (match Normalization.ring_polynomial_candidate size_of_expr !best with
+    | Some candidate
+      when Rewrite.accepts_compositional ~pass:"final-ring-polish"
+             ~equalities:[] ~ring_equalities:[ !best, candidate ]
+             !best candidate -> best := candidate
+    | _ -> ());
   (* This relational extension is not part of the CCS'26 paper. *)
   if !c_fast_simplify && not !g_has_timedout then (
     best := fast_simplify_with_logs !best;
