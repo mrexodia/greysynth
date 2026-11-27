@@ -6,7 +6,7 @@ open Config
 include Norm_probes
 
 let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
-    ?(smt_budget = 1.2) ?deadline expression =
+    ?(smt_budget = 1.5) ?deadline expression =
   let memo = Nodes.create 256 in
   let constants = Sample_evaluator.make 1 in
   let cost = Greysynth_utils.Utils.size_of_expr in
@@ -194,18 +194,19 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
                    ~pass:"dag-semantic-probe-semilinear" ~equalities:[]
                    ~semilinear_mba_equalities:[ !result, candidate ]
                    !result candidate)
-          || try_smt (fun () -> Rewrite.accepts ~timeout:0.15
+          || try_smt (fun () -> Rewrite.accepts ~timeout:0.60
                ~pass:"dag-semantic-probe" !result candidate)
         in
         if not zero_smt && !smt_spent < smt_budget
            && !opaque_probe_calls < 16
            && cost !result >= 9 && cost !result <= 256
            && contains_probe_shell !result
-        then (
-          incr opaque_probe_calls;
-          match probe_opaque_atoms cost !result with
-          | Some candidate when accept_probe candidate -> result := candidate
-          | _ -> ());
+        then
+          (match probe_opaque_atoms cost !result with
+          | Some candidate ->
+              incr opaque_probe_calls;
+              if accept_probe candidate then result := candidate
+          | None -> ());
         if cost !result >= 5 && cost !result <= 64 then (
           let probes =
             [ probe_low_width_exact cost !result;

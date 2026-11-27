@@ -1626,3 +1626,46 @@ Tigress-L5 `target_6370` remains exact at size 5, and core Tigress-L6
 `target_1803` reaches its size-9 GT. The authoritative parallel L5 run contains
 one net-neutral row (`target_547`); its isolated replay is also established and
 net-neutral, so this is not a proof failure or worker-contention timeout.
+
+## Round-42 opaque-probe accounting and abstract proof budget
+
+Round 42 makes two surgical scheduling changes. The per-pass opaque-probe quota
+is now consumed only when `probe_opaque_atoms` returns an actual candidate;
+cheap `None` results below a useful parent no longer starve that parent. Opaque
+abstract checks use 0.60 seconds in DAG traversal, 0.70 seconds in cleanup, and
+0.80 seconds at roots, with a 1.5-second cumulative DAG SMT budget.
+
+The independent proof scheduler now assigns an abstract pair half rather than a
+quarter of the requested timeout (`timeout *. 0.5`). This is the only Round-42
+change in `src/proof/rewrite_proof.ml`; no proof rule, endpoint check, or replay
+semantics changed.
+
+`test/round42_test.ml` covers a 64-bit 77-node nonlinear-atom carry shell that
+reaches size 7 and replays independently in under one second. It also places 22
+non-matching bitwise subtrees below a matching opaque parent and verifies that
+`None` probe results cannot exhaust the 16-candidate quota. The complete
+warning-clean `make test` gate passes.
+
+Final eight-worker artifacts:
+
+```text
+/tmp/r42-l5/out.jsonl
+/tmp/r42-core/out.jsonl
+/tmp/r42-smoke/out.jsonl
+/tmp/r42-one/out.jsonl
+```
+
+| Gate | Established | Exact | Round-41 -> Round-42 quality | Better / equal / worse vs Round 41 |
+|---|---:|---:|---:|---:|
+| Tigress L5 all_non_exact | 450/450 | 200 | 4.0487x -> 3.5301x | 62 / 347 / 41 |
+| Refreshed core hard | 353/353 | 82 | 3.0512x -> 3.1873x | 24 / 301 / 28 |
+| Regression smoke | 62/62 | 54 | 0.7933x -> 0.7995x | 0 / 59 / 3 |
+
+There are zero refutations, unknowns, errors, or audit-process timeouts.
+Tigress-L5 recovers exact results for targets 798, 800, and 802 (all size 5),
+keeps target 2127 exact, and reduces target 6503 to size 7, beating its size-9
+GT. The authoritative parallel run contains four L5 and eleven core net-neutral
+rows. Regression smoke has one parallel net-neutral row,
+`oses__line_0000240`; its one-worker isolated replay establishes a strict
+`564,134 -> 4,985` reduction, identifying parallel solver contention rather
+than a proof failure.

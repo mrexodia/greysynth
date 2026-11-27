@@ -326,7 +326,7 @@ let prove_equality_with_model ~timeout original candidate =
         | Some (left, right) ->
             (* Reserve most of the budget for concrete fallback. Larger retry
                budgets may spend up to one second on the stronger query. *)
-            Some (solve ~limit:(min 1. (timeout *. 0.25)) left right)
+            Some (solve ~limit:(min 1. (timeout *. 0.5)) left right)
       with _ -> None
     in
     match generalized with

@@ -127,7 +127,7 @@ let run_cleanup ?(whole = true) expression =
                  ~equalities:[]
                  ~semilinear_mba_equalities:[ expression, candidate ]
                  expression candidate
-            || Rewrite.accepts ~timeout:0.20 ~pass:"cleanup-opaque"
+            || Rewrite.accepts ~timeout:0.70 ~pass:"cleanup-opaque"
                  expression candidate
           in
           if accepted then candidate else expression
@@ -301,7 +301,7 @@ let run_preprocessing gt input =
                !best candidate -> best := candidate
       | _ -> ()
   in
-  let run_root_semantic_probes ?(max_size = 2048) ?(timeout = 0.25) () =
+  let run_root_semantic_probes ?(max_size = 2048) ?(timeout = 0.80) () =
     let current_size = size_of_expr !best in
     if current_size > max_size
        || dag_size_bounded ~limit:256 !best > 256
@@ -319,7 +319,8 @@ let run_preprocessing gt input =
       in
       let candidates =
         Option.to_list opaque @ small
-        |> List.sort (fun left right -> Int.compare (size_of_expr left) (size_of_expr right))
+        |> List.sort (fun left right ->
+               Int.compare (size_of_expr left) (size_of_expr right))
       in
       match candidates with
       | candidate :: _ ->
@@ -492,7 +493,7 @@ let run_preprocessing gt input =
       and before_dag = dag_size_of_expr !best in
       best :=
         Normalization.dag_bottom_up_simplify ~minimal:(before_size > 32_768)
-          ~zero_smt:false ~smt_budget:1.2 ~deadline:local_deadline !best;
+          ~zero_smt:false ~smt_budget:1.5 ~deadline:local_deadline !best;
       let after_size = size_of_expr !best and after_dag = dag_size_of_expr !best in
       improving := after_size < before_size || after_dag < before_dag
     done);
