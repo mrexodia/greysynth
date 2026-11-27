@@ -1747,3 +1747,52 @@ single unestablished case and must be fixed before pruning.
 Across Tigress and non-Tigress suites together, the authoritative sweep is
 `3,099/3,100` established with zero refutations, 866 exact-or-better results
 among 3,096 rows with usable GT, and quality `19.8529x -> 3.7931x`.
+
+## Round-44 cycle safety and exact bit-zero pushdown
+
+Round 44 fixes the deterministic QSynth crash by guarding active nodes during
+product-equality substitution. Replacement cycles now stop at the active node
+instead of recursively following the cycle to stack exhaustion. The guard is
+DAG-native and does not alter any proof rule.
+
+A new bit-zero homomorphism pass pushes `restrict(0,0)` through constants,
+negation, addition, subtraction, multiplication, bitwise operators, constant
+left shifts, casts, and nested extracts. Non-homomorphic operations remain
+opaque one-bit leaves. Every pushed DAG node contributes a local abstract SMT
+equality; the resulting one-bit Boolean DAG is minimized with
+`linear_mba_mod2w`. Constant left shifts use the explicit
+`bit0(value) & 0<1>` bridge so the nonlinear value appears on both endpoints
+and is abstracted before solving. The pass is available both to local
+normalization and bounded-SMT DAG traversal.
+
+A proof-gated prepass also folds syntactic constant casts specifically on shift
+amounts before zero-SMT DAG peeling. Restriction factoring now rejects
+mixed-width children rather than attempting to construct an ill-typed bitwise
+node.
+
+`test/round44_test.ml` covers the actual QSynth crash row, three compositional
+bit-zero identities including nonlinear product cancellation, constant-cast
+shift folding, and independent certificate replay. The complete warning-clean
+`make test` gate passes; `src/proof/rewrite_proof.ml` remains unchanged.
+
+Final artifacts:
+
+```text
+/tmp/r44-l5/out.jsonl
+/tmp/r44-core/out.jsonl
+/tmp/r44-smoke/out.jsonl
+/tmp/r44-qsynth/out.jsonl
+```
+
+| Gate | Established | Exact <= GT | Quality before -> after | Better / equal / worse | Strict decreases |
+|---|---:|---:|---:|---:|---:|
+| Shrunk Tigress L5 | 251/251 | 1 | 10.5590x -> 9.9220x | 42 / 178 / 31 | 249 |
+| Refreshed core hard | 342/342 | 1* | 7.0702x -> 6.5401x | 34 / 295 / 12 | 329 |
+| Regression smoke | 62/62 | 54* | 0.7846x -> 0.7968x | 5 / 51 / 6 | 62 |
+
+`*` Core exact counts cover 341 rows with usable GT; smoke exact counts cover 58.
+All three parallel gates establish every row with zero refutations, unknowns,
+errors, or audit timeout verdicts. The former QSynth blocker
+`qsynth_ea__line_0000026` now establishes compositionally and strictly reduces
+`362 -> 54`. Core `target_547`, previously a 3,900-node stall in the unpruned
+frontier, reduces to 61 nodes in the refreshed hard set.

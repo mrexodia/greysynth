@@ -15,6 +15,29 @@ type local_candidate = {
   allow_equal_cost : bool;
 }
 
+let bit0_restrict_homomorphism_candidate cost expression =
+  match bit0_restrict_pushdown expression with
+  | Some (_baseline, pushed, equalities, inner)
+    when cost inner >= 3
+         && Greysynth_utils.Utils.dag_size_bounded ~limit:1024 inner <= 1024 ->
+      let minimized =
+        pushed :: linear_candidates ~max_atoms:5 cost pushed
+        |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+        |> List.hd
+      in
+      let candidate =
+        match expression with
+        | E.Unary { f = E.Uext amount; _ } -> E.unary (E.Uext amount) minimized
+        | _ -> minimized
+      in
+      if cost candidate < cost expression then
+        let linear_mba_equalities =
+          if E.is_equal pushed minimized then [] else [ pushed, minimized ]
+        in
+        Some (candidate, equalities, linear_mba_equalities)
+      else None
+  | _ -> None
+
 let local_candidates ~cost ~(constants : Sample_evaluator.t)
     ?(heavy_additive = true) ~ac expression =
   let direct pass ?(allow_equal_cost = false) candidate =
@@ -58,6 +81,14 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
     (fun candidate ->
       candidates := direct "abstract-slice" ~allow_equal_cost:true candidate :: !candidates)
     (abstract_slice_candidate expression);
+  Option.iter
+    (fun (candidate, equalities, linear_mba_equalities) ->
+      candidates :=
+        { expr = candidate; pass = "bit0-homomorphism"; equalities;
+          ring_equalities = []; poly_equalities = []; linear_mba_equalities;
+          semilinear_mba_equalities = []; allow_equal_cost = false }
+        :: !candidates)
+    (bit0_restrict_homomorphism_candidate cost expression);
   Option.iter
     (fun (candidate, equalities, ring_equalities) ->
       candidates :=

@@ -447,6 +447,10 @@ let run_preprocessing gt input =
        && (!g_total_timeout <= 0.
            || Unix.gettimeofday () -. !g_start_time < !g_total_timeout)
     then g_has_timedout := false);
+  if size_of_expr !best > 1024
+     && dag_size_bounded ~limit:4096 !best <= 4096
+     && not !g_has_timedout
+  then best := Normalization.dag_constant_cast_simplify !best;
   let early_dag_size = dag_size_bounded ~limit:4096 !best in
   if size_of_expr !best > 1024
      && early_dag_size <= 4096

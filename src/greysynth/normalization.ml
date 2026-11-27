@@ -5,6 +5,55 @@
 open Config
 include Norm_probes
 
+let dag_constant_cast_simplify expression =
+  let memo = Nodes.create 128 and constants = Sample_evaluator.make 1 in
+  let fold_shift_count node =
+    match node with
+    | E.Unary { f = (E.Uext _ | E.Sext _ | E.Restrict _);
+                x = E.Cst _; _ } ->
+        (match constant_cast_fold_candidate constants.eval node with
+        | Some candidate
+          when Rewrite.accepts ~allow_equal_cost:true ~timeout:0.15
+                 ~pass:"constant-cast-prepass" node candidate -> candidate
+        | _ -> node)
+    | _ -> node
+  in
+  let rec visit node =
+    match Nodes.find_opt memo node with
+    | Some result -> result
+    | None ->
+        let result =
+          match node with
+          | E.Unary { f; x; _ } ->
+              let rewritten = visit x in
+              if E.is_equal rewritten x then node
+              else (try E.unary f rewritten with Invalid_argument _ -> node)
+          | E.Binary { f; x; y; _ } ->
+              let rewritten_x = visit x
+              and rewritten_y =
+                let rewritten = visit y in
+                if f = E.Lsl then fold_shift_count rewritten else rewritten
+              in
+              if E.is_equal rewritten_x x && E.is_equal rewritten_y y then node
+              else
+                (try E.binary f rewritten_x rewritten_y
+                 with Invalid_argument _ -> node)
+          | E.Ite { c; t; e; _ } ->
+              let rewritten_c = visit c and rewritten_t = visit t
+              and rewritten_e = visit e in
+              if E.is_equal rewritten_c c && E.is_equal rewritten_t t
+                 && E.is_equal rewritten_e e
+              then node
+              else
+                (try E.ite rewritten_c rewritten_t rewritten_e
+                 with Invalid_argument _ -> node)
+          | _ -> node
+        in
+        Nodes.add memo node result;
+        result
+  in
+  visit expression
+
 let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
     ?(smt_budget = 1.0) ?deadline expression =
   let memo = Nodes.create 256 in
@@ -128,6 +177,14 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
           when try_smt (fun () -> Rewrite.accepts ~timeout:0.15
                  ~pass:"dag-abstract-slice" !result candidate) -> result := candidate
         | _ -> ());
+        if not zero_smt then
+          (match bit0_restrict_homomorphism_candidate cost !result with
+          | Some (candidate, equalities, linear_mba_equalities)
+            when try_smt (fun () ->
+                     Rewrite.accepts_compositional ~pass:"dag-bit0-homomorphism"
+                       ~equalities ~linear_mba_equalities !result candidate) ->
+              result := candidate
+          | _ -> ());
         (match nonlinear_product_identity_candidate !result with
         | Some (candidate, [], linear_mba_equalities,
                 semilinear_mba_equalities, ring_equalities)

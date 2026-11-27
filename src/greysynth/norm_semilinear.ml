@@ -724,30 +724,43 @@ let nonlinear_product_identity_candidate expression =
     | _ -> None
   in
   let substitute_equalities equalities root =
-    let replacements = Nodes.create 16 and memo = Nodes.create 32 in
+    let replacements = Nodes.create 16 and memo = Nodes.create 32
+    and active = Nodes.create 16 in
     List.iter (fun (left, right) -> Nodes.replace replacements left right) equalities;
     let rec visit node =
-      match Nodes.find_opt replacements node with
-      | Some result -> if E.is_equal result node then result else visit result
-      | None ->
-          (match Nodes.find_opt memo node with
-          | Some result -> result
-          | None ->
-              let rebuilt =
-                match node with
-                | E.Unary { f; x; _ } -> E.unary f (visit x)
-                | E.Binary { f; x; y; _ } -> E.binary f (visit x) (visit y)
-                | E.Ite { c; t; e; _ } -> E.ite (visit c) (visit t) (visit e)
-                | value -> value
-              in
-              let result =
-                match Nodes.find_opt replacements rebuilt with
-                | Some replacement when not (E.is_equal replacement rebuilt) ->
-                    visit replacement
-                | _ -> rebuilt
-              in
-              Nodes.add memo node result;
-              result)
+      if Nodes.mem active node then node
+      else
+        match Nodes.find_opt memo node with
+        | Some result -> result
+        | None ->
+            Nodes.add active node ();
+            Fun.protect
+              ~finally:(fun () -> Nodes.remove active node)
+              (fun () ->
+                let direct =
+                  match Nodes.find_opt replacements node with
+                  | Some replacement when not (E.is_equal replacement node) ->
+                      Some replacement
+                  | _ -> None
+                in
+                let rebuilt =
+                  match direct with
+                  | Some replacement -> visit replacement
+                  | None ->
+                      match node with
+                      | E.Unary { f; x; _ } -> E.unary f (visit x)
+                      | E.Binary { f; x; y; _ } -> E.binary f (visit x) (visit y)
+                      | E.Ite { c; t; e; _ } -> E.ite (visit c) (visit t) (visit e)
+                      | value -> value
+                in
+                let result =
+                  match Nodes.find_opt replacements rebuilt with
+                  | Some replacement when not (E.is_equal replacement rebuilt) ->
+                      visit replacement
+                  | _ -> rebuilt
+                in
+                Nodes.add memo node result;
+                result)
     in
     visit root
   in

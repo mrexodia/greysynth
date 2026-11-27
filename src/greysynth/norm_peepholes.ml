@@ -494,12 +494,102 @@ let constant_cast_fold_candidate evaluate expression =
   | E.Unary { f = E.Minus; _ } -> None
   | E.Cst _ | E.Var _ | E.Binary _ | E.Ite _ | E.Load _ -> None
 
+let bit0_restrict_pushdown expression =
+  let zero = constant 1 Z.zero and one = constant 1 Z.one in
+  let is_zero = function
+    | E.Cst value -> Bitvector.is_zeros value
+    | _ -> false
+  and is_one = function
+    | E.Cst value -> Bitvector.is_fill value
+    | _ -> false
+  in
+  let simp_not value =
+    if is_zero value then one
+    else if is_one value then zero
+    else match value with
+      | E.Unary { f = E.Not; x; _ } -> x
+      | _ -> E.unary E.Not value
+  in
+  let complements left right =
+    match left, right with
+    | E.Unary { f = E.Not; x; _ }, other
+    | other, E.Unary { f = E.Not; x; _ } -> E.is_equal x other
+    | _ -> false
+  in
+  let simp_xor left right =
+    if is_zero left then right else if is_zero right then left
+    else if E.is_equal left right then zero
+    else if complements left right then one
+    else E.binary E.Xor left right
+  and simp_and left right =
+    if is_zero left || is_zero right then zero
+    else if is_one left then right else if is_one right then left
+    else if E.is_equal left right then left
+    else if complements left right then zero
+    else E.binary E.And left right
+  and simp_or left right =
+    if is_one left || is_one right then one
+    else if is_zero left then right else if is_zero right then left
+    else if E.is_equal left right then left
+    else if complements left right then one
+    else E.binary E.Or left right
+  in
+  let unpack = function
+    | E.Unary { f = E.Restrict { lo = 0; hi = 0 }; x; _ } ->
+        Some (None, x)
+    | E.Unary { f = E.Uext amount;
+                x = E.Unary { f = E.Restrict { lo = 0; hi = 0 }; x; _ }; _ } ->
+        Some (Some amount, x)
+    | _ -> None
+  in
+  Option.map
+    (fun (extension, inner) ->
+      let memo = Nodes.create 128 and equalities = ref [] in
+      let rec bit0 node =
+        match Nodes.find_opt memo node with
+        | Some result -> result
+        | None ->
+            let lhs = E.restrict ~lo:0 ~hi:0 node in
+            let result =
+              match node with
+              | E.Cst value ->
+                  constant 1 (Z.logand (Bitvector.value_of value) Z.one)
+              | E.Unary { f = E.Not; x; _ } -> simp_not (bit0 x)
+              | E.Unary { f = E.Minus; x; _ } -> bit0 x
+              | E.Unary { f = (E.Uext _ | E.Sext _); x; _ } -> bit0 x
+              | E.Unary { f = E.Restrict { lo; _ }; x; _ } ->
+                  if lo = 0 then bit0 x else E.restrict ~lo ~hi:lo x
+              | E.Binary { f = (E.Plus | E.Minus); x; y; _ } ->
+                  simp_xor (bit0 x) (bit0 y)
+              | E.Binary { f = (E.Mul | E.And); x; y; _ } ->
+                  simp_and (bit0 x) (bit0 y)
+              | E.Binary { f = E.Or; x; y; _ } -> simp_or (bit0 x) (bit0 y)
+              | E.Binary { f = E.Xor; x; y; _ } -> simp_xor (bit0 x) (bit0 y)
+              | E.Binary { f = E.Lsl; x; y; _ } ->
+                  (match constant_value y with
+                  | Some count when Z.equal (Bitvector.value_of count) Z.zero -> bit0 x
+                  | Some _ -> E.binary E.And (bit0 x) zero
+                  | None -> lhs)
+              | _ -> lhs
+            in
+            if not (E.is_equal lhs result) then equalities := (lhs, result) :: !equalities;
+            Nodes.add memo node result;
+            result
+      in
+      let pushed = bit0 inner in
+      let candidate = match extension with
+        | None -> pushed
+        | Some amount -> E.unary (E.Uext amount) pushed
+      in
+      candidate, pushed, List.rev !equalities, inner)
+    (unpack expression)
+
 let restrict_factoring_candidate expression =
   match expression with
   | E.Binary { f = (E.And | E.Or | E.Xor as operation);
                x = E.Unary { f = E.Restrict left_slice; x = left; _ };
                y = E.Unary { f = E.Restrict right_slice; x = right; _ }; _ }
-    when left_slice = right_slice ->
+    when left_slice = right_slice && E.sizeof left = E.sizeof right ->
       let candidate = E.unary (E.Restrict left_slice) (E.binary operation left right) in
       if Greysynth_utils.Utils.cost_of_expr Greysynth_utils.Utils.PaperAst candidate
          < Greysynth_utils.Utils.cost_of_expr Greysynth_utils.Utils.PaperAst expression
