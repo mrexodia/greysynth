@@ -32,7 +32,7 @@ let rec demorgan_not expression =
   | E.Cst value when Bitvector.is_fill value -> E.constant (Bitvector.zeros (Bitvector.size_of value))
   | expression -> E.unary E.Not expression
 
-let linear_candidates_with_rings ?(opaque_atoms = [])
+let rec linear_candidates_with_rings ?(opaque_atoms = [])
     ?(max_atoms = !c_normalization_max_atoms) ?(semantic_bitwise = false)
     ?(ring_bridges = true) cost expression =
   let width = E.sizeof expression in
@@ -94,6 +94,49 @@ let linear_candidates_with_rings ?(opaque_atoms = [])
           canonical
     | _ -> original
   in
+  let bitwise_linear_atoms = Nodes.create 32 in
+  let scan_linear_seen = Nodes.create 128 and scan_bitwise_seen = Nodes.create 128 in
+  let linear_position = function
+    | E.Unary { f = E.Minus; _ }
+    | E.Binary { f = (E.Plus | E.Minus | E.Mul | E.Lsl); _ } -> true
+    | _ -> false
+  in
+  let rec scan_bitwise node =
+    if not (Nodes.mem scan_bitwise_seen node) then (
+      Nodes.add scan_bitwise_seen node ();
+      match node with
+      | E.Cst value when Bitvector.is_zeros value || Bitvector.is_fill value -> ()
+      | E.Unary { f = E.Not; x; _ } -> scan_bitwise x
+      | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+          scan_bitwise x; scan_bitwise y
+      | value when linear_position value ->
+          Nodes.replace bitwise_linear_atoms (canonical_ac_atom value) ()
+      | _ -> ())
+  and scan_linear node =
+    if not (Nodes.mem scan_linear_seen node) then (
+      Nodes.add scan_linear_seen node ();
+      match node with
+      | E.Cst _ -> ()
+      | E.Unary { f = E.Minus; x; _ } -> scan_linear x
+      | E.Unary { f = E.Not; _ } -> scan_bitwise node
+      | E.Binary { f = (E.Plus | E.Minus); x; y; _ } ->
+          scan_linear x; scan_linear y
+      | E.Binary { f = E.Mul; x; y; _ } ->
+          (match constant_value x, constant_value y with
+          | Some _, _ -> scan_linear y
+          | _, Some _ -> scan_linear x
+          | _ -> ())
+      | E.Binary { f = E.Lsl; x; y; _ } ->
+          (match constant_value y with Some _ -> scan_linear x | None -> ())
+      | E.Binary { f = (E.And | E.Or | E.Xor); _ } -> scan_bitwise node
+      | _ -> ())
+  in
+  if ring_bridges then scan_linear expression;
+  let is_bitwise_linear_atom expression =
+    ring_bridges
+    && (Nodes.mem bitwise_linear_atoms expression
+        || Nodes.mem bitwise_linear_atoms (canonical_ac_atom expression))
+  in
   let atoms = ref [] in
   let saw_nonlinear = ref false in
   let visited = ref 0 in
@@ -128,11 +171,6 @@ let linear_candidates_with_rings ?(opaque_atoms = [])
         let result =
           if List.exists (E.is_equal expression) opaque_atoms then atom expression
           else match expression with
-          | E.Cst value -> Number (Bitvector.value_of value)
-          | E.Unary { f = E.Minus; x; _ } -> Scale (mask, linear x)
-          | E.Unary { f = E.Not; x; _ } -> Not (linear x)
-          | E.Binary { f = E.Plus; x; y; _ } -> Add (linear x, linear y)
-          | E.Binary { f = E.Minus; x; y; _ } -> Sub (linear x, linear y)
           | E.Binary { f = E.Mul; x; y; _ } -> (
               match constant_value x, constant_value y with
               | Some k, _ -> Scale (Bitvector.value_of k, linear y)
@@ -144,6 +182,12 @@ let linear_candidates_with_rings ?(opaque_atoms = [])
                       saw_nonlinear := true;
                       Scale (coefficient, atom base)
                   | None -> saw_nonlinear := true; atom expression))
+          | _ when is_bitwise_linear_atom expression -> atom expression
+          | E.Cst value -> Number (Bitvector.value_of value)
+          | E.Unary { f = E.Minus; x; _ } -> Scale (mask, linear x)
+          | E.Unary { f = E.Not; x; _ } -> Not (linear x)
+          | E.Binary { f = E.Plus; x; y; _ } -> Add (linear x, linear y)
+          | E.Binary { f = E.Minus; x; y; _ } -> Sub (linear x, linear y)
           | E.Binary { f = E.Lsl; x; y; _ } -> (
               match constant_value y with
               | Some count ->
@@ -586,28 +630,47 @@ let linear_candidates_with_rings ?(opaque_atoms = [])
           | Some old -> E.binary E.Plus old (scale coefficient term)))
     done;
     offer (Option.value !result ~default:(zeros width));
-    let memo = Nodes.create 128 in
+    let memo = Nodes.create 128 and active = Nodes.create 32 in
     let rec substitute node =
-      match Nodes.find_opt replacements node with
-      | Some replacement -> replacement
-      | None ->
-          (match Nodes.find_opt memo node with
-          | Some result -> result
-          | None ->
-              let result =
-                match node with
-                | E.Unary { f; x; _ } -> E.unary f (substitute x)
-                | E.Binary { f; x; y; _ } -> E.binary f (substitute x) (substitute y)
-                | E.Ite { c; t; e; _ } -> E.ite (substitute c) (substitute t) (substitute e)
-                | value -> value
-              in
-              Nodes.add memo node result;
-              result)
+      if Nodes.mem active node then node
+      else
+        match Nodes.find_opt memo node with
+        | Some result -> result
+        | None ->
+            Nodes.add active node ();
+            Fun.protect
+              ~finally:(fun () -> Nodes.remove active node)
+              (fun () ->
+                let result =
+                  match Nodes.find_opt replacements node with
+                  | Some replacement when not (E.is_equal replacement node) ->
+                      substitute replacement
+                  | _ ->
+                      match node with
+                      | E.Unary { f; x; _ } -> E.unary f (substitute x)
+                      | E.Binary { f; x; y; _ } ->
+                          E.binary f (substitute x) (substitute y)
+                      | E.Ite { c; t; e; _ } ->
+                          E.ite (substitute c) (substitute t) (substitute e)
+                      | value -> value
+                in
+                Nodes.add memo node result;
+                result)
     in
     let rewritten_source = substitute expression
     and ring_edges = List.rev !ring_edges in
-    List.map (fun candidate -> candidate, ring_edges, rewritten_source) !results
-  with Too_complex -> []
+    let proposals =
+      List.map (fun candidate -> candidate, ring_edges, rewritten_source) !results
+    in
+    if proposals = [] && ring_bridges && Nodes.length bitwise_linear_atoms > 0 then
+      linear_candidates_with_rings ~opaque_atoms ~max_atoms ~semantic_bitwise
+        ~ring_bridges:false cost expression
+    else proposals
+  with Too_complex ->
+    if ring_bridges then
+      linear_candidates_with_rings ~opaque_atoms ~max_atoms ~semantic_bitwise
+        ~ring_bridges:false cost expression
+    else []
 
 let linear_candidates ?opaque_atoms ?max_atoms ?semantic_bitwise cost expression =
   linear_candidates_with_rings ?opaque_atoms ?max_atoms ?semantic_bitwise

@@ -262,6 +262,30 @@ let () =
   expect "proved_compositional"
     (P.verify ~original:correlated_left ~candidate:correlated_right
        (linear_mba_certificate correlated_left correlated_right));
+  let bx0 = var "boundary_x0" 8 and bx1 = var "boundary_x1" 8
+  and bx2 = var "boundary_x2" 8 in
+  let compound_a = E.binary E.Plus (E.binary E.And bx0 bx1) (E.binary E.Xor bx0 bx2)
+  and compound_b = E.binary E.Mul (E.binary E.Minus bx0 bx2) (E.binary E.Or bx1 bx2) in
+  let boundary_and = E.binary E.And compound_a compound_b in
+  let boundary_true = E.binary E.Minus (E.binary E.Plus compound_a compound_b)
+      (E.binary E.Mul (c 8 2) boundary_and)
+  and boundary_rhs = E.binary E.Xor compound_a compound_b in
+  let boundary_started = Unix.gettimeofday () in
+  expect "proved_compositional"
+    (P.verify ~original:boundary_true ~candidate:boundary_rhs
+       (linear_mba_certificate boundary_true boundary_rhs));
+  require (Unix.gettimeofday () -. boundary_started < 0.1)
+    "compound-atom linear MBA proof was unexpectedly slow";
+  let boundary_false = E.binary E.Minus (E.binary E.Plus compound_a compound_b)
+      boundary_and in
+  expect "error"
+    (P.verify ~original:boundary_false ~candidate:boundary_rhs
+       (linear_mba_certificate boundary_false boundary_rhs));
+  let boundary_verdict, _, _ =
+    U.are_equivalent_seconds boundary_false boundary_rhs (Some 1.)
+  in
+  require (boundary_verdict = U.No)
+    "Bitwuzla did not refute the false compound-atom identity";
   let not_sum = E.unary E.Not (E.binary E.Plus lx ly) in
   let negated = E.binary E.Minus
       (E.binary E.Minus (c 8 (-1)) lx) ly in

@@ -1981,3 +1981,83 @@ The largest robust improvements are on the shrunk Tigress and refreshed core
 frontiers plus Leeky ladders and extra-floor. Frontier, long-frontier, gaps,
 interactions, projection, and aggregate Leeky quality remain explicit
 regressions for subsequent work.
+
+## Round-47 bitwise atom boundaries and linear-first DAG preservation
+
+Round 47 makes compound arithmetic atoms consistent across bitwise and linear
+contexts. `linear_mba_mod2w` first collects additive, subtractive,
+multiplicative, negated, and shifted terms that are forced opaque beneath
+bitwise operators, then retries the proof with those exact DAG IDs as stop
+nodes. A standard no-stop proof remains the fail-closed fallback. The enhanced
+path is bounded to proof endpoints of cost 16,384. Positive compound-atom and
+negative Bitwuzla cross-tests are permanent in `proof_test.ml`; the false
+identity is rejected by both the kernel and Bitwuzla.
+
+Producer-side linear recovery performs the same bitwise-boundary collection,
+including AC canonicalization. Scalar extraction runs before multiplicative
+stop checks. Ring rewrites are recursively applied with a cycle guard when
+constructing the rewritten linear source. Bounded DAG/root and top-level
+normalization paths carry ring edges plus the final linear-MBA edge; legacy
+local candidate generation retains its prior behavior to protect large shared
+pipelines.
+
+The zero-SMT DAG phase runs linear and semi-linear recovery before nonlinear
+polynomial expansion and skips `nonlinear_poly_candidate` above cost 512.
+Highly shared inputs retain the 1.5-second soft-stop pass. Non-shared inputs only
+receive the extended pass when a shallow bitwise product has two substantial
+linear factors; otherwise the pre-root pass is effectively skipped. This keeps
+all accepted partial DAG rewrites while preserving polynomial budgets.
+
+`test/round47_test.ml` covers a >400-node compound-boundary identity with
+nested scalar extraction and a >2,000-node product-of-linear-MBAs stress case.
+Both independently replay. The complete warning-clean `make test` gate passes,
+and the held-out balanced panel was not evaluated.
+
+Final artifacts:
+
+```text
+/tmp/r47-leeky-dev64/out.jsonl
+/tmp/r47-l5/out.jsonl
+/tmp/r47-core/out.jsonl
+/tmp/r47-smoke/out.jsonl
+/tmp/r47-smoke-isolated/out.jsonl
+```
+
+All four parallel gates establish every row with zero refutations, unknowns,
+errors, or audit timeout verdicts. Leeky dev establishes all 884 rows; among
+880 transformed rows, 863 strictly decrease and 467 reach or beat reference
+after a strict reduction. Aggregate transformed quality improves from
+`2.3475x` to `2.1585x`; all four controls remain unchanged.
+
+| Leeky dev panel | Baseline hits -> R47 hits | Baseline quality -> R47 quality | R47 strict reductions |
+|---|---:|---:|---:|
+| mba-capabilities-v1 | 33 -> 33 | 3.3337x -> 3.3361x | 71/71 |
+| mba-capabilities-v2 | 34 -> 34 | 1.1037x -> 1.1062x | 43/44 |
+| mba-composition-v1 | 47 -> 47 | 1.1365x -> 1.1365x | 52/54 |
+| mba-extra-floor-v1 | 19 -> 23 | 1.4569x -> 1.3048x | 54/54 |
+| mba-frontier64-v1 | 3 -> 0 | 22.7000x -> 16.0489x | 93/96 |
+| mba-gaps-v1 | 55 -> 54 | 1.1124x -> 1.1141x | 72/72 |
+| mba-interactions-v1 | 23 -> 22 | 0.9364x -> 0.9476x | 33/33 |
+| mba-ladders-v1 | 39 -> 48 | 1.2743x -> 1.1374x | 72/72 |
+| mba-long-frontier-v1 | 44 -> 39 | 1.6318x -> 2.1525x | 70/72 |
+| mba-majority-v1 | 34 -> 34 | 1.3835x -> 1.3772x | 54/54 |
+| mba-projection-v1 | 51 -> 49 | 1.1375x -> 1.2303x | 54/54 |
+| mba-proof-context-v1 | 12 -> 12 | 1.5744x -> 1.5770x | 36/36 |
+| mba-stress64-v1 | 0 -> 3 | 11.2614x -> 6.6570x | 87/96 |
+| mba-tight-v1 | 68 -> 69 | 1.0377x -> 1.0286x | 72/72 |
+| **Overall transformed** | **462 -> 467** | **2.3475x -> 2.1585x** | **863/880** |
+
+| Regression gate | Established | Exact <= GT | Quality before -> after | Better / equal / worse | Strict decreases |
+|---|---:|---:|---:|---:|---:|
+| Shrunk Tigress L5 | 251/251 | 44 | 10.5590x -> 6.6698x | 120 / 61 / 70 | 250 |
+| Refreshed core hard | 342/342 | 25* | 7.0702x -> 5.4828x | 86 / 225 / 30 | 330 |
+| Regression smoke | 62/62 | 52* | 0.7846x -> 0.9488x | 7 / 48 / 7 | 61 |
+
+`*` Core exact counts cover 341 rows with usable GT; smoke exact counts cover 58.
+The authoritative smoke run has one net-neutral row
+(`multivariate64__line_0000002`), which strictly reduces to size 3 in isolated
+one-worker replay. The smoke quality target is nevertheless missed because the
+new boundary-consistent local proof changes `tigress_l6__target_3259` from size
+7 to size 212. Frontier quality and stress coverage improve substantially, and
+long-frontier partially recovers from 37 to 39 hits, but frontier reference
+hits fall from 3 to 0. These regressions remain explicit follow-up items.

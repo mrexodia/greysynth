@@ -252,14 +252,15 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
                       ~pass:"dag-mask-lift" !result candidate) ->
               result := candidate
           | _ -> ()));
-        (match nonlinear_poly_candidate ~max_cost:2048 cost !result with
-        | Some (candidate, linear_mba_equalities, ring_equalities,
-                final_linear_equalities)
-          when Rewrite.accepts_compositional ~pass:"dag-minterm-ring-poly"
-                 ~equalities:[] ~ring_equalities
-                 ~linear_mba_equalities:(linear_mba_equalities @ final_linear_equalities)
-                 !result candidate -> result := candidate
-        | _ -> ());
+        if not zero_smt || cost !result <= 512 then
+          (match nonlinear_poly_candidate ~max_cost:2048 cost !result with
+          | Some (candidate, linear_mba_equalities, ring_equalities,
+                  final_linear_equalities)
+            when Rewrite.accepts_compositional ~pass:"dag-minterm-ring-poly"
+                   ~equalities:[] ~ring_equalities
+                   ~linear_mba_equalities:(linear_mba_equalities @ final_linear_equalities)
+                   !result candidate -> result := candidate
+          | _ -> ());
         if not minimal then (
         (if cost !result <= 256 then
            match known_bits_candidate cost !result with
@@ -654,29 +655,47 @@ let run ?deadline expression =
                           !current candidate -> Some candidate
                  | _ -> None
              in
+             let linear_decomposed =
+               if not (E.is_equal !current expression)
+                  || cost !current < 4 || cost !current > 16_384
+               then None
+               else
+                 match
+                   linear_candidates_with_rings cost !current
+                   |> List.sort (fun (left, _, _) (right, _, _) ->
+                          Int.compare (cost left) (cost right))
+                 with
+                 | (candidate, ring_equalities, rewritten_source) :: _
+                   when Rewrite.accepts_compositional
+                          ~pass:"normalize-linear-mba" ~equalities:[]
+                          ~ring_equalities
+                          ~linear_mba_equalities:[ rewritten_source, candidate ]
+                          !current candidate -> Some candidate
+                 | _ -> None
+             in
              let decomposed =
                match lowk_decomposed with
                | Some candidate -> Some candidate
                | None ->
-               match nonlinear_product_identity_candidate !current with
-               | Some (candidate, equalities, linear_mba_equalities,
-                       semilinear_mba_equalities, ring_equalities)
-                 when cost candidate < cost !current
-                      && Rewrite.accepts_compositional ~pass:"product-peel"
-                           ~equalities ~ring_equalities
-                           ~linear_mba_equalities ~semilinear_mba_equalities
-                           !current candidate -> Some candidate
-               | _ ->
-                   (match ring_normalized with
-                   | Some candidate -> Some candidate
-                   | None ->
-                       (match product_partition_candidate !current with
-                       | Some (candidate, equalities)
-                         when cost candidate < cost !current
-                              && Rewrite.accepts_compositional ~pass:"polynomial"
-                                   ~equalities !current candidate ->
-                           Some candidate
-                       | _ -> None))
+                   (match nonlinear_product_identity_candidate !current with
+                   | Some (candidate, equalities, linear_mba_equalities,
+                           semilinear_mba_equalities, ring_equalities)
+                     when cost candidate < cost !current
+                          && Rewrite.accepts_compositional ~pass:"product-peel"
+                               ~equalities ~ring_equalities
+                               ~linear_mba_equalities ~semilinear_mba_equalities
+                               !current candidate -> Some candidate
+                   | _ ->
+                       (match ring_normalized with
+                       | Some candidate -> Some candidate
+                       | None ->
+                           (match product_partition_candidate !current with
+                           | Some (candidate, equalities)
+                             when cost candidate < cost !current
+                                  && Rewrite.accepts_compositional ~pass:"polynomial"
+                                       ~equalities !current candidate ->
+                               Some candidate
+                           | _ -> linear_decomposed)))
              in
              match decomposed with
              | Some candidate ->

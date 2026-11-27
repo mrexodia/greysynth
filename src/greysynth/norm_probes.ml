@@ -240,13 +240,25 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
     (bitsliced_candidate cost expression);
   if cost expression >= 4 then
     List.iter
-      (fun (candidate, ring_equalities, rewritten_source) ->
+      (fun candidate ->
+        let variable_count =
+          List.length (Sample_evaluator.variables_of_expr expression)
+        in
+        let equalities, ring_equalities, linear_mba_equalities =
+          if variable_count >= 3 then [], [], [ expression, candidate ]
+          else
+            let equalities, ring_equalities =
+              Option.value (minterm_ring_proof expression candidate)
+                ~default:(Option.value (complement_product_steps expression candidate)
+                            ~default:([ expression, candidate ], []))
+            in
+            equalities, ring_equalities, []
+        in
         candidates :=
-          { expr = candidate; pass = "linear-mba"; equalities = [];
-            ring_equalities; poly_equalities = [];
-            linear_mba_equalities = [ rewritten_source, candidate ];
+          { expr = candidate; pass = "linear-mba"; equalities;
+            ring_equalities; poly_equalities = []; linear_mba_equalities;
             semilinear_mba_equalities = []; allow_equal_cost = false } :: !candidates)
-      (linear_candidates_with_rings cost expression));
+      (linear_candidates cost expression));
   );
   let offer_nonmonotonic ?(ring_rule = true) pass candidate =
     let proposal =

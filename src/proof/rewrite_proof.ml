@@ -816,7 +816,7 @@ let poly_equal g left right =
 
 module SparseMultilinear = Map.Make (Int)
 
-let linear_mba_equal g left right =
+let linear_mba_equal_with_stops ~stop_ids g left right =
   let width = (node g left).width in
   if width <> (node g right).width then Ring_not_equal
   else if width > 128 then Ring_limit_exceeded
@@ -850,6 +850,7 @@ let linear_mba_equal g left right =
     in
     let rec collect_bitwise id =
       if see seen_bitwise id then
+      if Hashtbl.mem stop_ids id then add_atom id else
       match uniform_constant id, (node g id).shape with
       | Some _, _ -> ()
       | None, Unary ("bvnot", [], child) -> collect_bitwise child
@@ -858,6 +859,7 @@ let linear_mba_equal g left right =
       | _ -> add_atom id
     and collect_linear id =
       if see seen_linear id then
+      if Hashtbl.mem stop_ids id then add_atom id else
       match (node g id).shape, (node g id).expr with
       | Value _, E.Cst _ -> ()
       | Unary (("bvneg" | "bvnot"), [], child), _ -> collect_linear child
@@ -1082,6 +1084,60 @@ let linear_mba_equal g left right =
       if Z.equal left_c right_c && Array.for_all2 Z.equal left_t right_t
       then Ring_equal else Ring_not_equal)
     with Ring_limit -> Ring_limit_exceeded
+
+let linear_mba_equal g left right =
+  if (node g left).cost > 16_384 || (node g right).cost > 16_384 then
+    linear_mba_equal_with_stops ~stop_ids:(Hashtbl.create 0) g left right
+  else
+  let bitwise_atoms = Hashtbl.create 16 in
+  let seen_linear = Hashtbl.create 128 and seen_bitwise = Hashtbl.create 128 in
+  let linear_shape = function
+    | Unary ("bvneg", [], _) | Binary (("bvadd" | "bvsub" | "bvmul" | "bvshl"), _, _) ->
+        true
+    | _ -> false
+  in
+  let uniform id =
+    match (node g id).expr with
+    | E.Cst value -> Bitvector.is_zeros value || Bitvector.is_fill value
+    | _ -> false
+  in
+  let rec scan_bitwise id =
+    if not (Hashtbl.mem seen_bitwise id) then (
+      Hashtbl.add seen_bitwise id ();
+      if not (uniform id) then
+        match (node g id).shape with
+        | Unary ("bvnot", [], child) -> scan_bitwise child
+        | Binary (("bvand" | "bvor" | "bvxor"), x, y) ->
+            scan_bitwise x; scan_bitwise y
+        | shape when linear_shape shape -> Hashtbl.replace bitwise_atoms id ()
+        | _ -> ())
+  and scan_linear id =
+    if not (Hashtbl.mem seen_linear id) then (
+      Hashtbl.add seen_linear id ();
+      match (node g id).shape, (node g id).expr with
+      | Value _, E.Cst _ -> ()
+      | Unary ("bvneg", [], child), _ -> scan_linear child
+      | Unary ("bvnot", [], _), _ -> scan_bitwise id
+      | Binary (("bvadd" | "bvsub"), x, y), _ ->
+          scan_linear x; scan_linear y
+      | Binary ("bvmul", x, y), _ ->
+          (match (node g x).expr, (node g y).expr with
+          | E.Cst _, _ -> scan_linear y
+          | _, E.Cst _ -> scan_linear x
+          | _ -> ())
+      | Binary ("bvshl", x, y), _ ->
+          (match (node g y).expr with E.Cst _ -> scan_linear x | _ -> ())
+      | Binary (("bvand" | "bvor" | "bvxor"), _, _), _ -> scan_bitwise id
+      | _ -> ())
+  in
+  scan_linear left;
+  scan_linear right;
+  if Hashtbl.length bitwise_atoms > 0 then
+    match linear_mba_equal_with_stops ~stop_ids:bitwise_atoms g left right with
+    | Ring_equal -> Ring_equal
+    | Ring_not_equal | Ring_limit_exceeded ->
+        linear_mba_equal_with_stops ~stop_ids:(Hashtbl.create 0) g left right
+  else linear_mba_equal_with_stops ~stop_ids:(Hashtbl.create 0) g left right
 
 let semilinear_mba_equal g left right =
   let width = (node g left).width in
