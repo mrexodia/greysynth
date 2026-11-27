@@ -47,6 +47,10 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
   List.iter (fun candidate -> candidates := direct "peephole" candidate :: !candidates)
     (peepholes constants.eval expression);
   Option.iter
+    (fun candidate ->
+      candidates := direct "constant-cast" ~allow_equal_cost:true candidate :: !candidates)
+    (constant_cast_fold_candidate constants.eval expression);
+  Option.iter
     (fun (candidate, equalities, ring_equalities) ->
       candidates :=
         { expr = candidate; pass = "complementary-slice"; equalities;
@@ -59,6 +63,9 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
   Option.iter
     (fun candidate -> candidates := direct "known-bits" candidate :: !candidates)
     (known_bits_candidate cost expression);
+  Option.iter
+    (fun candidate -> candidates := direct "bit0-parity" candidate :: !candidates)
+    (bit0_parity_candidate cost expression);
   Option.iter
     (fun candidate ->
       candidates :=
@@ -73,6 +80,13 @@ let local_candidates ~cost ~(constants : Sample_evaluator.t)
   Option.iter
     (fun candidate -> candidates := direct "demand-bits" candidate :: !candidates)
     (demand_bits_candidate cost expression);
+  Option.iter
+    (fun (candidate, linear_mba_equalities, ring_equalities) ->
+      candidates :=
+        { expr = candidate; pass = "product-peel"; equalities = [];
+          ring_equalities; poly_equalities = []; linear_mba_equalities;
+          semilinear_mba_equalities = []; allow_equal_cost = false } :: !candidates)
+    (nonlinear_product_identity_candidate expression);
   if heavy_additive then (
   if ac then
     List.iter

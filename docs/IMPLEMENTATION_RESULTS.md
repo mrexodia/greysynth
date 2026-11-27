@@ -1401,3 +1401,46 @@ exact (`5639 -> 19`), target 3500 (`4605 -> 13`, GT 11), target 4671
 semi-linear slice hotfix reduces the final L5 exact count from the pre-hotfix
 61 to 59 while restoring the required proof-kernel soundness. Deeply wrapped
 Tigress-L8 giant targets still require further exposure.
+
+## Round-37 opaque-atom semi-linear and bit-zero recovery
+
+Round 37 changes semi-linear candidate generation to use the exact opaque atoms
+collected by the strict MSiMBA preflight rather than recursively enumerating
+leaf variables. Valid low slices add their effective masks to the disjoint-mask
+basis while arithmetic beneath a slice remains opaque. Single-atom vocabularies
+now include additive offsets, reverse subtraction, complemented offsets and
+scaled forms. The permanent Round-36 counterexample remains rejected by both
+the proof kernel and Bitwuzla.
+
+Equal-Legacy-cost cast cleanup is admitted only when Paper-AST node cost strictly
+decreases, allowing constant `uext`/`sext`/`restrict` folding and nested-cast
+collapse without creating cost cycles. `Known_bits` now propagates trailing
+zeroes and exact bit-zero parity through addition/subtraction and folds constant
+shift amounts through casts. Universal low-bit parity candidates cover masked
+addition/subtraction and zero-extended bit slices. Zero-SMT product peeling is
+also available in the local candidate portfolio, and abstract slice identities
+are tested over division-heavy opaque subtrees.
+
+The new `round37_test` and proof-kernel negative regression pass, and `make test`
+remains warning-clean. Final artifacts:
+
+```text
+/tmp/r37-l5/out.jsonl
+/tmp/r37-core/out.jsonl
+/tmp/r37-core-isolated/out.jsonl
+/tmp/r37-smoke/out.jsonl
+```
+
+| Gate | Established | Exact | Geomean quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| Tigress L5 all_non_exact | 450/450 | 87 | 25.4124x -> 10.3328x | 284 / 57 / 109 |
+| Refreshed core hard | 353/353* | 16 | 24.3105x -> 15.6013x | 64 / 260 / 26 |
+| Regression smoke | 62/62 | 52 | 0.7846x -> 0.8910x | 3 / 49 / 10 |
+
+`*` Three Tigress-L8 rows timed out in the parallel core run and all three
+proved directly with net-neutral outputs on isolated replay. There are zero
+refutations or remaining unresolved rows. Focused L5 results include target
+6533 exact (`564 -> 5`), target 2135 (`502 -> 13`, GT 5), target 2618
+(`1705 -> 17`, GT 3), target 3500 (`4605 -> 13`, GT 11), and target 6367
+(`4907 -> 13`, GT 7). Opaque-atom and cast handling improve the aggregate
+substantially, although several deeply nested target forms remain above GT.

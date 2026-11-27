@@ -17,6 +17,13 @@ let is_constant value =
   if Z.equal (Z.logor value.zeros value.ones) (mask value.width)
   then Some value.ones else None
 
+let rec constant_value = function
+  | E.Cst value -> Some value
+  | E.Unary { f; x; _ } ->
+      Option.bind (constant_value x) (fun value ->
+          try Some (Term.Bv.unary f value) with _ -> None)
+  | _ -> None
+
 let trailing_zeros value =
   let rec loop index =
     if index >= value.width || not (Z.testbit value.zeros index) then index
@@ -70,38 +77,66 @@ let analyze expression =
               let x = visit x and y = visit y in
               if disjoint x y then
                 make width (Z.logand x.zeros y.zeros) (Z.logor x.ones y.ones)
-              else unknown width
+              else
+                let count = min (trailing_zeros x) (trailing_zeros y) in
+                let zeros = ref (Z.pred (Z.shift_left Z.one count)) and ones = ref Z.zero in
+                let bit value =
+                  if Z.testbit value.zeros 0 then Some false
+                  else if Z.testbit value.ones 0 then Some true else None
+                in
+                (match bit x, bit y with
+                | Some left, Some right ->
+                    if left <> right then ones := Z.logor !ones Z.one
+                    else zeros := Z.logor !zeros Z.one
+                | _ -> ());
+                make width !zeros !ones
+          | E.Binary { f = E.Minus; x; y; _ } ->
+              let x = visit x and y = visit y in
+              let count = min (trailing_zeros x) (trailing_zeros y) in
+              let zeros = ref (Z.pred (Z.shift_left Z.one count)) and ones = ref Z.zero in
+              let bit value =
+                if Z.testbit value.zeros 0 then Some false
+                else if Z.testbit value.ones 0 then Some true else None
+              in
+              (match bit x, bit y with
+              | Some left, Some right ->
+                  if left <> right then ones := Z.logor !ones Z.one
+                  else zeros := Z.logor !zeros Z.one
+              | _ -> ());
+              make width !zeros !ones
           | E.Binary { f = E.Mul; x; y; _ } ->
               let x = visit x and y = visit y in
               let count = min width (trailing_zeros x + trailing_zeros y) in
               make width (Z.pred (Z.shift_left Z.one count)) Z.zero
-          | E.Binary { f = (E.Lsl | E.Lsr | E.Asr as operation); x;
-                       y = E.Cst amount; _ } ->
-              let x = visit x and amount = Bitvector.value_of amount in
-              if Z.geq amount (Z.of_int x.width) then
-                if operation = E.Asr && Z.testbit x.ones (x.width - 1)
-                then make width Z.zero m else make width m Z.zero
-              else
-                let amount = Z.to_int amount in
-                if operation = E.Lsl then
-                  make width
-                    (Z.logor (Z.logand m (Z.shift_left x.zeros amount))
-                       (Z.pred (Z.shift_left Z.one amount)))
-                    (Z.logand m (Z.shift_left x.ones amount))
-                else if operation = E.Lsr then
-                  let high = Z.logand m
-                      (Z.lognot (Z.pred (Z.shift_left Z.one (width - amount)))) in
-                  make width (Z.logor (Z.shift_right x.zeros amount) high)
-                    (Z.shift_right x.ones amount)
-                else
-                  let sign = width - 1 in
-                  let high = Z.logand m
-                      (Z.lognot (Z.pred (Z.shift_left Z.one (width - amount)))) in
-                  let zeros = Z.shift_right x.zeros amount
-                  and ones = Z.shift_right x.ones amount in
-                  make width
-                    (if Z.testbit x.zeros sign then Z.logor zeros high else zeros)
-                    (if Z.testbit x.ones sign then Z.logor ones high else ones)
+          | E.Binary { f = (E.Lsl | E.Lsr | E.Asr as operation); x; y; _ } ->
+              (match constant_value y with
+              | None -> unknown width
+              | Some amount ->
+                  let x = visit x and amount = Bitvector.value_of amount in
+                  if Z.geq amount (Z.of_int x.width) then
+                    if operation = E.Asr && Z.testbit x.ones (x.width - 1)
+                    then make width Z.zero m else make width m Z.zero
+                  else
+                    let amount = Z.to_int amount in
+                    if operation = E.Lsl then
+                      make width
+                        (Z.logor (Z.logand m (Z.shift_left x.zeros amount))
+                           (Z.pred (Z.shift_left Z.one amount)))
+                        (Z.logand m (Z.shift_left x.ones amount))
+                    else if operation = E.Lsr then
+                      let high = Z.logand m
+                          (Z.lognot (Z.pred (Z.shift_left Z.one (width - amount)))) in
+                      make width (Z.logor (Z.shift_right x.zeros amount) high)
+                        (Z.shift_right x.ones amount)
+                    else
+                      let sign = width - 1 in
+                      let high = Z.logand m
+                          (Z.lognot (Z.pred (Z.shift_left Z.one (width - amount)))) in
+                      let zeros = Z.shift_right x.zeros amount
+                      and ones = Z.shift_right x.ones amount in
+                      make width
+                        (if Z.testbit x.zeros sign then Z.logor zeros high else zeros)
+                        (if Z.testbit x.ones sign then Z.logor ones high else ones))
           | E.Ite { c; t; e; _ } ->
               let c = visit c in
               (match is_constant c with

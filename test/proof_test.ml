@@ -331,6 +331,13 @@ let () =
         E.binary E.Minus sx (c 8 1) ];
   let bad_slice = E.unary (E.Uext 1) (E.restrict ~lo:1 ~hi:7 sx) in
   let bad_slice_mask = E.binary E.And sx (c 8 0x7f) in
+  let bad_slice_carry =
+    E.unary (E.Uext 6)
+      (E.restrict ~lo:0 ~hi:1 (E.binary E.Plus sx (c 8 1)))
+  in
+  let bad_slice_carry_wrong =
+    E.binary E.Plus (c 8 1) (E.binary E.And sx (c 8 3))
+  in
   let bad_sext = E.unary (E.Sext 7) (E.restrict ~lo:0 ~hi:0 sx) in
   let semi_bad_mask = E.binary E.And sx (c 8 5) in
   let semi_bad_bit = E.binary E.Mul (c 8 2) (E.binary E.And sx (c 8 0x40)) in
@@ -347,6 +354,7 @@ let () =
     [ semi_bad_mask, sx; semi_bad_bit, c 8 0;
       semi_shift_trap, semi_shift_wrong;
       bad_slice, bad_slice_mask; bad_sext, low_bit;
+      bad_slice_carry, bad_slice_carry_wrong;
       semi_arithmetic_trap, semi_arithmetic_wrong ];
   Printf.printf "proof_test: typed DAG, ring kernel, endpoint binding and incomplete-derivation regressions passed\n";
   if not available then (
@@ -364,6 +372,7 @@ let () =
         semi_bad_mask, sx; semi_bad_bit, c 8 0;
         semi_shift_trap, semi_shift_wrong;
         bad_slice, bad_slice_mask; bad_sext, low_bit;
+        bad_slice_carry, bad_slice_carry_wrong;
         semi_arithmetic_trap, semi_arithmetic_wrong ];
     let negative_verdict, _, _ = U.are_equivalent off_by_one (c 8 0) (Some 2) in
     let negative_verdict16, _, _ = U.are_equivalent off_by_one16 (c 16 0) (Some 2) in

@@ -34,6 +34,17 @@ let dag_bottom_up_simplify ?(minimal = false) expression =
           | _ -> node
         in
         let result = ref rebuilt in
+        (match constant_cast_fold_candidate constants.eval !result with
+        | Some candidate
+          when Rewrite.accepts ~allow_equal_cost:true ~timeout:0.15
+                 ~pass:"dag-constant-cast" !result candidate ->
+            result := candidate
+        | _ -> ());
+        (match bit0_parity_candidate cost !result with
+        | Some candidate
+          when Rewrite.accepts ~timeout:0.15 ~pass:"dag-bit0-parity" !result candidate ->
+            result := candidate
+        | _ -> ());
         (match abstract_slice_candidate !result with
         | Some candidate
           when Rewrite.accepts ~timeout:0.15 ~pass:"dag-abstract-slice"

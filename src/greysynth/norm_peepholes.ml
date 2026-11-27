@@ -474,6 +474,26 @@ let rec peepholes evaluate expression =
             | _ -> [])
   | _ -> []
 
+let constant_cast_fold_candidate evaluate expression =
+  let fold () =
+    peepholes evaluate expression
+    |> List.filter (fun candidate ->
+           Greysynth_utils.Utils.cost_of_expr Greysynth_utils.Utils.PaperAst candidate
+           < Greysynth_utils.Utils.cost_of_expr Greysynth_utils.Utils.PaperAst expression)
+    |> List.sort (fun left right ->
+           Int.compare
+             (Greysynth_utils.Utils.cost_of_expr Greysynth_utils.Utils.PaperAst left)
+             (Greysynth_utils.Utils.cost_of_expr Greysynth_utils.Utils.PaperAst right))
+    |> function candidate :: _ -> Some candidate | [] -> None
+  in
+  match expression with
+  | E.Unary { f = E.Uext _; _ } -> fold ()
+  | E.Unary { f = E.Sext _; _ } -> fold ()
+  | E.Unary { f = E.Restrict _; _ } -> fold ()
+  | E.Unary { f = E.Not; _ } -> None
+  | E.Unary { f = E.Minus; _ } -> None
+  | E.Cst _ | E.Var _ | E.Binary _ | E.Ite _ | E.Load _ -> None
+
 let build_balanced op = function
   | [] -> invalid_arg "normalization: empty associative expression"
   | terms ->

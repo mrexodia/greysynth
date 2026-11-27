@@ -131,11 +131,11 @@ let semilinear_mba_candidate cost expression =
       in
       let constants = take 32 (base @ extras) in
       let variables =
-        Sample_evaluator.variables_of_expr expression
-        |> List.map (fun (name, size) -> E.var name size name)
+        Nodes.fold (fun atom () result -> atom :: result) opaque []
+        |> List.sort E.compare
       in
-      if variables = [] || List.length variables > 5
-         || List.exists (fun variable -> E.sizeof variable <> width) variables
+      if variables = [] || List.length variables > 4
+         || List.exists (fun atom -> E.sizeof atom <> width) variables
       then None
       else
         let variants variable =
@@ -147,7 +147,9 @@ let semilinear_mba_candidate cost expression =
                 [ E.binary E.And variable constant;
                   E.binary E.Or variable constant;
                   E.binary E.Xor variable constant;
-                  E.binary E.Plus variable constant ])
+                  E.binary E.Plus variable constant;
+                  E.binary E.Minus constant variable;
+                  E.binary E.Plus (E.unary E.Not variable) constant ])
               constants
           in
           let nested, scaled =
@@ -316,6 +318,38 @@ let abstract_slice_candidate expression =
     when E.sizeof base >= hi + 1 ->
       Some (if E.sizeof base = hi + 1 then base else E.restrict ~lo:0 ~hi base)
   | _ -> None
+
+let bit0_parity_candidate cost expression =
+  let shifted = function
+    | E.Binary { f = (E.Plus | E.Minus); x = base; y = E.Cst offset; _ } ->
+        Some (base, Z.testbit (Bitvector.value_of offset) 0)
+    | E.Binary { f = E.Plus; x = E.Cst offset; y = base; _ } ->
+        Some (base, Z.testbit (Bitvector.value_of offset) 0)
+    | _ -> None
+  in
+  let parity_base base odd = if odd then E.unary E.Not base else base in
+  let candidate =
+    match expression with
+    | E.Binary { f = E.Or; x = mask; y = shifted_term; _ }
+      when is_number (Z.pred (Z.pred (Z.shift_left Z.one (E.sizeof expression)))) mask ->
+        Option.map (fun (base, odd) -> E.binary E.Or mask (parity_base base odd))
+          (shifted shifted_term)
+    | E.Binary { f = E.And; x = one; y = shifted_term; _ }
+      when is_number Z.one one ->
+        Option.map (fun (base, odd) -> E.binary E.And one (parity_base base odd))
+          (shifted shifted_term)
+    | E.Unary { f = E.Uext amount;
+                x = E.Unary { f = E.Restrict { lo = 0; hi = 0 };
+                      x = shifted_term; _ }; _ } ->
+        Option.map
+          (fun (base, odd) ->
+            E.unary (E.Uext amount)
+              (E.restrict ~lo:0 ~hi:0 (parity_base base odd)))
+          (shifted shifted_term)
+    | _ -> None
+  in
+  Option.bind candidate (fun candidate ->
+      if cost candidate < cost expression then Some candidate else None)
 
 let power2_pullout_candidate cost expression =
   let width = E.sizeof expression in
@@ -590,18 +624,60 @@ let known_bits_candidate cost expression =
     match Known_bits.is_constant known with
     | Some value when cost expression > 1 -> Some (constant known.width value)
     | _ ->
+        let bit0 value =
+          let known = Known_bits.analyze value in
+          if Z.testbit known.zeros 0 then Some false
+          else if Z.testbit known.ones 0 then Some true else None
+        in
+        let is_minus_two value bits =
+          Z.equal (Bitvector.value_of bits)
+            (Z.pred (Z.pred (Z.shift_left Z.one (E.sizeof value))))
+        in
+        let and_minus_two value bits =
+          if not (is_minus_two value bits) then None
+          else match bit0 value with
+            | Some false -> Some value
+            | Some true -> Some (E.binary E.Minus value (integer (E.sizeof value) 1))
+            | None -> None
+        and and_one value one =
+          if not (Z.equal (Bitvector.value_of one) Z.one) then None
+          else match bit0 value with
+            | Some false -> Some (zeros (E.sizeof value)) | _ -> None
+        and or_minus_two value bits =
+          if not (is_minus_two value bits) then None
+          else match bit0 value with Some false -> Some (E.constant bits) | _ -> None
+        and xor_one value one =
+          if not (Z.equal (Bitvector.value_of one) Z.one) then None
+          else match bit0 value with
+            | Some true -> Some (E.binary E.Minus value (integer (E.sizeof value) 1))
+            | Some false -> Some (E.binary E.Plus value (integer (E.sizeof value) 1))
+            | None -> None
+        in
         match expression with
         | E.Binary { f = E.And; x = value; y = E.Cst bits; _ }
         | E.Binary { f = E.And; x = E.Cst bits; y = value; _ } ->
-            let known = Known_bits.analyze value in
-            let removed = Z.logand (Z.pred (Z.shift_left Z.one known.width))
-                (Z.lognot (Bitvector.value_of bits)) in
-            if Z.equal (Z.logand removed known.zeros) removed then Some value else None
+            (match and_minus_two value bits with
+            | Some _ as result -> result
+            | None ->
+                (match and_one value bits with
+                | Some _ as result -> result
+                | None ->
+                let known = Known_bits.analyze value in
+                let removed = Z.logand (Z.pred (Z.shift_left Z.one known.width))
+                    (Z.lognot (Bitvector.value_of bits)) in
+                if Z.equal (Z.logand removed known.zeros) removed
+                then Some value else None))
         | E.Binary { f = E.Or; x = value; y = E.Cst bits; _ }
         | E.Binary { f = E.Or; x = E.Cst bits; y = value; _ } ->
-            let known = Known_bits.analyze value in
-            let bits = Bitvector.value_of bits in
-            if Z.equal (Z.logand bits known.ones) bits then Some value else None
+            (match or_minus_two value bits with
+            | Some _ as result -> result
+            | None ->
+                let known = Known_bits.analyze value in
+                let bits_value = Bitvector.value_of bits in
+                if Z.equal (Z.logand bits_value known.ones) bits_value
+                then Some value else None)
+        | E.Binary { f = E.Xor; x = value; y = E.Cst one; _ }
+        | E.Binary { f = E.Xor; x = E.Cst one; y = value; _ } -> xor_one value one
         | E.Binary { f = E.And; x; y; _ } ->
             if Known_bits.disjoint (Known_bits.analyze x) (Known_bits.analyze y)
             then Some (zeros (E.sizeof expression)) else None

@@ -230,11 +230,13 @@ let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
           Hashtbl.replace compositional_budgets compositional_key budget;
           false)
 
-let accepts ?timeout ~pass original candidate =
+let accepts ?timeout ?(allow_equal_cost = false) ~pass original candidate =
   if Sexpr.Expr.sizeof original <> Sexpr.Expr.sizeof candidate then (
     last_rejection := "width_mismatch";
     false)
-  else if size_of_expr candidate >= size_of_expr original then (
+  else if size_of_expr candidate > size_of_expr original
+          || (not allow_equal_cost
+              && size_of_expr candidate = size_of_expr original) then (
     last_rejection := "not_smaller";
     false)
   else (
