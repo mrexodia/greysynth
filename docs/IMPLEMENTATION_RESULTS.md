@@ -1669,3 +1669,41 @@ rows. Regression smoke has one parallel net-neutral row,
 `oses__line_0000240`; its one-worker isolated replay establishes a strict
 `564,134 -> 4,985` reduction, identifying parallel solver contention rather
 than a proof failure.
+
+## Round-43 balanced DAG budget and authoritative Tigress L5–L8 sweep
+
+Round 43 rebalances only the internal DAG solver allocation. The opaque SMT
+fallback inside `dag_bottom_up_simplify` uses 0.25 seconds and each bounded DAG
+pass has a 1.0-second cumulative SMT budget. Root opaque probing remains at
+0.80 seconds, cleanup remains at 0.70 seconds, and only successful opaque
+candidate generation consumes the 16-candidate quota. Proof replay and
+`src/proof/rewrite_proof.ml` are unchanged. The complete warning-clean
+`make test` gate passes.
+
+Regression smoke (`/tmp/r43-smoke/out.jsonl`) establishes all 62 rows directly
+under eight workers with 62 strict decreases, 54 exact-or-better outputs, zero
+refutations, and quality `0.7968x`. In particular, the prior parallel
+`oses__line_0000240` stall is eliminated.
+
+The authoritative full Tigress sweep ran each level separately with eight
+workers and independent `mba_equiv` plus `mba_proof` replay:
+
+```text
+/tmp/r43-l5/out.jsonl
+/tmp/r43-l6/out.jsonl
+/tmp/r43-l7/out.jsonl
+/tmp/r43-l8/out.jsonl
+```
+
+| Level | Established | Exact <= GT | Quality before -> after | Better / equal / worse | Strict decreases |
+|---|---:|---:|---:|---:|---:|
+| Tigress L5 | 450/450 | 199 | 25.4124x -> 3.5011x | 372 / 16 / 62 | 447 |
+| Tigress L6 | 468/468 | 196 | 43.9750x -> 4.8564x | 417 / 12 / 39 | 465 |
+| Tigress L7 | 475/475 | 174 | 83.2516x -> 7.5831x | 410 / 15 / 50 | 472 |
+| Tigress L8 | 501/501 | 166* | 226.0878x -> 12.0906x | 431 / 8 / 59 | 499 |
+| **Combined** | **1,894/1,894** | **735*** | **69.7301x -> 6.3890x** | **1,630 / 51 / 210** | **1,883** |
+
+`*` Three L8 rows have no usable GT, so exact counts cover 498/501 L8 rows and
+1,891/1,894 combined rows. All 1,894 rows establish in the authoritative
+parallel runs with zero refutations, unknowns, errors, or audit timeout
+verdicts. Consequently no isolated contention-timeout replay was required.

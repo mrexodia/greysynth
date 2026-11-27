@@ -493,7 +493,7 @@ let run_preprocessing gt input =
       and before_dag = dag_size_of_expr !best in
       best :=
         Normalization.dag_bottom_up_simplify ~minimal:(before_size > 32_768)
-          ~zero_smt:false ~smt_budget:1.5 ~deadline:local_deadline !best;
+          ~zero_smt:false ~smt_budget:1.0 ~deadline:local_deadline !best;
       let after_size = size_of_expr !best and after_dag = dag_size_of_expr !best in
       improving := after_size < before_size || after_dag < before_dag
     done);

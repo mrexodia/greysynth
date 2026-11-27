@@ -6,7 +6,7 @@ open Config
 include Norm_probes
 
 let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
-    ?(smt_budget = 1.5) ?deadline expression =
+    ?(smt_budget = 1.0) ?deadline expression =
   let memo = Nodes.create 256 in
   let constants = Sample_evaluator.make 1 in
   let cost = Greysynth_utils.Utils.size_of_expr in
@@ -194,7 +194,7 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
                    ~pass:"dag-semantic-probe-semilinear" ~equalities:[]
                    ~semilinear_mba_equalities:[ !result, candidate ]
                    !result candidate)
-          || try_smt (fun () -> Rewrite.accepts ~timeout:0.60
+          || try_smt (fun () -> Rewrite.accepts ~timeout:0.25
                ~pass:"dag-semantic-probe" !result candidate)
         in
         if not zero_smt && !smt_spent < smt_budget
