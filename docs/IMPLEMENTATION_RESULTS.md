@@ -1796,3 +1796,45 @@ errors, or audit timeout verdicts. The former QSynth blocker
 `qsynth_ea__line_0000026` now establishes compositionally and strictly reduces
 `362 -> 54`. Core `target_547`, previously a 3,900-node stall in the unpruned
 frontier, reduces to 61 nodes in the refreshed hard set.
+
+## Leeky 64-bit Zero-Tuning Generalization Baseline (Post-R44)
+
+The unchanged post-Round-44 build was audited on all 1,004 disjoint
+`datasets/leeky/adapted/core_64/` cases with the R18 configuration, eight
+workers, `mba_equiv`, and independent `mba_proof` replay:
+
+```text
+/tmp/leeky-64-baseline/out.jsonl
+```
+
+All 1,004 cases establish (`366` direct proofs and `638` compositional proofs)
+with zero refutations, unknowns, timeouts, or errors. No isolated contention
+replay was required. Following the Leeky scoring rules, the 992 transformed
+cases are scored separately from the 12 unchanged controls. Of the transformed
+cases, 963 strictly decrease and 512 both strictly decrease and reach or beat
+the reference size: a `512/992 = 51.61%` reference-hit rate. The transformed
+geometric quality ratio is `2.3375x` versus reference (`2.3139x` when controls
+are included). All 12 controls remain cost-unchanged and no larger than their
+references (`12/12` for both checks).
+
+| Panel | Transformed established | Reference hits | Strict reductions | Transformed quality | Controls established | Controls <= ref / unchanged |
+|---|---:|---:|---:|---:|---:|---:|
+| mba-balanced-v1 | 112/112 | 50 | 111 | 2.2599x | 8/8 | 8 / 8 |
+| mba-capabilities-v1 | 71/71 | 33 | 71 | 3.3337x | 0 | — |
+| mba-capabilities-v2 | 44/44 | 34 | 43 | 1.1037x | 0 | — |
+| mba-composition-v1 | 54/54 | 47 | 52 | 1.1365x | 0 | — |
+| mba-extra-floor-v1 | 54/54 | 19 | 54 | 1.4569x | 0 | — |
+| mba-frontier64-v1 | 96/96 | 3 | 89 | 22.7000x | 0 | — |
+| mba-gaps-v1 | 72/72 | 55 | 72 | 1.1124x | 4/4 | 4 / 4 |
+| mba-interactions-v1 | 33/33 | 23 | 33 | 0.9364x | 0 | — |
+| mba-ladders-v1 | 72/72 | 39 | 72 | 1.2743x | 0 | — |
+| mba-long-frontier-v1 | 72/72 | 44 | 70 | 1.6318x | 0 | — |
+| mba-majority-v1 | 54/54 | 34 | 54 | 1.3835x | 0 | — |
+| mba-projection-v1 | 54/54 | 51 | 54 | 1.1375x | 0 | — |
+| mba-proof-context-v1 | 36/36 | 12 | 36 | 1.5744x | 0 | — |
+| mba-stress64-v1 | 96/96 | 0 | 80 | 11.2614x | 0 | — |
+| mba-tight-v1 | 72/72 | 68 | 72 | 1.0377x | 0 | — |
+| **Overall** | **992/992** | **512** | **963** | **2.3375x** | **12/12** | **12 / 12** |
+
+This is a zero-tuning baseline: no implementation, configuration, learned-rule,
+or dataset-specific changes were made before or during the audit.
