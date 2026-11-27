@@ -62,15 +62,9 @@
  (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
             greysynth.string_to_sexpr binsec.smt binsec.sse.term yojson unix)
  (flags (:standard -open Binsec -open Libsse -open Libterm))
- (deps
-  ../datasets/hard_cases/all_failing/permutation64/permutation64__line_0000003.json
-  ../datasets/hard_cases/all_failing/permutation64/permutation64__line_0000006.json
-  ../datasets/hard_cases/all_failing/permutation64/permutation64__line_0000010.json)
+ (deps ../datasets/cobra/permutation64.txt)
  (action
-  (run %{test}
-   %{dep:../datasets/hard_cases/all_failing/permutation64/permutation64__line_0000003.json}
-   %{dep:../datasets/hard_cases/all_failing/permutation64/permutation64__line_0000006.json}
-   %{dep:../datasets/hard_cases/all_failing/permutation64/permutation64__line_0000010.json})))
+  (run %{test} %{dep:../datasets/cobra/permutation64.txt})))
 
 (test
  (name round25_test)
@@ -78,10 +72,10 @@
  (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
             greysynth.string_to_sexpr binsec.smt binsec.sse.term yojson unix)
  (flags (:standard -open Binsec -open Libsse -open Libterm))
- (deps ../datasets/hard_cases/all_failing/omvll/omvll__target_2558.json)
+ (deps ../datasets/greysynth/omvll/mba_info/target_2558.json)
  (action
   (run %{test}
-   %{dep:../datasets/hard_cases/all_failing/omvll/omvll__target_2558.json})))
+   %{dep:../datasets/greysynth/omvll/mba_info/target_2558.json})))
 
 (test
  (name round26_test)

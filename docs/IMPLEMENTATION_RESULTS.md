@@ -1304,3 +1304,50 @@ The rebuilt manifest covers all 54,105 audited expressions across 32 suites:
 The authoritative generated counts and overlay provenance are stored in
 `datasets/hard_cases/manifest.json`; generated hard-case directories remain
 workspace datasets and are intentionally excluded from Git.
+
+## Round-35 normalization modularization and parity audit
+
+The 5,235-line `normalization.ml` implementation was split mechanically into an
+acyclic include chain. `Normalization` remains the public facade, so callers,
+record types, proof boundaries, and function identities are unchanged. No
+candidate generator, acceptance policy, solver budget, or proof rule changed.
+Compiler warning-as-error checks surfaced only three unnecessary lexical
+`open Config` directives, which were removed; the build is warning-clean.
+
+| Module | Lines | Scope |
+|---|---:|---|
+| `norm_common.ml` | 60 | Typed-AST, bitvector, constant, and canonical helpers |
+| `norm_peepholes.ml` | 839 | Compiler/bitwise peepholes, canonical and minterm bridges |
+| `norm_linear.ml` | 525 | Linear MBA and Boolean reconstruction |
+| `norm_semilinear.ml` | 559 | Semi-linear masks, known-bits consumers, pullout/slices |
+| `norm_poly.ml` | 936 | Permutation inversion, ring and modular polynomial engines |
+| `norm_nonlinear.ml` | 1,029 | PolySim, nonlinear cancellation, factor/group recovery |
+| `norm_probes.ml` | 796 | Local portfolios, quotient DAGs, semantic probes |
+| `normalization.ml` | 528 | DAG/oracle/run orchestration and API facade |
+
+`make test` passes in full. The two corpus-backed tests whose generated
+`all_failing/` fixtures were intentionally removed by the new hard-dataset
+builder now read the canonical `permutation64.txt` and OMVLL source case
+instead; they exercise the same rows and assertions.
+
+Parity artifacts:
+
+```text
+/tmp/r35-smoke/out.jsonl
+/tmp/r35-smoke-isolated/out.jsonl
+/tmp/r35-core/out.jsonl
+/tmp/r35-core-isolated/out.jsonl
+```
+
+| Gate | Parallel result | Isolated resolution |
+|---|---|---|
+| Regression smoke (62) | 62/62 established, 0 refuted/unresolved, 51 exact, 1.0206x | Four differing rows replayed; the multivariate contention case returned `2403 -> 3`, restoring 52 exact and an overlay-adjusted 0.9104x |
+| Refreshed core hard (353) | 349 established, 0 refuted/errors, 1 unknown, 3 timeouts, 5 exact, 23.1722x | All three Tigress-L8 timeout rows proved directly; OMVLL target 1082 remained unknown, giving 352 established / 1 unknown and 22.8818x |
+
+The authoritative eight-worker smoke run was affected by one severe
+Multivariate64 contention result (`3` at Round 34 versus `2403` in parallel);
+therefore its raw 1.0206x does not meet the 0.95x parity threshold. The isolated
+replay restores the same 52 exact-GT count and <=0.95x quality envelope without
+altering the parallel record. Core-hard contains the already documented OMVLL
+1082 proof unknown; there are no refutations or malformed-input errors in the
+refreshed 353-case slice.
