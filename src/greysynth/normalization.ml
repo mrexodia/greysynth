@@ -61,7 +61,8 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
   let cost = Greysynth_utils.Utils.size_of_expr in
   let expression_cost = cost expression in
   let soft_stopped = ref false and smt_spent = ref 0.0
-  and opaque_probe_calls = ref 0 and lowk_calls = ref 0 in
+  and opaque_probe_calls = ref 0 and lowk_calls = ref 0
+  and bitwise_ac_calls = ref 0 in
   let probe_shell_memo = Nodes.create 128 in
   let rec contains_probe_shell node =
     match Nodes.find_opt probe_shell_memo node with
@@ -151,23 +152,31 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
     | None ->
         ignore (should_stop ());
         let semantic_child child =
-          if minimal || !soft_stopped then child else
-          match is_semantically_bitwise cost child with
-          | Some candidate
-            when Rewrite.accepts_compositional ~pass:"dag-semantic-bitwise"
-                   ~equalities:[] ~linear_mba_equalities:[ child, candidate ]
-                   child candidate -> candidate
-          | _ -> child
+          if minimal || should_stop () then child
+          else
+            try
+              match is_semantically_bitwise cost child with
+              | Some candidate
+                when Rewrite.accepts_compositional ~pass:"dag-semantic-bitwise"
+                       ~equalities:[] ~linear_mba_equalities:[ child, candidate ]
+                       child candidate -> candidate
+              | _ -> child
+            with Timeout_exception -> soft_stopped := true; child
         in
         let rebuilt =
-          match node with
-          | E.Unary { f = E.Not; x; _ } -> E.unary E.Not (semantic_child (visit x))
-          | E.Unary { f; x; _ } -> E.unary f (visit x)
-          | E.Binary { f = (E.And | E.Or | E.Xor as f); x; y; _ } ->
-              E.binary f (semantic_child (visit x)) (semantic_child (visit y))
-          | E.Binary { f; x; y; _ } -> E.binary f (visit x) (visit y)
-          | E.Ite { c; t; e; _ } -> E.ite (visit c) (visit t) (visit e)
-          | _ -> node
+          if should_stop () then node
+          else
+            try
+              match node with
+              | E.Unary { f = E.Not; x; _ } ->
+                  E.unary E.Not (semantic_child (visit x))
+              | E.Unary { f; x; _ } -> E.unary f (visit x)
+              | E.Binary { f = (E.And | E.Or | E.Xor as f); x; y; _ } ->
+                  E.binary f (semantic_child (visit x)) (semantic_child (visit y))
+              | E.Binary { f; x; y; _ } -> E.binary f (visit x) (visit y)
+              | E.Ite { c; t; e; _ } -> E.ite (visit c) (visit t) (visit e)
+              | _ -> node
+            with Timeout_exception -> soft_stopped := true; node
         in
         let result = ref rebuilt in
         if not !soft_stopped then
@@ -403,15 +412,16 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
         | _ -> ());
         (match !result with
         | E.Binary { f = (E.Plus | E.Minus | E.Mul); _ }
-          when cost !result <= 256 && (not zero_smt || cost !result <= 128)
+          when cost !result <= 256 && !bitwise_ac_calls < 32
                && contains_probe_shell !result ->
             (match recursive_bitwise_ac_candidate !result with
-            | Some (candidate, linear_mba_equalities, ring_equalities)
-              when Rewrite.accepts_compositional ~allow_equal_cost:true
+            | Some (candidate, linear_mba_equalities, ring_equalities) ->
+                incr bitwise_ac_calls;
+                if Rewrite.accepts_compositional ~allow_equal_cost:true
                      ~pass:"dag-bitwise-ac" ~equalities:[]
-                     ~linear_mba_equalities ~ring_equalities !result candidate ->
-                result := candidate
-            | _ -> ())
+                     ~linear_mba_equalities ~ring_equalities !result candidate
+                then result := candidate
+            | None -> ())
         | _ -> ());
         (match ring_polynomial_candidate cost !result with
         | Some candidate

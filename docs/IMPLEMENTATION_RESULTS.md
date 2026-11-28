@@ -2791,6 +2791,31 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-58 timeout-safe partial work and bounded bitwise AC
+
+Round 58 seals timeout unwinding in preprocessing and DAG traversal. Any
+`Timeout_exception` now returns the best independently proved root accumulated
+so far. Child recursion and semantic-child processing soft-stop locally rather
+than escaping the DAG pass. Bitwise AC normalization is restored through cost
+256 but capped at 32 attempts per pass. `test/round58_test.ml` and the complete
+warning-clean `make test` gate pass.
+
+Final artifacts are `/tmp/r58-smoke/out.jsonl`, `/tmp/r58-leeky-dev64/out.jsonl`,
+`/tmp/r58-l5/out.jsonl`, and `/tmp/r58-core/out.jsonl`. All 1,444 rows establish
+with zero refutations, unknowns, errors, or audit timeouts.
+
+| Gate | Established | Exact <= GT | Quality before -> after | Strict decreases |
+|---|---:|---:|---:|---:|
+| Leeky dev (all rows) | 884/884 | 531* | 8.4523x -> 1.7831x | 877/884 |
+| Shrunk Tigress L5 | 170/170 | 3 | 12.5127x -> 11.2522x | 170/170 |
+| Refreshed core hard | 328/328 | 21 | 7.1129x -> 4.7234x | 328/328 |
+| Regression smoke | 62/62 | 56** | 0.7846x -> 0.8018x | 62/62 |
+
+`*` Leeky count includes four controls. `**` Smoke exact counts cover 58 usable
+GT rows. Round 58 sets new dev quality/exact records and eliminates every
+net-neutral row in both L5 and core hard. Smoke retains 56/58 exact and all
+strict decreases, narrowly missing the requested quality target.
+
 ## Round-57 zero-SMT GF2 certification and dead-branch pruning
 
 Round 57 adds the masked-GF2 equality fast path to `semilinear_mba_mod2w`,

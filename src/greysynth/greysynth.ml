@@ -229,6 +229,7 @@ let restore_preprocessing_log snapshot =
 
 let run_preprocessing gt input =
   let best = ref input in
+  try
   let oes_done = ref false and root_decidable_fast = ref false in
   let normalization_deadline () =
     if !g_total_timeout <= 0. || not (!c_oes || !c_chs) then None
@@ -740,6 +741,9 @@ let run_preprocessing gt input =
     best := fast_simplify_with_logs !best;
     check_equiv gt ~tag:"fast_simplify" log_fast_simplify_is_equiv !best);
   !best)
+  with Timeout_exception ->
+    g_has_timedout := true;
+    !best
 
 let run_preprocessing_portfolio gt input =
   if not !c_preprocessing_portfolio then run_preprocessing gt input
