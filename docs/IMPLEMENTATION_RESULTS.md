@@ -2676,3 +2676,75 @@ strict coverage and all controls. Compared with the Milestone-50 check
 (`51/112`, `1.8835x`, one timeout), it gains one hit, improves quality, and
 establishes the previously timed-out aggregate row. Per the anti-overfitting
 rule, no individual held-out case was examined.
+
+## Round-54 masked GF(2), repeated-dead abstraction, and general factoring
+
+Round 54 adds a DAG-memoized masked-XOR normalizer for constants, NOT, XOR,
+constant masks, constant ORs, and provably disjoint bitwise terms. It maintains
+an exact `constant XOR (atom & mask)` representation with at most 48 opaque
+atoms and certifies candidates through the semi-linear kernel or a bounded
+0.50-second SMT fallback. The pass runs both at the root and inside DAG
+normalization.
+
+`abstract_pair` now soundly abstracts a left-only compound node when it has at
+least two parent edges and contains no node occurring on the right. Positive and
+negative Bitwuzla cross-tests cover dead nonlinear cancellation and unequal-mask
+counterexamples. Concrete solving remains the fail-closed fallback.
+
+All non-shared bitwise roots above cost 512 now receive a 1.2-second zero-SMT
+prepass; shared roots retain 1.5 seconds. Linear reconstruction additionally
+offers `1+B -> -(~B)`, common-factor pullout accepts any strictly profitable
+shared factor, and ring-NOT expansion permits up to 1,024 monomials.
+
+`test/round54_test.ml` covers the capabilities, frontier, stress, De Morgan, and
+factor-pullout diagnostics with independent replay. Capabilities reduces
+`12,344 -> 431`, frontier `2,119 -> ~615`, stress remains net-neutral at 3,066,
+MBA Flatten line 46 reaches exact size 5, and C-MBA target 1565 reaches exact
+size 11. The complete warning-clean `make test` gate passes. The held-out
+balanced set was not run.
+
+Final artifacts:
+
+```text
+/tmp/r54-smoke/out.jsonl
+/tmp/r54-leeky-dev64/out.jsonl
+/tmp/r54-l5/out.jsonl
+/tmp/r54-core/out.jsonl
+```
+
+All 1,444 rows establish with zero refutations, unknowns, errors, or audit
+timeout verdicts. Leeky dev establishes all 884 rows; among 880 transformed
+rows, 849 strictly decrease and 516 reach or beat reference after a strict
+reduction. Aggregate quality improves from `2.3475x` to `1.9197x`; all four
+controls remain unchanged.
+
+| Leeky dev panel | Baseline hits -> R54 hits | Baseline quality -> R54 quality | R54 strict reductions |
+|---|---:|---:|---:|
+| mba-capabilities-v1 | 33 -> 30 | 3.3337x -> 2.2104x | 70/71 |
+| mba-capabilities-v2 | 34 -> 33 | 1.1037x -> 1.1695x | 43/44 |
+| mba-composition-v1 | 47 -> 50 | 1.1365x -> 1.1214x | 52/54 |
+| mba-extra-floor-v1 | 19 -> 27 | 1.4569x -> 1.2465x | 54/54 |
+| mba-frontier64-v1 | 3 -> 1 | 22.7000x -> 19.6621x | 77/96 |
+| mba-gaps-v1 | 55 -> 60 | 1.1124x -> 1.0299x | 72/72 |
+| mba-interactions-v1 | 23 -> 28 | 0.9364x -> 0.9139x | 33/33 |
+| mba-ladders-v1 | 39 -> 50 | 1.2743x -> 1.1021x | 72/72 |
+| mba-long-frontier-v1 | 44 -> 49 | 1.6318x -> 1.4432x | 72/72 |
+| mba-majority-v1 | 34 -> 36 | 1.3835x -> 1.1241x | 54/54 |
+| mba-projection-v1 | 51 -> 52 | 1.1375x -> 1.0992x | 54/54 |
+| mba-proof-context-v1 | 12 -> 24 | 1.5744x -> 1.0271x | 36/36 |
+| mba-stress64-v1 | 0 -> 9 | 11.2614x -> 5.2682x | 88/96 |
+| mba-tight-v1 | 68 -> 67 | 1.0377x -> 1.0311x | 72/72 |
+| **Overall transformed** | **462 -> 516** | **2.3475x -> 1.9197x** | **849/880** |
+
+| Regression gate | Established | Exact <= GT | Quality before -> after | Better / equal / worse | Strict decreases |
+|---|---:|---:|---:|---:|---:|
+| Shrunk Tigress L5 | 170/170 | 3 | 12.5127x -> 11.5816x | 43 / 111 / 16 | 169 |
+| Refreshed core hard | 328/328 | 22 | 7.1129x -> 5.5708x | 78 / 222 / 28 | 314 |
+| Regression smoke | 62/62 | 54* | 0.7846x -> 0.9735x | 7 / 49 / 6 | 62 |
+
+`*` Smoke exact counts cover 58 rows with usable GT. Round 54 improves dev
+aggregate quality and several panels, but misses the requested capabilities,
+frontier, stress, L5/core, and smoke quality targets. The universal prepass
+strictly reduces more dev cases but changes several smoke outputs to larger
+verified local minima; stress diagnostic `7a3c5b...` remains the clearest
+partial-work blocker.

@@ -790,7 +790,7 @@ let common_factor_pullout_candidate cost expression =
                   let shared, left_remaining = intersection left_factors right_factors in
                   let _, right_remaining = intersection right_factors left_factors in
                   let shared_expr = build_product width shared in
-                  if shared = [] || cost shared_expr < 3 then pair (offset + 1) rest
+                  if shared = [] || cost shared_expr < 1 then pair (offset + 1) rest
                   else
                     let left_body = build_product width left_remaining
                     and right_body = build_product width right_remaining in

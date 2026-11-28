@@ -279,7 +279,23 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
     let target = table source in
     let results = ref [] in
     let offer candidate =
-      if cost candidate < cost expression then results := candidate :: !results
+      if cost candidate < cost expression then results := candidate :: !results;
+      let companion =
+        match candidate with
+        | E.Binary { f = E.Plus; x = E.Cst value; y = body; _ }
+          when Z.equal (Bitvector.value_of value) Z.one ->
+            Some (E.unary E.Minus (demorgan_not body))
+        | E.Binary { f = E.Plus; x = body; y = E.Cst value; _ }
+          when Z.equal (Bitvector.value_of value) Z.one ->
+            Some (E.unary E.Minus (demorgan_not body))
+        | E.Binary { f = E.Minus; x = E.Cst value; y = body; _ }
+          when Z.equal (Bitvector.value_of value) mask ->
+            Some (demorgan_not body)
+        | _ -> None
+      in
+      Option.iter (fun value ->
+          if cost value < cost expression then results := value :: !results)
+        companion
     in
     let scale coefficient value =
       if Z.equal coefficient Z.zero then zeros width

@@ -493,7 +493,7 @@ let ring_not_bridge_candidate cost expression =
     let substituted = rewrite expression in
     if !linear_mba_equalities = [] then None
     else
-      Option.bind (ring_polynomial_candidate cost substituted) (fun candidate ->
+      Option.bind (ring_polynomial_candidate ~max_monomials:1024 cost substituted) (fun candidate ->
           if cost candidate < cost expression then
             Some (candidate, List.rev !linear_mba_equalities,
                   [ substituted, candidate ])

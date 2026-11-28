@@ -428,6 +428,23 @@ let () =
     let verdict, method_ = P.prove_equality ~timeout:2. lhs rhs in
     require (verdict = U.Yes && method_ = "abstract")
       "small shared factors and nontrivial constants were not abstracted";
+    let dead_atom = E.binary E.Mul (E.binary E.Plus x (c 8 3))
+        (E.binary E.Xor y (c 8 5)) in
+    let dead_masked = E.binary E.And dead_atom (c 8 0x55) in
+    let dead_left = E.binary E.Xor
+        (E.binary E.Xor dead_masked dead_masked) z in
+    let started = Unix.gettimeofday () in
+    let verdict, method_ = P.prove_equality ~timeout:2. dead_left z in
+    require (verdict = U.Yes && method_ = "abstract"
+             && Unix.gettimeofday () -. started < 0.02)
+      "repeated dead nonlinear subterm was not abstracted quickly";
+    let dead_false = E.binary E.Xor
+        (E.binary E.Xor dead_masked
+           (E.binary E.And dead_atom (c 8 0x0f))) z in
+    let verdict, _ = P.prove_equality ~timeout:2. dead_false z in
+    let concrete, _, _ = U.are_equivalent dead_false z (Some 2) in
+    require (verdict = U.No && concrete = U.No)
+      "false repeated-dead abstraction was not rejected by proof and Bitwuzla";
     (* A stronger abstraction can be SAT although the original is valid. *)
     let x4 = var "x4" 4 in
     let a = E.binary E.Plus x4 (c 4 1) in

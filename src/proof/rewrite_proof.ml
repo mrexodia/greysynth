@@ -253,6 +253,26 @@ let abstract_pair original candidate =
   in
   mark occurs_left left;
   mark occurs_right right;
+  let refcount_left = Array.make g.count 0 and counted = Array.make g.count false in
+  let rec count_edges id =
+    if not counted.(id) then (
+      counted.(id) <- true;
+      List.iter (fun child ->
+          refcount_left.(child) <- refcount_left.(child) + 1;
+          count_edges child)
+        (children (node g id).shape))
+  in
+  count_edges left;
+  let contains_right_memo = Array.make g.count None in
+  let rec contains_right id =
+    match contains_right_memo.(id) with
+    | Some result -> result
+    | None ->
+        let result = occurs_right.(id)
+          || List.exists contains_right (children (node g id).shape) in
+        contains_right_memo.(id) <- Some result;
+        result
+  in
   let names = Hashtbl.create 16 in
   for id = 0 to g.count - 1 do
     match (node g id).shape with
@@ -281,8 +301,15 @@ let abstract_pair original candidate =
                      || Bitvector.is_fill value)
             | _ -> false
           in
-          if occurs_left.(id) && occurs_right.(id)
-             && (current.cost >= 2 || nontrivial_constant) then (
+          let shared =
+            occurs_left.(id) && occurs_right.(id)
+            && (current.cost >= 2 || nontrivial_constant)
+          and repeated_dead =
+            occurs_left.(id) && not (contains_right id)
+            && refcount_left.(id) >= 2 && current.cost >= 2
+            && (match current.shape with Variable _ | Value _ -> false | _ -> true)
+          in
+          if shared || repeated_dead then (
             match Hashtbl.find_opt replacements id with
             | Some expression -> expression
             | None ->

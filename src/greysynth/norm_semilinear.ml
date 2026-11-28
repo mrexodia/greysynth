@@ -25,6 +25,91 @@ let has_nonuniform_bitwise_constant expression =
   inspect false expression;
   !found
 
+let gf2_masked_xor_candidate cost expression =
+  let width = E.sizeof expression in
+  if width > 128 || cost expression < 11 || cost expression > 32_768
+     || Greysynth_utils.Utils.dag_size_bounded ~limit:4096 expression > 4096
+  then None
+  else
+    let mask = Z.pred (Z.shift_left Z.one width) in
+    let memo = Nodes.create 256 and simplified = ref false in
+    let merge left right =
+      List.fold_left
+        (fun result (atom, bits) ->
+          let rec update prefix = function
+            | [] -> List.rev ((atom, bits) :: prefix)
+            | (old, value) :: rest when E.is_equal atom old ->
+                let value = Z.logxor value bits in
+                List.rev_append prefix
+                  (if Z.equal value Z.zero then rest else (old, value) :: rest)
+            | item :: rest -> update (item :: prefix) rest
+          in update [] result)
+        left right
+    in
+    let active (constant, terms) =
+      List.fold_left (fun value (_, bits) -> Z.logor value bits) constant terms
+    in
+    let rec parse node =
+      match Nodes.find_opt memo node with
+      | Some result -> result
+      | None ->
+          let result =
+            match node with
+            | E.Cst value -> Bitvector.value_of value, []
+            | E.Unary { f = E.Not; x; _ } ->
+                let constant, terms = parse x in
+                simplified := true; Z.logxor constant mask, terms
+            | E.Binary { f = E.Xor; x; y; _ } ->
+                let cx, tx = parse x and cy, ty = parse y in
+                simplified := true; Z.logxor cx cy, merge tx ty
+            | E.Binary { f = E.And; x; y = E.Cst bits; _ }
+            | E.Binary { f = E.And; x = E.Cst bits; y = x; _ } ->
+                let bits = Bitvector.value_of bits in
+                let constant, terms = parse x in
+                simplified := true;
+                Z.logand constant bits,
+                List.filter_map (fun (atom, value) ->
+                    let value = Z.logand value bits in
+                    if Z.equal value Z.zero then None else Some (atom, value)) terms
+            | E.Binary { f = E.Or; x; y = E.Cst bits; _ }
+            | E.Binary { f = E.Or; x = E.Cst bits; y = x; _ } ->
+                let bits = Bitvector.value_of bits and constant, terms = parse x in
+                let keep = Z.logxor mask bits in
+                simplified := true;
+                Z.logor (Z.logand constant keep) bits,
+                List.filter_map (fun (atom, value) ->
+                    let value = Z.logand value keep in
+                    if Z.equal value Z.zero then None else Some (atom, value)) terms
+            | E.Binary { f = (E.Or | E.And as operation); x; y; _ } ->
+                let left = parse x and right = parse y in
+                if Z.equal (Z.logand (active left) (active right)) Z.zero then (
+                  simplified := true;
+                  if operation = E.And then Z.zero, []
+                  else let cx, tx = left and cy, ty = right in Z.logxor cx cy, merge tx ty)
+                else Z.zero, [ node, mask ]
+            | atom -> Z.zero, [ atom, mask ]
+          in
+          if List.length (snd result) > 48 then raise Too_complex;
+          Nodes.add memo node result; result
+    in
+    try
+      let constant_value, terms = parse expression in
+      if not !simplified then None
+      else
+        let values =
+          List.map (fun (atom, bits) ->
+              if Z.equal bits mask then atom
+              else E.binary E.And atom (constant width bits)) terms
+        in
+        let values = if Z.equal constant_value Z.zero then values
+          else constant width constant_value :: values in
+        let candidate = match values with
+          | [] -> zeros width | [ value ] -> value
+          | head :: tail -> List.fold_left (E.binary E.Xor) head tail
+        in
+        if cost candidate < cost expression then Some candidate else None
+    with Too_complex -> None
+
 let semilinear_mba_candidate_with_atoms ?(opaque_atoms = [])
     ?has_nonuniform cost expression =
   let width = E.sizeof expression in

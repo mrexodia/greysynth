@@ -518,6 +518,14 @@ let run_preprocessing gt input =
      && dag_size_bounded ~limit:4096 !best <= 4096
      && not !g_has_timedout
   then best := Normalization.dag_constant_cast_simplify !best;
+  (match Normalization.gf2_masked_xor_candidate size_of_expr !best with
+  | Some candidate
+    when Rewrite.accepts_compositional ~pass:"root-gf2-masked-xor"
+           ~equalities:[] ~semilinear_mba_equalities:[ !best, candidate ]
+           !best candidate
+         || Rewrite.accepts ~timeout:0.50 ~pass:"root-gf2-masked-xor-smt"
+              !best candidate -> best := candidate
+  | _ -> ());
   if size_of_expr !best > 512 && size_of_expr !best <= 16_384
      && not (Normalization.has_bitwise_operator !best)
      && not !g_has_timedout
@@ -577,7 +585,9 @@ let run_preprocessing gt input =
       not shared && size_of_expr !best <= 16_384 && contains_bitwise !best
       && has_product_of_linear_mbas 0 !best
     in
-    let local_budget = if shared then 1.5 else if exposed_product then 1.0 else 0.0 in
+    let local_budget =
+      if shared then 1.5 else if Normalization.has_bitwise_operator !best then 1.2
+      else if exposed_product then 1.0 else 0.0 in
     let local_deadline = Unix.gettimeofday () +. local_budget in
     let rounds = ref 0 and improving = ref true in
     while !rounds < 12 && !improving && not !g_has_timedout

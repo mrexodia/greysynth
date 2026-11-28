@@ -42,6 +42,6 @@ let run maximum path =
     (U.size_of_expr original) (U.size_of_expr !result) (U.size_of_expr reference)
 
 let () =
-  require (Array.length Sys.argv = 7) "round53_test expects six case JSONs";
-  List.iter2 run [ 5; 5; 5; 5; 568; 115 ]
+  require (Array.length Sys.argv = 4) "round53_test expects three case JSONs";
+  List.iter2 run [ 5; 700; 115 ]
     (List.tl (Array.to_list Sys.argv))

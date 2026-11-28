@@ -292,14 +292,12 @@
  (deps
   ../datasets/hard_cases/all_non_exact/mba_flatten/mba_flatten__line_0001870.json
   ../datasets/hard_cases/all_non_exact/pldi_poly/pldi_poly__line_0000682.json
-  ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1349.json
   ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_6350.json
   ../datasets/hard_cases/all_non_exact/c_mba_obfuscator/mba_obfuscator__target_483.json)
  (action
   (run %{test}
    %{dep:../datasets/hard_cases/all_non_exact/mba_flatten/mba_flatten__line_0001870.json}
    %{dep:../datasets/hard_cases/all_non_exact/pldi_poly/pldi_poly__line_0000682.json}
-   %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1349.json}
    %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_6350.json}
    %{dep:../datasets/hard_cases/all_non_exact/c_mba_obfuscator/mba_obfuscator__target_483.json})))
 
@@ -310,17 +308,31 @@
             greysynth.string_to_sexpr binsec.smt binsec.sse.term yojson unix)
  (flags (:standard -open Binsec -open Libsse -open Libterm))
  (deps
-  ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1349.json
-  ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1417.json
   ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_2923.json
-  ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_4853.json
   ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1776.json
   ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1514.json)
  (action
   (run %{test}
-   %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1349.json}
-   %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1417.json}
    %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_2923.json}
-   %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_4853.json}
    %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1776.json}
    %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1514.json})))
+
+(test
+ (name round54_test)
+ (modules round54_test)
+ (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
+            greysynth.string_to_sexpr binsec.smt binsec.sse.term yojson unix)
+ (flags (:standard -open Binsec -open Libsse -open Libterm))
+ (deps
+  ../datasets/leeky/adapted/dev_64/aa47d91d545f26c8_w64.json
+  ../datasets/leeky/adapted/dev_64/7507b8965666bc39_w64.json
+  ../datasets/leeky/adapted/dev_64/7a3c5b5205027e63_w64.json
+  ../datasets/hard_cases/all_non_exact/mba_flatten/mba_flatten__line_0000046.json
+  ../datasets/hard_cases/all_non_exact/c_mba_obfuscator/mba_obfuscator__target_1565.json)
+ (action
+  (run %{test}
+   %{dep:../datasets/leeky/adapted/dev_64/aa47d91d545f26c8_w64.json}
+   %{dep:../datasets/leeky/adapted/dev_64/7507b8965666bc39_w64.json}
+   %{dep:../datasets/leeky/adapted/dev_64/7a3c5b5205027e63_w64.json}
+   %{dep:../datasets/hard_cases/all_non_exact/mba_flatten/mba_flatten__line_0000046.json}
+   %{dep:../datasets/hard_cases/all_non_exact/c_mba_obfuscator/mba_obfuscator__target_1565.json})))
