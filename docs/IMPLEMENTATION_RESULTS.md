@@ -2401,3 +2401,51 @@ Tigress L5, and core hard. Smoke quality narrowly misses the `0.795x` target at
 core `<4.4x` target also remain unmet. The strongest result is the restoration
 of all 251 shrunk L5 rows to strict decreases with 56 new exact-or-better
 outputs, alongside 71 core exacts and the Tigress flagship reaching size 9.
+
+## Round-51B full corpus prune sweep #2
+
+The exact frozen `7d00751` build was audited over the remaining 1,983
+`all_non_exact` rows with the R18 configuration, eight workers, `mba_equiv`, and
+independent `mba_proof` replay. No source or dataset-generation changes were
+made, and `scripts/build_hard_dataset.py` was not run.
+
+Retained artifacts:
+
+```text
+/tmp/r51-l5/out.jsonl
+/tmp/r51b-l6/out.jsonl
+/tmp/r51b-l7/out.jsonl
+/tmp/r51b-l8/out.jsonl
+/tmp/r51b-other/out.jsonl
+```
+
+All 1,983 newly audited rows establish directly in the parallel runs with zero
+refutations, unknowns, errors, or audit timeouts. Combined with the existing
+251-row L5 artifact, the complete 2,234-row frontier is `2,234/2,234`
+established with zero refutations. Exact-or-better counts cover 2,233 rows with
+usable GT; the one missing GT is in QSynth EA.
+
+| Suite | Established | Exact <= GT | Quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| Tigress L5 | 251/251 | 56 | 10.5590x -> 5.8743x | 150 / 39 / 62 |
+| Tigress L6 | 272/272 | 69 | 16.9389x -> 8.9407x | 184 / 21 / 67 |
+| Tigress L7 | 301/301 | 70 | 26.4694x -> 13.4537x | 189 / 39 / 73 |
+| Tigress L8 | 335/335 | 60 | 45.1993x -> 26.5941x | 215 / 33 / 87 |
+| C-MBA Obfuscator | 54/54 | 8 | 5.4951x -> 4.8176x | 25 / 21 / 8 |
+| FloKI | 17/17 | 3 | 3.9794x -> 3.0248x | 5 / 10 / 2 |
+| Loki | 4/4 | 0 | 26.3788x -> 27.6493x | 0 / 2 / 2 |
+| Loki Tiny | 4/4 | 2 | 12.8857x -> 4.2192x | 2 / 2 / 0 |
+| MBA Flatten | 389/389 | 126 | 1.3074x -> 1.1662x | 187 / 172 / 30 |
+| MBA-Obfuscator nonlinear | 38/38 | 2 | 1.2833x -> 1.1938x | 3 / 35 / 0 |
+| NeuReduce | 24/24 | 1 | 1.1310x -> 1.1289x | 1 / 23 / 0 |
+| OMVLL | 132/132 | 58 | 5.2713x -> 2.4152x | 92 / 17 / 23 |
+| OSES | 27/27 | 0 | 1.8138x -> 1.7993x | 4 / 18 / 5 |
+| PLDI Non-Poly | 73/73 | 3 | 1.3809x -> 1.3608x | 4 / 68 / 1 |
+| PLDI Poly | 201/201 | 91 | 1.2995x -> 1.1185x | 142 / 27 / 32 |
+| QSynth EA | 112/112 | 35* | 2.0635x -> 1.3856x | 73 / 25 / 13 |
+| **Remaining 1,983** | **1,983/1,983** | **528*** | **6.4029x -> 4.2826x** | **1,126 / 513 / 343** |
+| **Complete 2,234** | **2,234/2,234** | **584*** | **6.7732x -> 4.4375x** | **1,276 / 552 / 405** |
+
+`*` QSynth EA has 111/112 rows with usable GT, so aggregate exact counts cover
+1,982/1,983 newly audited rows and 2,233/2,234 complete frontier rows. All
+counts above are authoritative parallel results; no isolated replay was needed.
