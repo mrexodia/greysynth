@@ -2791,6 +2791,17 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-69 sprint: post-CHS zero-SMT polish
+
+Round 69 restores the universal bitwise prepass budget and adds an 80 ms
+post-CHS zero-SMT DAG polish that runs even after a CHS timeout while restoring
+all global timeout state afterward. The existing factor pullout already handles
+opposite-sign additive terms; `test/round69_test.ml` covers that shape.
+
+The fast smoke artifact `/tmp/r69-smoke/out.jsonl` establishes all 62 rows with
+zero refutations and 62 strict decreases. It retains 56/58 exact-or-better but
+quality regresses to `0.9054x`, missing the sprint target.
+
 ## Round-68 sprint: nested opaque GF2 canonicalization
 
 Round 68 records canonical replacements for every rebuilt opaque-atom node,

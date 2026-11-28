@@ -611,8 +611,7 @@ let run_preprocessing gt input =
     in
     let local_budget =
       if shared then 1.5
-      else if size_of_expr !best > 1024
-              && Normalization.has_bitwise_operator !best
+      else if Normalization.has_bitwise_operator !best
               && not (Normalization.linear_mba_compatible !best) then 1.2
       else if exposed_product then 1.0 else 0.0 in
     let local_deadline = Unix.gettimeofday () +. local_budget in
@@ -921,6 +920,23 @@ let run_passes gt obf =
    with Timeout_exception ->
      g_has_timedout := true;
      _log_warn "greysynth" "timeout reached");
+  if !c_chs && size_of_expr !best >= 3 && size_of_expr !best <= 256
+     && dag_size_bounded ~limit:256 !best <= 256
+  then (
+    let saved_timeout = !g_has_timedout and saved_total = !g_total_timeout
+    and saved_branch = !g_branch_deadline in
+    Fun.protect
+      ~finally:(fun () ->
+        g_has_timedout := saved_timeout;
+        g_total_timeout := saved_total;
+        g_branch_deadline := saved_branch)
+      (fun () ->
+        g_has_timedout := false;
+        g_total_timeout := 0.;
+        g_branch_deadline := None;
+        let deadline = Unix.gettimeofday () +. 0.08 in
+        best := Normalization.dag_bottom_up_simplify ~zero_smt:true
+            ~minimal:false ~deadline !best));
   if not !g_has_timedout then
     (match Normalization.nonlinear_product_identity_candidate !best with
     | Some (candidate, equalities, linear_mba_equalities,
