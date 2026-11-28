@@ -525,8 +525,28 @@ let run_preprocessing gt input =
      && dag_size_bounded ~limit:4096 !best <= 4096
      && not !g_has_timedout
   then best := Normalization.dag_constant_cast_simplify !best;
+  let has_cast expression =
+    let seen = Sexpr.BvTbl.create 128 in
+    let rec visit node =
+      if Sexpr.BvTbl.mem seen node then false
+      else (
+        Sexpr.BvTbl.add seen node ();
+        match node with
+        | Sexpr.Expr.Unary { f = (Sexpr.Expr.Uext _ | Sexpr.Expr.Sext _
+                                  | Sexpr.Expr.Restrict _); _ } -> true
+        | Sexpr.Expr.Unary { x; _ } -> visit x
+        | Sexpr.Expr.Binary { x; y; _ } -> visit x || visit y
+        | Sexpr.Expr.Ite { c; t; e; _ } -> visit c || visit t || visit e
+        | _ -> false)
+    in visit expression
+  in
+  if not !g_has_timedout && size_of_expr !best <= 1024 && has_cast !best then
+    best := Normalization.dag_constant_cast_simplify !best;
   let run_root_gf2_masked_xor ~pass () =
     let original = !best in
+    if size_of_expr original > 65_536
+       || dag_size_bounded ~limit:8192 original > 8192
+    then () else
     let attempt source rebuild =
       match Normalization.gf2_masked_xor_candidate_with_bridges size_of_expr source with
       | Some (candidate, ring_equalities, linear_mba_equalities, rewritten_source) ->

@@ -489,6 +489,11 @@ let constant_cast_fold_candidate evaluate expression =
     |> function candidate :: _ -> Some candidate | [] -> None
   in
   match expression with
+  | E.Unary { f = E.Restrict { lo = 0; hi }; x; _ }
+    when hi = E.sizeof x - 1 -> Some x
+  | E.Unary { f = (E.Uext _ | E.Sext _ | E.Restrict _ as f);
+              x = E.Cst value; _ } ->
+      (try Some (E.constant (Term.Bv.unary f value)) with _ -> fold ())
   | E.Unary { f = E.Uext _; _ } -> fold ()
   | E.Unary { f = E.Sext _; _ } -> fold ()
   | E.Unary { f = E.Restrict _; _ } -> fold ()

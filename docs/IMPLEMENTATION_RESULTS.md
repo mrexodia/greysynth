@@ -2791,6 +2791,19 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-70 sprint: guarded GF2 roots and cast prepass
+
+Round 70 prevents root GF2 probing from traversing roots above cost 65,536 or
+DAG size 8,192, while retaining wrapped-child probing for bounded roots. A
+bounded whole-DAG cast prepass folds constant extensions/extracts and full-width
+identity extracts, with at most 32 proof-gated folds. Cast-containing roots up
+to cost 1,024 receive the prepass before small-DAG and complementary cleanup.
+
+`test/round70_test.ml` passes. The fast smoke artifact
+`/tmp/r70-smoke/out.jsonl` establishes all 62 rows with zero refutations, 62
+strict decreases, 57/58 exact-or-better, and quality `0.8005x`, satisfying the
+sprint smoke gate.
+
 ## Round-69 sprint: post-CHS zero-SMT polish
 
 Round 69 restores the universal bitwise prepass budget and adds an 80 ms

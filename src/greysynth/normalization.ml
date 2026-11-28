@@ -6,15 +6,17 @@ open Config
 include Norm_probes
 
 let dag_constant_cast_simplify expression =
-  let memo = Nodes.create 128 and constants = Sample_evaluator.make 1 in
-  let fold_shift_count node =
+  let memo = Nodes.create 128 and constants = Sample_evaluator.make 1
+  and folds = ref 0 in
+  let fold_cast node =
     match node with
-    | E.Unary { f = (E.Uext _ | E.Sext _ | E.Restrict _);
-                x = E.Cst _; _ } ->
+    | E.Unary { f = (E.Uext _ | E.Sext _ | E.Restrict _); _ } ->
         (match constant_cast_fold_candidate constants.eval node with
         | Some candidate
-          when Rewrite.accepts ~allow_equal_cost:true ~timeout:0.15
-                 ~pass:"constant-cast-prepass" node candidate -> candidate
+          when !folds < 32
+               && Rewrite.accepts ~allow_equal_cost:true ~timeout:0.50
+                    ~pass:"constant-cast-prepass" node candidate ->
+            incr folds; candidate
         | _ -> node)
     | _ -> node
   in
@@ -26,14 +28,13 @@ let dag_constant_cast_simplify expression =
           match node with
           | E.Unary { f; x; _ } ->
               let rewritten = visit x in
-              if E.is_equal rewritten x then node
-              else (try E.unary f rewritten with Invalid_argument _ -> node)
-          | E.Binary { f; x; y; _ } ->
-              let rewritten_x = visit x
-              and rewritten_y =
-                let rewritten = visit y in
-                if f = E.Lsl then fold_shift_count rewritten else rewritten
+              let rebuilt =
+                if E.is_equal rewritten x then node
+                else (try E.unary f rewritten with Invalid_argument _ -> node)
               in
+              fold_cast rebuilt
+          | E.Binary { f; x; y; _ } ->
+              let rewritten_x = visit x and rewritten_y = visit y in
               if E.is_equal rewritten_x x && E.is_equal rewritten_y y then node
               else
                 (try E.binary f rewritten_x rewritten_y
