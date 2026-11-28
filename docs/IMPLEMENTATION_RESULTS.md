@@ -2791,6 +2791,25 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-60B prune sweep #4 and held-out checkpoint
+
+The frozen `08e379d2` build audited all 1,194 remaining non-L5 frontier rows
+with the R18 configuration. Together with `/tmp/r60-l5/out.jsonl`, all 1,364
+rows establish with zero refutations. One L7 contention timeout established in
+isolated replay. The retained artifacts are `/tmp/r60b-l6/out.jsonl`,
+`/tmp/r60b-l7/out.jsonl`, `/tmp/r60b-l7-isolated/out.jsonl`,
+`/tmp/r60b-l8/out.jsonl`, and `/tmp/r60b-other/out.jsonl`.
+
+The 24 requested overlays were applied with `build_hard_dataset.py`. The rebuilt
+frontier contains 1,206 non-exact rows, zero untested rows, 277 core-hard rows,
+and 62 smoke rows. The authoritative corpus scoreboard is 54,094 proved,
+0 refuted, and 51,442/52,647 exact-or-better (`97.711%`).
+
+Milestone-60 held-out evaluation was run exactly once and inspected only in
+aggregate: 120/120 established, 0 refutations/timeouts, 111/112 transformed
+strict reductions, 51/112 reference hits, transformed quality `1.7669x`, and
+8/8 controls unchanged at `1.0000x`. No individual held-out case was inspected.
+
 ## Round-60 asymmetric two-variable linear basis
 
 Round 60 fixes the two-variable truth-table indexing used by the `{x,y,x|y}`
