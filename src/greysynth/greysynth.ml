@@ -522,9 +522,7 @@ let run_preprocessing gt input =
   | Some candidate
     when Rewrite.accepts_compositional ~pass:"root-gf2-masked-xor"
            ~equalities:[] ~semilinear_mba_equalities:[ !best, candidate ]
-           !best candidate
-         || Rewrite.accepts ~timeout:0.50 ~pass:"root-gf2-masked-xor-smt"
-              !best candidate -> best := candidate
+           !best candidate -> best := candidate
   | _ -> ());
   if size_of_expr !best > 512 && size_of_expr !best <= 16_384
      && not (Normalization.has_bitwise_operator !best)
@@ -607,9 +605,7 @@ let run_preprocessing gt input =
   | Some candidate
     when Rewrite.accepts_compositional ~pass:"post-dag-gf2-masked-xor"
            ~equalities:[] ~semilinear_mba_equalities:[ !best, candidate ]
-           !best candidate
-         || Rewrite.accepts ~timeout:0.50 ~pass:"post-dag-gf2-masked-xor-smt"
-              !best candidate -> best := candidate
+           !best candidate -> best := candidate
   | _ -> ());
   let run_small_dag () =
     if not !g_has_timedout && size_of_expr !best >= 15

@@ -2749,6 +2749,48 @@ strictly reduces more dev cases but changes several smoke outputs to larger
 verified local minima; stress diagnostic `7a3c5b...` remains the clearest
 partial-work blocker.
 
+## Round-56 zero-SMT masked-GF2 proof fast path
+
+Round 56 adds a DAG-memoized masked-XOR equality checker at the front of
+`semilinear_mba_mod2w`. It supports constants, NOT, XOR, constant AND/OR masks,
+and provably disjoint AND/OR forms with up to 64 opaque atoms, falling back to
+the existing semi-linear verifier on inequality or limits. Positive ten-atom
+and negative unequal-mask/overlapping-OR Bitwuzla cross-tests are permanent.
+All 0.50-second GF2 SMT fallbacks were removed; root and DAG GF2 candidates now
+require compositional zero-SMT certification.
+
+The universal bitwise prepass remains at 1.2 seconds for non-shared bitwise
+roots and 1.5 seconds for shared roots, with post-DAG GF2 recovery and bounded
+bitwise-AC work. Linear reconstruction retains De Morgan constant absorption,
+general factor pullout, and expanded ring-NOT cancellation. `test/round55_test`
+and the complete warning-clean `make test` gate pass.
+
+Final artifacts:
+
+```text
+/tmp/r56-smoke/out.jsonl
+/tmp/r56-leeky-dev64/out.jsonl
+/tmp/r56-l5/out.jsonl
+/tmp/r56-core/out.jsonl
+```
+
+All 1,444 rows establish with zero refutations, unknowns, errors, or audit
+timeouts.
+
+| Gate | Established | Exact <= GT | Quality before -> after | Strict decreases |
+|---|---:|---:|---:|---:|
+| Leeky dev (all rows) | 884/884 | 525* | 8.4523x -> 1.8831x | 844/884 |
+| Shrunk Tigress L5 | 170/170 | 2 | 12.5127x -> 13.5060x | 167/170 |
+| Refreshed core hard | 328/328 | 21 | 7.1129x -> 5.8198x | 309/328 |
+| Regression smoke | 62/62 | 56** | 0.7846x -> 0.8018x | 62/62 |
+
+`*` The Leeky count includes four controls; transformed-only scoring remains
+separate in the retained JSONL. `**` Smoke exact counts cover 58 usable-GT rows.
+Round 56 sets new exact-count records on smoke and the dev aggregate and keeps
+all proofs fail-closed, but misses the requested smoke quality, L5, core, and
+capabilities/frontier targets. L5 quality regresses and remains the primary
+follow-up.
+
 ## Round-55 masked-GF2 proof acceleration and universal bitwise prepass
 
 Round 55 adds exact masked-XOR normalization at roots and DAG nodes, plus a

@@ -322,6 +322,28 @@ let () =
   expect "proved_compositional" semilinear_report;
   require (field "semilinear_mba_proofs" semilinear_report = `Int 1)
     "semi-linear MBA proof was not reported";
+  let gf_atoms = List.init 10 (fun index -> var ("gf" ^ string_of_int index) 8) in
+  let gf_terms = List.concat_map (fun atom ->
+      let masked = E.binary E.And atom (c 8 (0x11 + List.length gf_atoms)) in
+      [ masked; masked ]) gf_atoms in
+  let gf_left = List.fold_left (E.binary E.Xor) x gf_terms in
+  expect "proved_compositional"
+    (P.verify ~original:gf_left ~candidate:x
+       (semilinear_mba_certificate gf_left x));
+  let unequal = E.binary E.Xor (E.binary E.And x (c 8 0x55))
+      (E.binary E.And x (c 8 0x54)) in
+  expect "error" (P.verify ~original:unequal ~candidate:(c 8 0)
+    (semilinear_mba_certificate unequal (c 8 0)));
+  let unequal_verdict, _, _ = U.are_equivalent unequal (c 8 0) (Some 2) in
+  require (unequal_verdict = U.No) "unequal GF2 masks were not refuted";
+  let overlap_or = E.binary E.Or (E.binary E.And x (c 8 3))
+      (E.binary E.And y (c 8 6))
+  and overlap_xor = E.binary E.Xor (E.binary E.And x (c 8 3))
+      (E.binary E.And y (c 8 6)) in
+  expect "error" (P.verify ~original:overlap_or ~candidate:overlap_xor
+    (semilinear_mba_certificate overlap_or overlap_xor));
+  let overlap_verdict, _, _ = U.are_equivalent overlap_or overlap_xor (Some 2) in
+  require (overlap_verdict = U.No) "overlapping OR was not refuted";
   let dont_care = E.binary E.Mul (c 8 2) (E.binary E.And sx (c 8 0x80)) in
   expect "proved_compositional"
     (P.verify ~original:dont_care ~candidate:(c 8 0)

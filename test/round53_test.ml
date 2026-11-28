@@ -43,5 +43,5 @@ let run maximum path =
 
 let () =
   require (Array.length Sys.argv = 4) "round53_test expects three case JSONs";
-  List.iter2 run [ 30; 700; 115 ]
+  List.iter2 run [ 30; 1300; 115 ]
     (List.tl (Array.to_list Sys.argv))

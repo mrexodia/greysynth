@@ -268,10 +268,7 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
         | Some candidate
           when Rewrite.accepts_compositional ~pass:"dag-gf2-masked-xor"
                  ~equalities:[] ~semilinear_mba_equalities:[ !result, candidate ]
-                 !result candidate
-               || (not zero_smt && try_smt (fun () ->
-                     Rewrite.accepts ~timeout:0.50 ~pass:"dag-gf2-masked-xor-smt"
-                       !result candidate)) -> result := candidate
+                 !result candidate -> result := candidate
         | _ -> ());
         (match
            if expression_cost <= 16_384 then semilinear_mba_candidate cost !result

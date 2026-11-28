@@ -1166,11 +1166,82 @@ let linear_mba_equal g left right =
         linear_mba_equal_with_stops ~stop_ids:(Hashtbl.create 0) g left right
   else linear_mba_equal_with_stops ~stop_ids:(Hashtbl.create 0) g left right
 
+let gf2_masked_xor_equal g left right =
+  let width = (node g left).width in
+  if width <> (node g right).width || width > 128 then Ring_not_equal
+  else
+    let mask = Z.pred (Z.shift_left Z.one width) in
+    let memo = Hashtbl.create 256 and visited = ref 0 in
+    let merge left right =
+      List.fold_left (fun result (id, bits) ->
+          let rec update prefix = function
+            | [] -> List.rev ((id, bits) :: prefix)
+            | (old, value) :: rest when id = old ->
+                let value = Z.logxor value bits in
+                List.rev_append prefix
+                  (if Z.equal value Z.zero then rest else (old, value) :: rest)
+            | item :: rest -> update (item :: prefix) rest
+          in update [] result) left right
+      |> List.sort (fun (left, _) (right, _) -> Int.compare left right)
+    in
+    let active (constant, terms) =
+      List.fold_left (fun value (_, bits) -> Z.logor value bits) constant terms
+    in
+    let mask_form bits (constant, terms) =
+      Z.logand constant bits,
+      List.filter_map (fun (id, value) ->
+          let value = Z.logand value bits in
+          if Z.equal value Z.zero then None else Some (id, value)) terms
+    in
+    let rec form id =
+      match Hashtbl.find_opt memo id with
+      | Some result -> result
+      | None ->
+          incr visited;
+          if !visited > 16_384 then raise Ring_limit;
+          let result =
+            match (node g id).shape, (node g id).expr with
+            | Value _, E.Cst value -> Bitvector.value_of value, []
+            | Unary ("bvnot", [], child), _ ->
+                let constant, terms = form child in Z.logxor constant mask, terms
+            | Binary ("bvxor", x, y), _ ->
+                let cx, tx = form x and cy, ty = form y in Z.logxor cx cy, merge tx ty
+            | Binary ("bvand", x, y), _ ->
+                (match (node g x).expr, (node g y).expr with
+                | E.Cst value, _ -> mask_form (Bitvector.value_of value) (form y)
+                | _, E.Cst value -> mask_form (Bitvector.value_of value) (form x)
+                | _ ->
+                    let left = form x and right = form y in
+                    if Z.equal (Z.logand (active left) (active right)) Z.zero
+                    then Z.zero, [] else Z.zero, [ id, mask ])
+            | Binary ("bvor", x, y), _ ->
+                (match (node g x).expr, (node g y).expr with
+                | E.Cst value, _ | _, E.Cst value ->
+                    let child = if match (node g x).expr with E.Cst _ -> true | _ -> false then y else x in
+                    let bits = Bitvector.value_of value in
+                    let constant, terms = mask_form (Z.logxor mask bits) (form child) in
+                    Z.logor constant bits, terms
+                | _ ->
+                    let left = form x and right = form y in
+                    if Z.equal (Z.logand (active left) (active right)) Z.zero then
+                      let cx, tx = left and cy, ty = right in Z.logxor cx cy, merge tx ty
+                    else Z.zero, [ id, mask ])
+            | _ -> Z.zero, [ id, mask ]
+          in
+          if List.length (snd result) > 64 then raise Ring_limit;
+          Hashtbl.add memo id result; result
+    in
+    try if form left = form right then Ring_equal else Ring_not_equal
+    with Ring_limit -> Ring_limit_exceeded
+
 let semilinear_mba_equal g left right =
   let width = (node g left).width in
   if width <> (node g right).width then Ring_not_equal
   else if width > 128 then Ring_limit_exceeded
   else
+    match gf2_masked_xor_equal g left right with
+    | Ring_equal -> Ring_equal
+    | Ring_not_equal | Ring_limit_exceeded ->
     let max_atoms = 6 and max_groups = 128 and max_visited = 16_384
     and max_ops = 2_000_000 in
     let visited = Array.make g.count false and seen_linear = Array.make g.count false
