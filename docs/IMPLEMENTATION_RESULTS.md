@@ -2601,3 +2601,78 @@ aggregate quality record and meets the dev/core quality goals. The smoke exact
 and strict-decrease goals pass, but quality narrowly misses `0.80x` at
 `0.8107x`. The L5 exact/geomean goals also remain unmet; wide complementary
 cases such as target 1776 need further ring exposure.
+
+## Round-53B full corpus prune sweep #3 and held-out check
+
+The exact frozen `0dad3c7` build was audited over the remaining 1,455 frontier
+rows with the R18 configuration, eight workers, `mba_equiv`, and independent
+`mba_proof` replay. No source or dataset-generation changes were made, and
+`build_hard_dataset.py` was not run.
+
+Retained artifacts:
+
+```text
+/tmp/r53-l5/out.jsonl
+/tmp/r53b-l6/out.jsonl
+/tmp/r53b-l7/out.jsonl
+/tmp/r53b-l8/out.jsonl
+/tmp/r53b-other/out.jsonl
+/tmp/r53b-leeky-heldout/out.jsonl
+```
+
+All 1,455 newly audited frontier rows establish directly with zero refutations,
+unknowns, errors, or audit timeouts. Combined with the existing 195-row L5
+artifact, the complete 1,650-row frontier is `1,650/1,650` established with zero
+refutations and usable GT for every row.
+
+| Suite | Established | Exact <= GT | Quality before -> after | Better / equal / worse |
+|---|---:|---:|---:|---:|
+| Tigress L5 | 195/195 | 25 | 10.0348x -> 9.0348x | 67 / 50 / 78 |
+| Tigress L6 | 203/203 | 32 | 19.4922x -> 12.9197x | 86 / 24 / 93 |
+| Tigress L7 | 231/231 | 26 | 30.0100x -> 19.5120x | 113 / 39 / 79 |
+| Tigress L8 | 275/275 | 27 | 55.0190x -> 48.7002x | 126 / 50 / 99 |
+| C-MBA Obfuscator | 46/46 | 1 | 6.3539x -> 6.9692x | 14 / 23 / 9 |
+| FloKI | 14/14 | 0 | 3.9277x -> 3.8564x | 3 / 10 / 1 |
+| Loki | 4/4 | 1 | 27.6493x -> 15.7314x | 1 / 2 / 1 |
+| Loki Tiny | 2/2 | 0 | 17.8014x -> 17.8014x | 0 / 2 / 0 |
+| MBA Flatten | 263/263 | 80 | 1.2989x -> 1.1108x | 143 / 98 / 22 |
+| MBA-Obfuscator nonlinear | 36/36 | 7 | 1.2483x -> 1.0220x | 9 / 27 / 0 |
+| NeuReduce | 23/23 | 3 | 1.1349x -> 1.1011x | 3 / 20 / 0 |
+| OMVLL | 74/74 | 10 | 5.1340x -> 3.9337x | 30 / 21 / 23 |
+| OSES | 27/27 | 2 | 1.7993x -> 1.7036x | 6 / 21 / 0 |
+| PLDI Non-Poly | 70/70 | 24 | 1.3836x -> 1.1205x | 41 / 25 / 4 |
+| PLDI Poly | 110/110 | 42 | 1.3014x -> 1.0857x | 75 / 26 / 9 |
+| QSynth EA | 77/77 | 6 | 1.6969x -> 1.6187x | 22 / 44 / 11 |
+| **Remaining 1,455** | **1,455/1,455** | **261** | **7.4555x -> 5.9701x** | **672 / 432 / 351** |
+| **Complete 1,650** | **1,650/1,650** | **286** | **7.7219x -> 6.2697x** | **739 / 482 / 429** |
+
+### Milestone-53 held-out balanced64 check
+
+The same frozen build was evaluated exactly once on the 120-case held-out
+balanced panel. No individual held-out expression or result was inspected, and
+no tuning or code change followed the evaluation.
+
+Aggregate-only results:
+
+```text
+Total established:         120/120
+Direct/compositional:      29 / 91
+Refuted/unknown/error:     0 / 0 / 0
+Audit timeouts:            0
+Transformed established:   112/112
+Strict transformed:        111/112
+Reference hits:            52/112 (46.4%)
+Transformed quality:       1.7091x
+Controls established:      8/8
+Controls <= reference:     8/8
+Controls unchanged:        8/8
+Control quality:           1.0000x
+```
+
+Compared with the Round-44 zero-tuning held-out baseline (`50/112` hits,
+`2.2599x`, `111/112` strict, `8/8` unchanged controls), Round 53B gains two
+reference hits and improves transformed quality to `1.7091x` while preserving
+strict coverage and all controls. Compared with the Milestone-50 check
+(`51/112`, `1.8835x`, one timeout), it gains one hit, improves quality, and
+establishes the previously timed-out aggregate row. Per the anti-overfitting
+rule, no individual held-out case was examined.
