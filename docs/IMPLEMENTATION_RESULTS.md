@@ -2139,3 +2139,88 @@ giant-DAG tests but leaves `tigress_l6__target_3259` at size 195 in the
 parallel gate. Stress coverage rises from zero to five hits and
 long-frontier recovers to 41, while majority and proof-context do not achieve
 the requested jumps. These are retained as explicit Round-49 blockers.
+
+## Round-49 true overlap gating and small/medium DAG pipelines
+
+Round 49 activates compound bitwise stopping only when a canonical compound atom
+is observed both under a bitwise operator and directly in linear position.
+Non-overlapping expressions take the one-pass compatibility path. For genuine
+overlap, a stop-aware candidate of cost at most seven terminates the search;
+otherwise the no-stop ring-bridged pass runs, with the compatibility producer
+reserved for an empty-result fallback. Pure arithmetic DAG nodes bypass the
+boundary-aware producer entirely. This removes the unconditional three-pass
+CPU multiplier while retaining monotonic candidate choice.
+
+Bitwise AC canonicalization is scoped to cost-256 ring roots immediately before
+ring polynomial normalization. Its recursive canonicalizer also sorts
+associative `Plus`/`Mul` children and records those steps as ring edges. The
+semi-linear repeated-atom fallback reuses one nonuniform-mask analysis rather
+than rescanning every subtree.
+
+A four-round, 0.25-second zero-SMT DAG loop now runs before root polynomial
+passes for non-linear-compatible expressions of cost 15–512 and again after
+`Normalization.run` when useful. A separate early pure-polynomial pass handles
+bounded expressions without bitwise operators. These changes make the six
+full-pipeline diagnostics pass with independent replay:
+
+```text
+majority-v1 diagnostic:       89 -> 15
+proof-context-v1 diagnostic:  87 -> 15
+extra-floor-v1 diagnostic:   216 -> 11
+tigress target_3259:       39055 -> 7
+multivariate64 line 2:      2403 -> 3
+OSES line 240:            564134 -> 1017
+```
+
+`test/round49_test.ml` exercises those exact six JSON cases through the full
+preprocessing, normalization, OES, and CHS pipeline. The complete warning-clean
+`make test` gate passes. `src/proof/rewrite_proof.ml` is unchanged, and the
+held-out balanced panel was not evaluated.
+
+Final artifacts:
+
+```text
+/tmp/r49-smoke/out.jsonl
+/tmp/r49-leeky-dev64/out.jsonl
+/tmp/r49-l5/out.jsonl
+/tmp/r49-core/out.jsonl
+```
+
+All 1,539 rows establish with zero refutations, unknowns, errors, or audit
+timeout verdicts. Leeky dev establishes all 884 rows; among 880 transformed
+rows, 840 strictly decrease and 501 reach or beat reference after a strict
+reduction. Aggregate transformed quality improves from `2.3475x` to `2.0179x`;
+all four controls remain unchanged.
+
+| Leeky dev panel | Baseline hits -> R49 hits | Baseline quality -> R49 quality | R49 strict reductions |
+|---|---:|---:|---:|
+| mba-capabilities-v1 | 33 -> 33 | 3.3337x -> 3.3321x | 71/71 |
+| mba-capabilities-v2 | 34 -> 36 | 1.1037x -> 1.0929x | 43/44 |
+| mba-composition-v1 | 47 -> 49 | 1.1365x -> 1.1235x | 52/54 |
+| mba-extra-floor-v1 | 19 -> 34 | 1.4569x -> 1.0830x | 54/54 |
+| mba-frontier64-v1 | 3 -> 3 | 22.7000x -> 18.6300x | 72/96 |
+| mba-gaps-v1 | 55 -> 56 | 1.1124x -> 1.0785x | 72/72 |
+| mba-interactions-v1 | 23 -> 22 | 0.9364x -> 0.9484x | 33/33 |
+| mba-ladders-v1 | 39 -> 49 | 1.2743x -> 1.1092x | 72/72 |
+| mba-long-frontier-v1 | 44 -> 38 | 1.6318x -> 1.5923x | 71/72 |
+| mba-majority-v1 | 34 -> 37 | 1.3835x -> 1.0900x | 54/54 |
+| mba-projection-v1 | 51 -> 44 | 1.1375x -> 1.3865x | 54/54 |
+| mba-proof-context-v1 | 12 -> 24 | 1.5744x -> 1.0225x | 36/36 |
+| mba-stress64-v1 | 0 -> 7 | 11.2614x -> 5.7388x | 84/96 |
+| mba-tight-v1 | 68 -> 69 | 1.0377x -> 1.0226x | 72/72 |
+| **Overall transformed** | **462 -> 501** | **2.3475x -> 2.0179x** | **840/880** |
+
+| Regression gate | Established | Exact <= GT | Quality before -> after | Better / equal / worse | Strict decreases |
+|---|---:|---:|---:|---:|---:|
+| Shrunk Tigress L5 | 251/251 | 56 | 10.5590x -> 6.5135x | 139 / 34 / 78 | 247 |
+| Refreshed core hard | 342/342 | 66* | 7.0702x -> 5.2885x | 150 / 141 / 50 | 323 |
+| Regression smoke | 62/62 | 53* | 0.7846x -> 0.9105x | 4 / 51 / 7 | 62 |
+
+`*` Core exact counts cover 341 rows with usable GT; smoke exact counts cover 58.
+The mandatory smoke strict-decrease condition is restored, and all six targeted
+pipeline tests reach their requested bounds. The aggregate smoke quality and
+exact-count targets are still missed (`0.9105x`, `53/58`) because several OMVLL
+rows take larger but verified local minima under eight-worker scheduling.
+Projection and long-frontier remain the main dev regressions; the requested
+majority/proof-context/extra-floor jumps improve substantially but do not reach
+the aspirational panel targets.

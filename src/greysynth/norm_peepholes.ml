@@ -744,7 +744,8 @@ let build_balanced op = function
       build terms
 
 let recursive_bitwise_ac_candidate expression =
-  let memo = Nodes.create 128 and equalities = ref [] in
+  let memo = Nodes.create 128 and equalities = ref []
+  and ring_equalities = ref [] in
   let rec flatten operation acc = function
     | E.Binary { f; x; y; _ } when f = operation ->
         flatten operation (flatten operation acc x) y
@@ -771,13 +772,22 @@ let recursive_bitwise_ac_candidate expression =
               if not (E.is_equal rebuilt canonical) then
                 equalities := (rebuilt, canonical) :: !equalities;
               canonical
+          | E.Binary { f = (E.Plus | E.Mul as operation); _ } ->
+              let canonical =
+                flatten operation [] rebuilt |> List.sort E.compare
+                |> build_balanced operation
+              in
+              if not (E.is_equal rebuilt canonical) then
+                ring_equalities := (rebuilt, canonical) :: !ring_equalities;
+              canonical
           | _ -> rebuilt
         in
         Nodes.add memo node result;
         result
   in
   let candidate = visit expression in
-  if !equalities = [] then None else Some (candidate, List.rev !equalities)
+  if !equalities = [] && !ring_equalities = [] then None
+  else Some (candidate, List.rev !equalities, List.rev !ring_equalities)
 
 (* Exact associative/commutative candidates. These rules do not depend on
    finite truth tables; the shared acceptance boundary still proves every

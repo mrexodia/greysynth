@@ -113,13 +113,14 @@ let () =
       (add (mul (add m2 (add x1 x2)) x2) (mul m2 x1)) in
   setup majority;
   (match N.recursive_bitwise_ac_candidate majority with
-  | Some (canonical, ac_edges) ->
+  | Some (canonical, ac_edges, ac_ring_edges) ->
       (match N.ring_polynomial_candidate U.size_of_expr canonical with
       | Some candidate ->
           require
             (R.accepts_compositional ~allow_equal_cost:true ~pass:"majority-ac"
                ~equalities:[] ~linear_mba_equalities:ac_edges
-               ~ring_equalities:[ canonical, candidate ] majority candidate)
+               ~ring_equalities:(ac_ring_edges @ [ canonical, candidate ])
+               majority candidate)
             "majority AC/ring proof failed";
           require (U.size_of_expr candidate < U.size_of_expr majority)
             "majority polynomial did not collapse";

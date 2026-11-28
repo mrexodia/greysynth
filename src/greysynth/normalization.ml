@@ -62,25 +62,25 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
   let expression_cost = cost expression in
   let soft_stopped = ref false and smt_spent = ref 0.0
   and opaque_probe_calls = ref 0 in
-  let contains_probe_shell root =
-    let memo = Nodes.create 32 in
-    let rec visit node =
-      match Nodes.find_opt memo node with
-      | Some result -> result
-      | None ->
-          let result =
-            match node with
-            | E.Unary { f = E.Not; _ }
-            | E.Binary { f = (E.And | E.Or | E.Xor | E.Lsl); _ } -> true
-            | E.Unary { x; _ } -> visit x
-            | E.Binary { x; y; _ } -> visit x || visit y
-            | E.Ite { c; t; e; _ } -> visit c || visit t || visit e
-            | _ -> false
-          in
-          Nodes.add memo node result;
-          result
-    in
-    visit root
+  let probe_shell_memo = Nodes.create 128 in
+  let rec contains_probe_shell node =
+    match Nodes.find_opt probe_shell_memo node with
+    | Some result -> result
+    | None ->
+        let result =
+          match node with
+          | E.Unary { f = E.Not; _ }
+          | E.Binary { f = (E.And | E.Or | E.Xor | E.Lsl); _ } -> true
+          | E.Unary { x; _ } -> contains_probe_shell x
+          | E.Binary { x; y; _ } ->
+              contains_probe_shell x || contains_probe_shell y
+          | E.Ite { c; t; e; _ } ->
+              contains_probe_shell c || contains_probe_shell t
+              || contains_probe_shell e
+          | _ -> false
+        in
+        Nodes.add probe_shell_memo node result;
+        result
   in
   let pure_bitwise root =
     let memo = Nodes.create 32 in
@@ -237,7 +237,7 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
             then 6 else 4
           in
           let proposals =
-            if expression_cost <= 16_384 then
+            if expression_cost <= 16_384 && contains_probe_shell !result then
               linear_candidates_with_rings ~max_atoms cost !result
             else
               linear_candidates ~max_atoms cost !result
@@ -271,15 +271,6 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
                     ~linear_mba_equalities:[ !result, candidate ]
                     !result candidate
             then result := candidate
-        | _ -> ());
-        (match
-           if expression_cost <= 16_384 && cost !result <= 512
-           then recursive_bitwise_ac_candidate !result else None
-         with
-        | Some (candidate, linear_mba_equalities)
-          when Rewrite.accepts_compositional ~allow_equal_cost:true
-                 ~pass:"dag-bitwise-ac" ~equalities:[] ~linear_mba_equalities
-                 !result candidate -> result := candidate
         | _ -> ());
         if Greysynth_utils.Utils.dag_size_bounded ~limit:512 !result <= 512 then (
           (match complementary_slice_refine_candidate cost !result with
@@ -381,6 +372,17 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
         | Some (candidate, equalities, poly_equalities)
           when Rewrite.accepts_compositional ~pass:"dag-poly-mod2w"
                  ~equalities ~poly_equalities !result candidate -> result := candidate
+        | _ -> ());
+        (match !result with
+        | E.Binary { f = (E.Plus | E.Minus | E.Mul); _ }
+          when cost !result <= 256 && contains_probe_shell !result ->
+            (match recursive_bitwise_ac_candidate !result with
+            | Some (candidate, linear_mba_equalities, ring_equalities)
+              when Rewrite.accepts_compositional ~allow_equal_cost:true
+                     ~pass:"dag-bitwise-ac" ~equalities:[]
+                     ~linear_mba_equalities ~ring_equalities !result candidate ->
+                result := candidate
+            | _ -> ())
         | _ -> ());
         (match ring_polynomial_candidate cost !result with
         | Some candidate
@@ -700,11 +702,15 @@ let run ?deadline expression =
              in
              let linear_decomposed =
                if not (E.is_equal !current expression)
-                  || cost !current < 4 || cost !current > 16_384
+                  || cost !current < 4 || cost !current > 512
                then None
                else
                  let proposals =
-                   linear_candidates_with_rings cost !current
+                   (if has_bitwise_operator !current then
+                      linear_candidates_with_rings cost !current
+                    else
+                      linear_candidates cost !current
+                      |> List.map (fun candidate -> candidate, [], !current))
                    |> List.sort (fun (left, _, _) (right, _, _) ->
                           Int.compare (cost left) (cost right))
                  in

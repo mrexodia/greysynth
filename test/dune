@@ -226,3 +226,25 @@
  (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
             binsec.smt binsec.sse.term yojson unix)
  (flags (:standard -open Binsec -open Libsse -open Libterm)))
+
+(test
+ (name round49_test)
+ (modules round49_test)
+ (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
+            greysynth.string_to_sexpr binsec.smt binsec.sse.term yojson unix)
+ (flags (:standard -open Binsec -open Libsse -open Libterm))
+ (deps
+  ../datasets/leeky/adapted/dev_64/23bc7e4239e647a2_w64.json
+  ../datasets/leeky/adapted/dev_64/26d6be2a86f9fc4a_w64.json
+  ../datasets/leeky/adapted/dev_64/ad964e0b66737fef_w64.json
+  ../datasets/hard_cases/regression_smoke/tigress_l6/tigress_lvl_6__target_3259.json
+  ../datasets/hard_cases/regression_smoke/multivariate64/multivariate64__line_0000002.json
+  ../datasets/hard_cases/regression_smoke/oses/oses__line_0000240.json)
+ (action
+  (run %{test}
+   %{dep:../datasets/leeky/adapted/dev_64/23bc7e4239e647a2_w64.json}
+   %{dep:../datasets/leeky/adapted/dev_64/26d6be2a86f9fc4a_w64.json}
+   %{dep:../datasets/leeky/adapted/dev_64/ad964e0b66737fef_w64.json}
+   %{dep:../datasets/hard_cases/regression_smoke/tigress_l6/tigress_lvl_6__target_3259.json}
+   %{dep:../datasets/hard_cases/regression_smoke/multivariate64/multivariate64__line_0000002.json}
+   %{dep:../datasets/hard_cases/regression_smoke/oses/oses__line_0000240.json})))

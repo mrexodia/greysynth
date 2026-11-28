@@ -309,7 +309,7 @@ let run_preprocessing gt input =
            || (allow_opaque && contains_bitwise !best))
     then
       let proposals =
-        if size_of_expr input <= 16_384 then
+        if size_of_expr input <= 16_384 && contains_bitwise !best then
           Normalization.linear_candidates_with_rings ~max_atoms:8 size_of_expr !best
         else
           Normalization.linear_candidates ~max_atoms:8 size_of_expr !best
@@ -372,7 +372,11 @@ let run_preprocessing gt input =
                      ~equalities ~ring_equalities ~linear_mba_equalities
                      ~semilinear_mba_equalities !best peeled -> best := peeled
             | _ -> ());
-            (match Normalization.semilinear_mba_candidate size_of_expr !best with
+            (match
+               if size_of_expr input <= 16_384
+               then Normalization.semilinear_mba_candidate size_of_expr !best
+               else Normalization.semilinear_mba_candidate_with_atoms size_of_expr !best
+             with
             | Some semilinear
               when Rewrite.accepts_compositional ~pass:"root-probe-semilinear"
                      ~equalities:[]
@@ -384,7 +388,10 @@ let run_preprocessing gt input =
   let run_root_semilinear () =
     match
       if size_of_expr !best <= 256
-      then Normalization.semilinear_mba_candidate size_of_expr !best
+      then
+        if size_of_expr input <= 16_384
+        then Normalization.semilinear_mba_candidate size_of_expr !best
+        else Normalization.semilinear_mba_candidate_with_atoms size_of_expr !best
       else None
     with
     | Some candidate ->
@@ -484,6 +491,15 @@ let run_preprocessing gt input =
      && dag_size_bounded ~limit:4096 !best <= 4096
      && not !g_has_timedout
   then best := Normalization.dag_constant_cast_simplify !best;
+  if size_of_expr !best > 512 && size_of_expr !best <= 16_384
+     && not (Normalization.has_bitwise_operator !best)
+     && not !g_has_timedout
+  then
+    (match Normalization.reduce_modular_polynomial size_of_expr !best with
+    | Some (candidate, equalities, poly_equalities)
+      when Rewrite.accepts_compositional ~pass:"early-pure-poly"
+             ~equalities ~poly_equalities !best candidate -> best := candidate
+    | _ -> ());
   let early_dag_size = dag_size_bounded ~limit:4096 !best in
   if size_of_expr !best > 512
      && early_dag_size <= 4096
@@ -548,6 +564,24 @@ let run_preprocessing gt input =
       let after_size = size_of_expr !best and after_dag = dag_size_of_expr !best in
       improving := after_size < before_size || after_dag < before_dag
     done);
+  let run_small_dag () =
+    if not !g_has_timedout && size_of_expr !best >= 15
+       && size_of_expr !best <= 512
+       && dag_size_bounded ~limit:512 !best <= 512
+       && not (Normalization.linear_mba_compatible !best)
+    then (
+      let deadline = Unix.gettimeofday () +. 0.25 in
+      let rounds = ref 0 and changing = ref true in
+      while !rounds < 4 && !changing && Unix.gettimeofday () < deadline do
+        incr rounds;
+        let before = !best and before_size = size_of_expr !best in
+        best := Normalization.dag_bottom_up_simplify ~zero_smt:true
+            ~minimal:false ~deadline !best;
+        changing := size_of_expr !best < before_size
+                    || not (Sexpr.Expr.is_equal !best before)
+      done)
+  in
+  run_small_dag ();
   run_root_minterm_poly ();
   run_root_partial_linear_sum ();
   run_root_semilinear ();
@@ -633,6 +667,7 @@ let run_preprocessing gt input =
     if !c_normalization && not preserve_large_dag_budget && not !g_has_timedout then (
       best := run_normalization ?deadline:(normalization_deadline ()) !best;
       check_equiv gt ~tag:"normalization" log_normalization_is_equiv !best);
+    if size_of_expr !best > 7 then run_small_dag ();
     run_oes ()
   in
   if !c_egraph_extraction && size_of_expr !best > 128

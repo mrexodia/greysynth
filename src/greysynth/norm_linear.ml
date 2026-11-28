@@ -94,7 +94,8 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
           canonical
     | _ -> original
   in
-  let bitwise_linear_atoms = Nodes.create 32 in
+  let bitwise_linear_atoms = Nodes.create 32
+  and linear_candidates_seen = Nodes.create 32 in
   let scan_linear_seen = Nodes.create 128 and scan_bitwise_seen = Nodes.create 128
   and scan_count = ref 0 in
   let linear_position = function
@@ -118,25 +119,39 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
     if !scan_count < 64 && not (Nodes.mem scan_linear_seen node) then (
       incr scan_count;
       Nodes.add scan_linear_seen node ();
+      let add_linear value =
+        if linear_position value then
+          Nodes.replace linear_candidates_seen (canonical_ac_atom value) ()
+      in
       match node with
       | E.Cst _ -> ()
-      | E.Unary { f = E.Minus; x; _ } -> scan_linear x
+      | E.Unary { f = E.Minus; x; _ } -> add_linear node; scan_linear x
       | E.Unary { f = E.Not; _ } -> scan_bitwise node
       | E.Binary { f = (E.Plus | E.Minus); x; y; _ } ->
-          scan_linear x; scan_linear y
+          add_linear node; scan_linear x; scan_linear y
       | E.Binary { f = E.Mul; x; y; _ } ->
           (match constant_value x, constant_value y with
           | Some _, _ -> scan_linear y
           | _, Some _ -> scan_linear x
-          | _ -> ())
+          | _ ->
+              (match if ring_bridges then extract_product_scalar node else None with
+              | Some (_, base, _) -> Nodes.replace linear_candidates_seen base ()
+              | None -> add_linear node))
       | E.Binary { f = E.Lsl; x; y; _ } ->
+          add_linear node;
           (match constant_value y with Some _ -> scan_linear x | None -> ())
       | E.Binary { f = (E.And | E.Or | E.Xor); _ } -> scan_bitwise node
       | _ -> ())
   in
   if bitwise_stops then scan_linear expression;
-  let is_bitwise_linear_atom expression =
+  let has_boundary_overlap =
     bitwise_stops
+    && Nodes.fold
+         (fun atom () found -> found || Nodes.mem linear_candidates_seen atom)
+         bitwise_linear_atoms false
+  in
+  let is_bitwise_linear_atom expression =
+    has_boundary_overlap
     && (Nodes.mem bitwise_linear_atoms expression
         || Nodes.mem bitwise_linear_atoms (canonical_ac_atom expression))
   in
@@ -665,26 +680,39 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
     let proposals =
       List.map (fun candidate -> candidate, ring_edges, rewritten_source) !results
     in
-    if bitwise_stops && Nodes.length bitwise_linear_atoms > 0 then
-      let standard =
-        linear_candidates_with_rings ~opaque_atoms ~max_atoms ~semantic_bitwise
-          ~ring_bridges ~bitwise_stops:false cost expression
-      and compatible =
-        if ring_bridges then
+    if has_boundary_overlap then
+      let sort proposals =
+        proposals
+        |> List.sort_uniq (fun (left, _, _) (right, _, _) -> E.compare left right)
+        |> List.sort (fun (left, _, _) (right, _, _) ->
+               let order = Int.compare (cost left) (cost right) in
+               if order = 0 then E.compare left right else order)
+      in
+      let proposals = sort proposals in
+      if (match proposals with (candidate, _, _) :: _ -> cost candidate <= 7 | [] -> false)
+      then proposals
+      else
+        let standard =
+          linear_candidates_with_rings ~opaque_atoms ~max_atoms ~semantic_bitwise
+            ~ring_bridges ~bitwise_stops:false cost expression
+        in
+        let merged = sort (proposals @ standard) in
+        if merged <> [] || not ring_bridges then merged
+        else
           linear_candidates_with_rings ~opaque_atoms ~max_atoms ~semantic_bitwise
             ~ring_bridges:false ~bitwise_stops:false cost expression
-        else []
-      in
-      proposals @ standard @ compatible
-      |> List.sort_uniq (fun (left, _, _) (right, _, _) -> E.compare left right)
-      |> List.sort (fun (left, _, _) (right, _, _) ->
-             let order = Int.compare (cost left) (cost right) in
-             if order = 0 then E.compare left right else order)
+          |> sort
     else proposals
   with Too_complex ->
     if bitwise_stops then
-      linear_candidates_with_rings ~opaque_atoms ~max_atoms ~semantic_bitwise
-        ~ring_bridges ~bitwise_stops:false cost expression
+      let standard =
+        linear_candidates_with_rings ~opaque_atoms ~max_atoms ~semantic_bitwise
+          ~ring_bridges ~bitwise_stops:false cost expression
+      in
+      if standard <> [] || not ring_bridges then standard
+      else
+        linear_candidates_with_rings ~opaque_atoms ~max_atoms ~semantic_bitwise
+          ~ring_bridges:false ~bitwise_stops:false cost expression
     else []
 
 let linear_candidates ?opaque_atoms ?max_atoms ?semantic_bitwise cost expression =

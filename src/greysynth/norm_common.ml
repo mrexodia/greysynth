@@ -40,6 +40,26 @@ let canonical_bitwise_atom expression =
       else (E.constant complement, true)
   | _ -> (expression, false)
 
+let has_bitwise_operator expression =
+  let memo = Nodes.create 128 in
+  let rec visit node =
+    match Nodes.find_opt memo node with
+    | Some result -> result
+    | None ->
+        let result =
+          match node with
+          | E.Unary { f = E.Not; _ }
+          | E.Binary { f = (E.And | E.Or | E.Xor); _ } -> true
+          | E.Unary { x; _ } -> visit x
+          | E.Binary { x; y; _ } -> visit x || visit y
+          | E.Ite { c; t; e; _ } -> visit c || visit t || visit e
+          | _ -> false
+        in
+        Nodes.add memo node result;
+        result
+  in
+  visit expression
+
 let is_number number expression =
   match constant_value expression with
   | Some value -> Z.equal (Bitvector.value_of value) number

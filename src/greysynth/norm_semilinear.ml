@@ -25,11 +25,17 @@ let has_nonuniform_bitwise_constant expression =
   inspect false expression;
   !found
 
-let semilinear_mba_candidate_with_atoms ?(opaque_atoms = []) cost expression =
+let semilinear_mba_candidate_with_atoms ?(opaque_atoms = [])
+    ?has_nonuniform cost expression =
   let width = E.sizeof expression in
+  let has_nonuniform () =
+    match has_nonuniform with
+    | Some result -> result
+    | None -> has_nonuniform_bitwise_constant expression
+  in
   if width > 128 || cost expression > 4096
      || Greysynth_utils.Utils.dag_size_bounded ~limit:1024 expression > 1024
-     || not (has_nonuniform_bitwise_constant expression)
+     || not (has_nonuniform ())
   then None
   else
     let deadline = Unix.gettimeofday () +. 0.2 in
@@ -273,9 +279,11 @@ let semilinear_mba_candidate_with_atoms ?(opaque_atoms = []) cost expression =
         !best
 
 let semilinear_mba_candidate cost expression =
-  match semilinear_mba_candidate_with_atoms cost expression with
+  let has_nonuniform = has_nonuniform_bitwise_constant expression in
+  match semilinear_mba_candidate_with_atoms
+          ~has_nonuniform cost expression with
   | Some _ as result -> result
-  | None when not (has_nonuniform_bitwise_constant expression) -> None
+  | None when not has_nonuniform -> None
   | None ->
       let frequencies = Nodes.create 128 and expanded = Nodes.create 128 in
       let rec count node =
@@ -313,7 +321,8 @@ let semilinear_mba_candidate cost expression =
         |> take 4
       in
       if opaque_atoms = [] then None
-      else semilinear_mba_candidate_with_atoms ~opaque_atoms cost expression
+      else semilinear_mba_candidate_with_atoms ~opaque_atoms
+          ~has_nonuniform cost expression
 
 let abstract_slice_candidate expression =
   let low_mask bits = Z.pred (Z.shift_left Z.one bits) in
