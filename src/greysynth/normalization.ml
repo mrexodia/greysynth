@@ -201,6 +201,12 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
                  ~pass:"dag-bit0-parity" !result candidate) ->
             result := candidate
         | _ -> ());
+        (match not_pushdown_candidate cost !result with
+        | Some candidate
+          when Rewrite.accepts_compositional ~pass:"dag-not-pushdown"
+                 ~equalities:[] ~linear_mba_equalities:[ !result, candidate ]
+                 !result candidate -> result := candidate
+        | _ -> ());
         (match abstract_slice_candidate !result with
         | Some candidate
           when try_smt (fun () -> Rewrite.accepts ~timeout:0.15

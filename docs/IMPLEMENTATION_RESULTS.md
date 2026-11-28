@@ -2791,6 +2791,28 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-61 cost-minimizing De Morgan reconstruction
+
+Round 61 adds bounded cost-minimizing De Morgan pushdown, including XOR
+negation, direct `~(A-B) -> B+(~A)` cleanup, signed subtraction of `-1`
+coefficient terms, and corrected universal constant absorption in linear-MBA
+reconstruction. `test/round61_test.ml` covers the new producer paths.
+
+Artifacts are `/tmp/r61-smoke/out.jsonl`, `/tmp/r61-leeky-dev64/out.jsonl`,
+`/tmp/r61-l5/out.jsonl`, and `/tmp/r61-core/out.jsonl`. All parallel rows prove
+with zero refutations; one core contention timeout proves in isolated replay.
+
+| Gate | Established | Exact <= GT | Quality before -> after | Strict decreases |
+|---|---:|---:|---:|---:|
+| Leeky dev (all rows) | 884/884 | 533* | 8.4523x -> 1.7675x | 877/884 |
+| Shrunk Tigress L5 | 165/165 | 1 | 12.3980x -> 11.4942x | 165/165 |
+| Refreshed core hard | 277/277** | 15 | 7.7752x -> 7.6393x | 277/277** |
+| Regression smoke | 62/62 | 56*** | 0.7846x -> 0.8041x | 62/62 |
+
+`*` Includes controls. `**` One row required isolated replay. `***` Smoke exact
+counts cover 58 usable-GT rows. Dev quality sets a new record, while smoke
+quality narrowly misses and the newly pruned L5/core frontiers remain hard.
+
 ## Round-60B prune sweep #4 and held-out checkpoint
 
 The frozen `08e379d2` build audited all 1,194 remaining non-L5 frontier rows

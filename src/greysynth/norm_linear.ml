@@ -17,20 +17,50 @@ type form =
 
 exception Too_complex
 
-let rec demorgan_not expression =
-  match expression with
-  | E.Unary { f = E.Not; x; _ } -> x
-  | E.Binary { f = E.And; x; y; _ } ->
-      E.binary E.Or (demorgan_not x) (demorgan_not y)
-  | E.Binary { f = E.Or; x; y; _ } ->
-      E.binary E.And (demorgan_not x) (demorgan_not y)
-  | E.Binary { f = E.Xor; x = E.Cst value; y; _ }
-    when Bitvector.is_fill value -> y
-  | E.Binary { f = E.Xor; x = y; y = E.Cst value; _ }
-    when Bitvector.is_fill value -> y
-  | E.Cst value when Bitvector.is_zeros value -> E.constant (Bitvector.fill (Bitvector.size_of value))
-  | E.Cst value when Bitvector.is_fill value -> E.constant (Bitvector.zeros (Bitvector.size_of value))
-  | expression -> E.unary E.Not expression
+let demorgan_not expression =
+  let cost = Greysynth_utils.Utils.size_of_expr in
+  let choose candidates =
+    List.fold_left (fun best candidate ->
+        if cost candidate < cost best then candidate else best)
+      (List.hd candidates) (List.tl candidates)
+  in
+  let rec visit depth expression =
+    let direct = E.unary E.Not expression in
+    if depth >= 12 then direct
+    else
+      match expression with
+      | E.Unary { f = E.Not; x; _ } -> x
+      | E.Binary { f = E.And; x; y; _ } ->
+          choose [ direct; E.binary E.Or (visit (depth + 1) x) (visit (depth + 1) y) ]
+      | E.Binary { f = E.Or; x; y; _ } ->
+          choose [ direct; E.binary E.And (visit (depth + 1) x) (visit (depth + 1) y) ]
+      | E.Binary { f = E.Xor; x; y; _ } ->
+          choose [ direct; E.binary E.Xor (visit (depth + 1) x) y;
+                   E.binary E.Xor x (visit (depth + 1) y) ]
+      | E.Cst value when Bitvector.is_zeros value ->
+          E.constant (Bitvector.fill (Bitvector.size_of value))
+      | E.Cst value when Bitvector.is_fill value ->
+          E.constant (Bitvector.zeros (Bitvector.size_of value))
+      | _ -> direct
+  in
+  visit 0 expression
+
+let not_pushdown_candidate cost expression =
+  if cost expression > 64 then None
+  else match expression with
+    | E.Unary { f = E.Not; x; _ } ->
+        let candidates =
+          demorgan_not x ::
+          (match x with
+          | E.Binary { f = E.Minus; x = left; y = right; _ } ->
+              [ E.binary E.Plus right (demorgan_not left) ]
+          | _ -> [])
+        in
+        (candidates
+         |> List.filter (fun candidate -> cost candidate < cost expression)
+         |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+         |> function candidate :: _ -> Some candidate | [] -> None)
+    | _ -> None
 
 let rec linear_candidates_with_rings ?(opaque_atoms = [])
     ?(max_atoms = !c_normalization_max_atoms) ?(semantic_bitwise = false)
@@ -307,16 +337,28 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
       let terms = List.filter (fun (coefficient, _) ->
           not (Z.equal (normalize coefficient) Z.zero)) terms in
       let build values =
-        let values =
+        let negative, positive =
+          List.partition (fun (coefficient, _) ->
+              Z.equal (normalize coefficient) mask) values
+        in
+        let positive =
           (if Z.equal (normalize offset) Z.zero then []
            else [ constant width (normalize offset) ])
           @ List.map (fun (coefficient, body) ->
-                scale (normalize coefficient) body) values
+                scale (normalize coefficient) body) positive
         in
-        match values with
-        | [] -> zeros width
-        | [ value ] -> value
-        | values -> build_balanced E.Plus values
+        let base = match positive with
+          | [] -> None | [ value ] -> Some value
+          | values -> Some (build_balanced E.Plus values)
+        in
+        match base, List.map snd negative with
+        | None, [] -> zeros width
+        | None, head :: tail ->
+            List.fold_left (fun total body -> E.binary E.Minus total body)
+              (E.unary E.Minus head) tail
+        | Some value, negatives ->
+            List.fold_left (fun total body -> E.binary E.Minus total body)
+              value negatives
       in
       offer (build terms);
       if not (Z.equal (normalize offset) Z.zero) then
