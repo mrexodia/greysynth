@@ -2791,6 +2791,35 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-57 zero-SMT GF2 certification and dead-branch pruning
+
+Round 57 adds the masked-GF2 equality fast path to `semilinear_mba_mod2w`,
+covering constants, NOT, XOR, constant masks, and sound disjoint AND/OR forms
+with up to 64 atoms. Root and DAG GF2 producers now use compositional zero-SMT
+certification only; all 0.50-second SMT fallbacks were removed. Positive
+10-atom and negative unequal-mask/overlapping-OR Bitwuzla cross-tests pass.
+
+The universal bitwise prepass remains enabled, post-DAG GF2 recovery is added,
+and low-k annihilating multiplication/AND/OR/shift branches now return
+zero/fill without recursively traversing dead operands. `test/round57_test.ml`
+and the full warning-clean `make test` gate pass.
+
+Final artifacts are `/tmp/r57-smoke/out.jsonl`, `/tmp/r57-leeky-dev64/out.jsonl`,
+`/tmp/r57-l5/out.jsonl`, and `/tmp/r57-core/out.jsonl`. All 1,444 rows establish
+with zero refutations, unknowns, errors, or audit timeouts.
+
+| Gate | Established | Exact <= GT | Quality before -> after | Strict decreases |
+|---|---:|---:|---:|---:|
+| Leeky dev (all rows) | 884/884 | 529* | 8.4523x -> 1.8737x | 844/884 |
+| Shrunk Tigress L5 | 170/170 | 3 | 12.5127x -> 12.8800x | 168/170 |
+| Refreshed core hard | 328/328 | 19 | 7.1129x -> 6.2427x | 305/328 |
+| Regression smoke | 62/62 | 56** | 0.7846x -> 0.8018x | 62/62 |
+
+`*` Leeky count includes four controls. `**` Smoke exact counts cover 58 usable
+GT rows. Round 57 improves the dev aggregate and retains the smoke exact record,
+but misses the requested smoke quality, capabilities/frontier, L5, and core
+targets.
+
 ## Round-55 masked-GF2 proof acceleration and universal bitwise prepass
 
 Round 55 adds exact masked-XOR normalization at roots and DAG nodes, plus a

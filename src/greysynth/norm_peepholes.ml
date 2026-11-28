@@ -665,26 +665,20 @@ let lowk_restrict_pushdown expression =
                   when outer_hi >= hi -> low x
                 | E.Binary { f = E.Plus; x; y; _ } -> simp_add (low x) (low y)
                 | E.Binary { f = E.Minus; x; y; _ } -> simp_sub (low x) (low y)
-                | E.Binary { f = E.Mul; x = E.Cst value; y; _ }
-                  when divisible value ->
-                    annihilated := true; E.binary E.Mul (low y) zero
-                | E.Binary { f = E.Mul; x; y = E.Cst value; _ }
-                  when divisible value ->
-                    annihilated := true; E.binary E.Mul (low x) zero
+                | E.Binary { f = E.Mul; x = E.Cst value; _ }
+                  when divisible value -> annihilated := true; zero
+                | E.Binary { f = E.Mul; y = E.Cst value; _ }
+                  when divisible value -> annihilated := true; zero
                 | E.Binary { f = E.Mul; x; y; _ } -> simp_mul (low x) (low y)
-                | E.Binary { f = E.And; x = E.Cst value; y; _ }
-                  when divisible value ->
-                    annihilated := true; E.binary E.And (low y) zero
-                | E.Binary { f = E.And; x; y = E.Cst value; _ }
-                  when divisible value ->
-                    annihilated := true; E.binary E.And (low x) zero
+                | E.Binary { f = E.And; x = E.Cst value; _ }
+                  when divisible value -> annihilated := true; zero
+                | E.Binary { f = E.And; y = E.Cst value; _ }
+                  when divisible value -> annihilated := true; zero
                 | E.Binary { f = E.And; x; y; _ } -> simp_and (low x) (low y)
-                | E.Binary { f = E.Or; x = E.Cst value; y; _ }
-                  when full value ->
-                    annihilated := true; E.binary E.Or (low y) fill
-                | E.Binary { f = E.Or; x; y = E.Cst value; _ }
-                  when full value ->
-                    annihilated := true; E.binary E.Or (low x) fill
+                | E.Binary { f = E.Or; x = E.Cst value; _ }
+                  when full value -> annihilated := true; fill
+                | E.Binary { f = E.Or; y = E.Cst value; _ }
+                  when full value -> annihilated := true; fill
                 | E.Binary { f = E.Or; x; y; _ } -> simp_or (low x) (low y)
                 | E.Binary { f = E.Xor; x; y; _ } -> simp_xor (low x) (low y)
                 | E.Binary { f = E.Lsl; x; y; _ } ->
@@ -692,7 +686,7 @@ let lowk_restrict_pushdown expression =
                     | Some count ->
                         let count = Bitvector.value_of count in
                         if Z.sign count >= 0 && Z.geq count (Z.of_int width) then (
-                          annihilated := true; E.binary E.And (low x) zero)
+                          annihilated := true; zero)
                         else if Z.sign count >= 0 then
                           E.binary E.Lsl (low x) (constant width count)
                         else lhs
