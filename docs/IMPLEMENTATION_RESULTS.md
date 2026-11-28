@@ -2791,6 +2791,27 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-66 Shannon MUX and separable Boolean polish
+
+Round 66 adds cost-minimized Shannon XOR/OR MUX forms, exact four-variable 2+2
+separable Boolean decomposition, and direct top-level complement-subtraction
+rewrites. `test/round66_test.ml` covers the new arithmetic NOT form.
+
+Artifacts are `/tmp/r66-smoke/out.jsonl`, `/tmp/r66-leeky-dev64/out.jsonl`,
+`/tmp/r66-l5/out.jsonl`, and `/tmp/r66-core/out.jsonl`. Parallel runs have zero
+refutations; one core row timed out under contention.
+
+| Gate | Established | Exact <= GT | Quality before -> after | Strict decreases |
+|---|---:|---:|---:|---:|
+| Leeky dev (all rows) | 884/884 | 575* | 8.4523x -> 1.8302x | 877/884 |
+| Shrunk Tigress L5 | 165/165 | 6 | 12.3980x -> 10.8330x | 165/165 |
+| Refreshed core hard | 276/277 | 43 | 7.7752x -> 7.1348x | 276/277 |
+| Regression smoke | 62/62 | 57** | 0.7846x -> 0.8005x | 62/62 |
+
+`*` Includes controls. `**` Smoke exact counts cover 58 usable-GT rows. Round 66
+sets new exact-count records on dev and smoke while preserving all strict smoke
+and L5 rows. One core contention timeout remains.
+
 ## Round-65 Shannon and separable Boolean synthesis
 
 Round 65 adds cost-minimizing XOR/OR Shannon MUX candidates, exact four-variable

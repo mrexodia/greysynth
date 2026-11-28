@@ -47,7 +47,27 @@ let demorgan_not expression =
 
 let not_pushdown_candidate cost expression =
   if cost expression > 64 then None
-  else match expression with
+  else
+    let choose candidates =
+      candidates
+      |> List.filter (fun candidate -> cost candidate < cost expression)
+      |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+      |> function candidate :: _ -> Some candidate | [] -> None
+    in
+    match expression with
+    | E.Binary { f = E.Minus;
+                 x = E.Unary { f = E.Not; x = a; _ };
+                 y = E.Unary { f = E.Not; x = b; _ }; _ } ->
+        choose [ E.binary E.Minus b a ]
+    | E.Binary { f = E.Minus;
+                 x = E.Unary { f = E.Not; x = a; _ };
+                 y = E.Binary { f = E.Plus;
+                       x = E.Unary { f = E.Not; x = b; _ }; y = c; _ }; _ }
+    | E.Binary { f = E.Minus;
+                 x = E.Unary { f = E.Not; x = a; _ };
+                 y = E.Binary { f = E.Plus;
+                       x = c; y = E.Unary { f = E.Not; x = b; _ }; _ }; _ } ->
+        choose [ E.binary E.Minus (E.binary E.Minus b a) c ]
     | E.Unary { f = E.Not; x; _ } ->
         let candidates =
           demorgan_not x ::
@@ -72,10 +92,7 @@ let not_pushdown_candidate cost expression =
               [ E.binary E.Plus right (demorgan_not left) ]
           | _ -> [])
         in
-        (candidates
-         |> List.filter (fun candidate -> cost candidate < cost expression)
-         |> List.sort (fun left right -> Int.compare (cost left) (cost right))
-         |> function candidate :: _ -> Some candidate | [] -> None)
+        choose candidates
     | _ -> None
 
 let rec linear_candidates_with_rings ?(opaque_atoms = [])
@@ -482,8 +499,11 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
             shannon := E.binary E.Or (demorgan_not pivot_atom) s1 :: !shannon;
           if f1 = (15 lxor f0) then
             shannon := E.binary E.Xor pivot_atom s0 :: !shannon;
+          let delta = synth2 u v (f0 lxor f1) in
           shannon := E.binary E.Xor
-              (E.binary E.And pivot_atom (E.binary E.Xor s0 s1)) s0 :: !shannon;
+              (E.binary E.And pivot_atom delta) s0 :: !shannon;
+          shannon := E.binary E.Xor
+              (E.binary E.And (demorgan_not pivot_atom) delta) s1 :: !shannon;
           if f0 land (15 lxor f1) = 0 then
             shannon := E.binary E.Or s0 (E.binary E.And pivot_atom s1) :: !shannon
         done);
@@ -649,8 +669,11 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
           if f1 = 15 then booleans := E.binary E.Or p s0 :: !booleans;
           if f0 = 15 then booleans := E.binary E.Or (demorgan_not p) s1 :: !booleans;
           if f1 = (15 lxor f0) then booleans := E.binary E.Xor p s0 :: !booleans;
+          let delta = synth2 u v (f0 lxor f1) in
           booleans := E.binary E.Xor
-              (E.binary E.And p (E.binary E.Xor s0 s1)) s0 :: !booleans;
+              (E.binary E.And p delta) s0 :: !booleans;
+          booleans := E.binary E.Xor
+              (E.binary E.And (demorgan_not p) delta) s1 :: !booleans;
           if f0 land (15 lxor f1) = 0 then
             booleans := E.binary E.Or s0 (E.binary E.And p s1) :: !booleans
         done);
