@@ -2791,6 +2791,29 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-62 constant-absorption fix
+
+Round 62 fixes the absorbed-sum builder so the absorbed `(-c, ~B)` term is
+rebuilt with zero constant offset, enabling subtraction-form results instead of
+an extra negated-addition node. The asymmetric two-variable OR/AND basis uses
+the corrected truth-table indexing, and masked-GF2 producer limits remain at 64
+terms, cost 65,536, and DAG size 8,192. `test/round62_test.ml` passes.
+
+Artifacts are `/tmp/r62-smoke/out.jsonl`, `/tmp/r62-leeky-dev64/out.jsonl`,
+`/tmp/r62-l5/out.jsonl`, and `/tmp/r62-core/out.jsonl`. Parallel runs have zero
+refutations; one core row timed out under contention.
+
+| Gate | Established | Exact <= GT | Quality before -> after | Strict decreases |
+|---|---:|---:|---:|---:|
+| Leeky dev (all rows) | 884/884 | 531* | 8.4523x -> 1.7879x | 877/884 |
+| Shrunk Tigress L5 | 165/165 | 3 | 12.3980x -> 11.5952x | 165/165 |
+| Refreshed core hard | 276/277 | 16 | 7.7752x -> 7.7303x | 276/277 |
+| Regression smoke | 62/62 | 56** | 0.7846x -> 0.8041x | 62/62 |
+
+`*` Includes controls. `**` Smoke exact counts cover 58 usable-GT rows. Dev
+quality remains near the all-time record, while smoke narrowly misses and the
+newly pruned core frontier shows one contention timeout.
+
 ## Round-61 cost-minimizing De Morgan reconstruction
 
 Round 61 adds bounded cost-minimizing De Morgan pushdown, including XOR

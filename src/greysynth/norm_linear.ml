@@ -336,14 +336,14 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
     let offer_linear_sum offset terms =
       let terms = List.filter (fun (coefficient, _) ->
           not (Z.equal (normalize coefficient) Z.zero)) terms in
-      let build values =
+      let build const_offset values =
         let negative, positive =
           List.partition (fun (coefficient, _) ->
               Z.equal (normalize coefficient) mask) values
         in
         let positive =
-          (if Z.equal (normalize offset) Z.zero then []
-           else [ constant width (normalize offset) ])
+          (if Z.equal (normalize const_offset) Z.zero then []
+           else [ constant width (normalize const_offset) ])
           @ List.map (fun (coefficient, body) ->
                 scale (normalize coefficient) body) positive
         in
@@ -360,22 +360,17 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
             List.fold_left (fun total body -> E.binary E.Minus total body)
               value negatives
       in
-      offer (build terms);
+      offer (build offset terms);
       if not (Z.equal (normalize offset) Z.zero) then
         List.iteri (fun index (coefficient, body) ->
             if Z.equal (normalize coefficient) (normalize offset) then
-              let absorbed =
-                scale (normalize (Z.neg offset)) (demorgan_not body)
-              in
               let remaining =
                 terms |> List.mapi (fun i term -> i, term)
                 |> List.filter_map (fun (i, term) ->
                        if i = index then None else Some term)
-                |> List.map (fun (c, value) -> scale (normalize c) value)
               in
-              offer (match remaining with
-                | [] -> absorbed
-                | values -> build_balanced E.Plus (absorbed :: values)))
+              offer (build Z.zero
+                ((normalize (Z.neg offset), demorgan_not body) :: remaining)))
           terms
     in
     let combine op identity terms =
