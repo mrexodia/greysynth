@@ -129,11 +129,46 @@ def load_overlays(paths: list[str]) -> dict[tuple[str, str], dict]:
                     except Exception:
                         pass
                 if not origin_suite or not origin_id:
-                    # Fallback: parse <prefix>/<suite>/<origin_id_with___>
-                    parts = str(row.get("id", "")).split("/")
-                    if len(parts) >= 3:
-                        origin_suite = parts[-2]
-                        origin_id = parts[-1].replace("__", "/")
+                    # Fallback 1: parse source path .../<suite>/<origin_id_with___>.json
+                    known_suites = {k for k, _, _ in SUITES}
+                    if src:
+                        sp = Path(src)
+                        if sp.parent.name in known_suites:
+                            origin_suite = sp.parent.name
+                            origin_id = sp.stem.replace("__", "/")
+                    # Fallback 2: parse <prefix>/<suite>/<origin_id_with___> or <suite>/<origin_id_with___>
+                    if not origin_suite or not origin_id:
+                        parts = str(row.get("id", "")).split("/")
+                        if len(parts) >= 2:
+                            cand_suite = parts[-2]
+                            cand_id = parts[-1].replace("__", "/")
+                            if cand_suite in known_suites:
+                                origin_suite = cand_suite
+                                origin_id = cand_id
+                            else:
+                                # Map common id prefixes to canonical suite keys
+                                prefix = cand_id.split("/")[0] if "/" in cand_id else ""
+                                prefix_map = {
+                                    "mba_obfuscator": "c_mba_obfuscator",
+                                    "tigress_lvl_5": "tigress_l5",
+                                    "tigress_lvl_6": "tigress_l6",
+                                    "tigress_lvl_7": "tigress_l7",
+                                    "tigress_lvl_8": "tigress_l8",
+                                    "loki_tiny": "loki_tiny",
+                                    "loki": "loki",
+                                    "floki": "floki",
+                                    "omvll": "omvll",
+                                    "qsynth_ea": "qsynth_ea",
+                                    "pldi_poly": "pldi_poly",
+                                    "pldi_nonpoly": "pldi_nonpoly",
+                                    "mba_obf_nonlinear": "mba_obf_nonlinear",
+                                    "mba_flatten": "mba_flatten",
+                                    "neureduce": "neureduce",
+                                    "oses": "oses",
+                                }
+                                if prefix in prefix_map:
+                                    origin_suite = prefix_map[prefix]
+                                    origin_id = cand_id
                 if origin_suite and origin_id:
                     overlays[(origin_suite, origin_id)] = row
                     loaded += 1
