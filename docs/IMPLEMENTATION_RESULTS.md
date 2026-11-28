@@ -2791,6 +2791,18 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-68 sprint: nested opaque GF2 canonicalization
+
+Round 68 records canonical replacements for every rebuilt opaque-atom node,
+allowing nested AC permutations to rewrite the original source correctly. Root
+GF2 recovery now tries both the full root and substantial children of arithmetic
+wrappers, while the non-shared 1.2-second prepass is limited to roots above cost
+1024. `test/round68_test.ml` passes and the project builds warning-clean.
+
+The fast smoke artifact `/tmp/r68-smoke/out.jsonl` establishes all 62 rows with
+zero refutations and 62 strict decreases. It retains 56/58 exact-or-better but
+quality regresses to `0.8981x`, missing the sprint quality target.
+
 ## Round-67 sprint: mask-bucket linear partitioning
 
 Round 67 partitions large additive expressions by their unique non-uniform

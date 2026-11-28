@@ -525,13 +525,31 @@ let run_preprocessing gt input =
      && dag_size_bounded ~limit:4096 !best <= 4096
      && not !g_has_timedout
   then best := Normalization.dag_constant_cast_simplify !best;
-  (match Normalization.gf2_masked_xor_candidate_with_bridges size_of_expr !best with
-  | Some (candidate, ring_equalities, linear_mba_equalities, rewritten_source)
-    when Rewrite.accepts_compositional ~pass:"root-gf2-masked-xor"
-           ~equalities:[] ~ring_equalities ~linear_mba_equalities
-           ~semilinear_mba_equalities:[ rewritten_source, candidate ]
-           !best candidate -> best := candidate
-  | _ -> ());
+  let run_root_gf2_masked_xor ~pass () =
+    let original = !best in
+    let attempt source rebuild =
+      match Normalization.gf2_masked_xor_candidate_with_bridges size_of_expr source with
+      | Some (candidate, ring_equalities, linear_mba_equalities, rewritten_source) ->
+          let full = rebuild candidate in
+          if Rewrite.accepts_compositional ~pass ~equalities:[]
+               ~ring_equalities ~linear_mba_equalities
+               ~semilinear_mba_equalities:[ rewritten_source, candidate ]
+               original full
+          then (best := full; true) else false
+      | None -> false
+    in
+    if not (attempt original Fun.id) then
+      let children = match original with
+        | Sexpr.Expr.Unary { f; x; _ } -> [ x, (fun value -> Sexpr.Expr.unary f value) ]
+        | Sexpr.Expr.Binary { f = (Sexpr.Expr.Plus | Sexpr.Expr.Minus | Sexpr.Expr.Mul as f); x; y; _ } ->
+            [ x, (fun value -> Sexpr.Expr.binary f value y);
+              y, (fun value -> Sexpr.Expr.binary f x value) ]
+        | _ -> []
+      in
+      ignore (List.find_opt (fun (child, rebuild) ->
+          size_of_expr child >= 128 && attempt child rebuild) children)
+  in
+  run_root_gf2_masked_xor ~pass:"root-gf2-masked-xor" ();
   if size_of_expr !best > 512 && size_of_expr !best <= 16_384
      && not (Normalization.has_bitwise_operator !best)
      && not !g_has_timedout
@@ -593,7 +611,8 @@ let run_preprocessing gt input =
     in
     let local_budget =
       if shared then 1.5
-      else if Normalization.has_bitwise_operator !best
+      else if size_of_expr !best > 1024
+              && Normalization.has_bitwise_operator !best
               && not (Normalization.linear_mba_compatible !best) then 1.2
       else if exposed_product then 1.0 else 0.0 in
     let local_deadline = Unix.gettimeofday () +. local_budget in
@@ -609,13 +628,7 @@ let run_preprocessing gt input =
       let after_size = size_of_expr !best and after_dag = dag_size_of_expr !best in
       improving := after_size < before_size || after_dag < before_dag
     done);
-  (match Normalization.gf2_masked_xor_candidate_with_bridges size_of_expr !best with
-  | Some (candidate, ring_equalities, linear_mba_equalities, rewritten_source)
-    when Rewrite.accepts_compositional ~pass:"post-dag-gf2-masked-xor"
-           ~equalities:[] ~ring_equalities ~linear_mba_equalities
-           ~semilinear_mba_equalities:[ rewritten_source, candidate ]
-           !best candidate -> best := candidate
-  | _ -> ());
+  run_root_gf2_masked_xor ~pass:"post-dag-gf2-masked-xor" ();
   let run_small_dag () =
     if not !g_has_timedout && size_of_expr !best >= 15
        && size_of_expr !best <= 512

@@ -160,6 +160,7 @@ let gf2_masked_xor_candidate_with_bridges cost expression =
                 candidate
           | _ -> rebuilt
         in
+        if not (E.is_equal node result) then Nodes.replace replacements node result;
         Nodes.add memo node result; result
   in
   match gf2_masked_xor_candidate ~canonical_atom:(canonical 0) cost expression with
