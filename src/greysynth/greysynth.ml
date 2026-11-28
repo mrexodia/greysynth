@@ -315,17 +315,21 @@ let run_preprocessing gt input =
           Normalization.linear_candidates ~max_atoms:8 size_of_expr !best
           |> List.map (fun candidate -> candidate, [], !best)
       in
-      match
+      let proposals =
         proposals
         |> List.sort (fun (left, _, _) (right, _, _) ->
                Int.compare (size_of_expr left) (size_of_expr right))
-      with
-      | (candidate, ring_equalities, rewritten_source) :: _
-        when Rewrite.accepts_compositional ~pass:"root-linear-group"
-               ~equalities:[] ~ring_equalities
-               ~linear_mba_equalities:[ rewritten_source, candidate ]
-               !best candidate -> best := candidate
-      | _ -> ()
+      in
+      (match List.find_opt
+         (fun (candidate, ring_equalities, rewritten_source) ->
+           Rewrite.accepts_compositional ~pass:"root-linear-group"
+             ~equalities:[] ~ring_equalities
+             ~linear_mba_equalities:[ rewritten_source, candidate ]
+             !best candidate)
+         proposals
+       with
+      | Some (candidate, _, _) -> best := candidate
+      | None -> ())
   in
   let run_root_semantic_probes ?(max_size = 2048) ?(timeout = 0.80) () =
     let current_size = size_of_expr !best in

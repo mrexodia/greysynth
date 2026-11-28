@@ -135,7 +135,8 @@ let samples_agree original candidate =
 
 let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
     ?(linear_mba_equalities = []) ?(semilinear_mba_equalities = [])
-    ?(timeout = float_of_int !c_equiv_timeout) ~pass ~equalities original candidate =
+    ?(timeout = float_of_int !c_equiv_timeout) ?(allow_equal_cost = false)
+    ~pass ~equalities original candidate =
   let record_equalities () =
     Option.iter
       (fun journal ->
@@ -160,7 +161,8 @@ let accepts_compositional ?(ring_equalities = []) ?(poly_equalities = [])
   if Sexpr.Expr.sizeof original <> Sexpr.Expr.sizeof candidate then (
     last_rejection := "width_mismatch";
     false)
-  else if size_of_expr candidate >= size_of_expr original then (
+  else if (if allow_equal_cost then size_of_expr candidate > size_of_expr original
+           else size_of_expr candidate >= size_of_expr original) then (
     last_rejection := "not_smaller";
     false)
   else (

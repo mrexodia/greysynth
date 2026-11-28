@@ -2061,3 +2061,81 @@ new boundary-consistent local proof changes `tigress_l6__target_3259` from size
 7 to size 212. Frontier quality and stress coverage improve substantially, and
 long-frontier partially recovers from 37 to 39 hits, but frontier reference
 hits fall from 3 to 0. These regressions remain explicit follow-up items.
+
+## Round-48 dual boundaries, cast masks, and bitwise canonicalization
+
+Round 48 decouples bitwise stopping from ring bridges in the linear producer.
+For bounded expressions containing compound bitwise atoms it always evaluates
+three monotonic alternatives: stop-aware ring-bridged recovery, no-stop
+ring-bridged recovery, and the compatibility no-stop/no-ring pass. Candidates
+are deduplicated and sorted by configured cost, and DAG, root, and top-level
+normalization try candidates in order until one certifies. Large roots retain
+the compatibility path to preserve established giant-DAG behavior.
+
+Constant intersection lifting now handles both sign and zero extension. Sign
+extension accepts low masks whose widened upper bits are zero; zero extension
+compares only the meaningful low bits, allowing wide masks with arbitrary high
+bits. Each lift remains an explicit abstract equality in the existing product
+certificate.
+
+A recursive AC canonicalizer flattens and sorts nested `&`, `|`, and `^`
+subtrees before bounded polynomial expansion. Equal-cost `Plus -> Xor`
+canonicalization is available when both operands are pure bitwise trees and the
+linear kernel proves disjointness. Semi-linear recovery can retry with up to
+four maximal repeated opaque subterms, excluding simple constant-mask wrappers.
+All new equal-cost steps are deterministic algebraic descents and use existing
+linear/semi-linear/ring proof rules. `src/proof/rewrite_proof.ml` is unchanged.
+
+`test/round48_test.ml` covers dual-boundary candidate merging, `sext` and
+high-bit-don't-care `uext` mask lifting, recursive majority-style AC/ring
+cancellation, repeated opaque semi-linear recovery, disjoint-sum
+canonicalization, and independent replay. The complete warning-clean
+`make test` gate passes; the held-out balanced panel was not evaluated.
+
+Final artifacts:
+
+```text
+/tmp/r48-smoke/out.jsonl
+/tmp/r48-leeky-dev64/out.jsonl
+/tmp/r48-l5/out.jsonl
+/tmp/r48-core/out.jsonl
+```
+
+All 1,539 rows establish with zero refutations, errors, or audit timeout
+verdicts. Leeky dev establishes all 884 rows; among 880 transformed rows, 833
+strictly decrease and 461 reach or beat reference after a strict reduction.
+Aggregate quality improves from `2.3475x` to `2.2310x`; all four controls remain
+unchanged.
+
+| Leeky dev panel | Baseline hits -> R48 hits | Baseline quality -> R48 quality | R48 strict reductions |
+|---|---:|---:|---:|
+| mba-capabilities-v1 | 33 -> 33 | 3.3337x -> 3.3374x | 71/71 |
+| mba-capabilities-v2 | 34 -> 34 | 1.1037x -> 1.1062x | 43/44 |
+| mba-composition-v1 | 47 -> 45 | 1.1365x -> 1.1549x | 52/54 |
+| mba-extra-floor-v1 | 19 -> 22 | 1.4569x -> 1.3375x | 54/54 |
+| mba-frontier64-v1 | 3 -> 0 | 22.7000x -> 22.9149x | 67/96 |
+| mba-gaps-v1 | 55 -> 53 | 1.1124x -> 1.1137x | 72/72 |
+| mba-interactions-v1 | 23 -> 22 | 0.9364x -> 0.9476x | 33/33 |
+| mba-ladders-v1 | 39 -> 47 | 1.2743x -> 1.1645x | 72/72 |
+| mba-long-frontier-v1 | 44 -> 41 | 1.6318x -> 1.8450x | 70/72 |
+| mba-majority-v1 | 34 -> 33 | 1.3835x -> 1.3787x | 54/54 |
+| mba-projection-v1 | 51 -> 46 | 1.1375x -> 1.3267x | 54/54 |
+| mba-proof-context-v1 | 12 -> 12 | 1.5744x -> 1.5780x | 36/36 |
+| mba-stress64-v1 | 0 -> 5 | 11.2614x -> 6.4660x | 83/96 |
+| mba-tight-v1 | 68 -> 68 | 1.0377x -> 1.0395x | 72/72 |
+| **Overall transformed** | **462 -> 461** | **2.3475x -> 2.2310x** | **833/880** |
+
+| Regression gate | Established | Exact <= GT | Quality before -> after | Better / equal / worse | Strict decreases |
+|---|---:|---:|---:|---:|---:|
+| Shrunk Tigress L5 | 251/251 | 45 | 10.5590x -> 6.5524x | 132 / 36 / 83 | 249 |
+| Refreshed core hard | 342/342 | 25* | 7.0702x -> 5.3601x | 89 / 218 / 34 | 329 |
+| Regression smoke | 62/62 | 52* | 0.7846x -> 0.9590x | 5 / 48 / 9 | 60 |
+
+`*` Core exact counts cover 341 rows with usable GT; smoke exact counts cover 58.
+The requested smoke target is not met: `multivariate64__line_0000002` and
+`oses__line_0000240` are net-neutral under eight workers, and smoke quality is
+`0.9590x`. The bounded large-root compatibility gate preserves the flagship
+giant-DAG tests but leaves `tigress_l6__target_3259` at size 195 in the
+parallel gate. Stress coverage rises from zero to five hits and
+long-frontier recovers to 41, while majority and proof-context do not achieve
+the requested jumps. These are retained as explicit Round-49 blockers.

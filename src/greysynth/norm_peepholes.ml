@@ -743,6 +743,42 @@ let build_balanced op = function
       in
       build terms
 
+let recursive_bitwise_ac_candidate expression =
+  let memo = Nodes.create 128 and equalities = ref [] in
+  let rec flatten operation acc = function
+    | E.Binary { f; x; y; _ } when f = operation ->
+        flatten operation (flatten operation acc x) y
+    | value -> value :: acc
+  in
+  let rec visit node =
+    match Nodes.find_opt memo node with
+    | Some result -> result
+    | None ->
+        let rebuilt =
+          match node with
+          | E.Unary { f; x; _ } -> E.unary f (visit x)
+          | E.Binary { f; x; y; _ } -> E.binary f (visit x) (visit y)
+          | E.Ite { c; t; e; _ } -> E.ite (visit c) (visit t) (visit e)
+          | _ -> node
+        in
+        let result =
+          match rebuilt with
+          | E.Binary { f = (E.And | E.Or | E.Xor as operation); _ } ->
+              let canonical =
+                flatten operation [] rebuilt |> List.sort E.compare
+                |> build_balanced operation
+              in
+              if not (E.is_equal rebuilt canonical) then
+                equalities := (rebuilt, canonical) :: !equalities;
+              canonical
+          | _ -> rebuilt
+        in
+        Nodes.add memo node result;
+        result
+  in
+  let candidate = visit expression in
+  if !equalities = [] then None else Some (candidate, List.rev !equalities)
+
 (* Exact associative/commutative candidates. These rules do not depend on
    finite truth tables; the shared acceptance boundary still proves every
    size-reducing result. *)

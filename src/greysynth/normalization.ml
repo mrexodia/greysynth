@@ -82,6 +82,25 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
     in
     visit root
   in
+  let pure_bitwise root =
+    let memo = Nodes.create 32 in
+    let rec visit node =
+      match Nodes.find_opt memo node with
+      | Some result -> result
+      | None ->
+          let result =
+            match node with
+            | E.Var _ | E.Cst _ -> true
+            | E.Unary { f = E.Not; x; _ } -> visit x
+            | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
+                visit x && visit y
+            | _ -> false
+          in
+          Nodes.add memo node result;
+          result
+    in
+    visit root
+  in
   let semilinear_shape root =
     let memo = Nodes.create 32 in
     let rec visit node =
@@ -224,18 +243,42 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
               linear_candidates ~max_atoms cost !result
               |> List.map (fun candidate -> candidate, [], !result)
           in
-          match
+          let proposals =
             proposals
             |> List.sort (fun (left, _, _) (right, _, _) ->
                    Int.compare (cost left) (cost right))
-          with
-          | (candidate, _, _ as proposal) :: _ when accept_linear proposal ->
-              result := candidate
-          | _ -> ());
-        (match semilinear_mba_candidate cost !result with
+          in
+          (match List.find_opt accept_linear proposals with
+          | Some (candidate, _, _) -> result := candidate
+          | None -> ()));
+        (match
+           if expression_cost <= 16_384 then semilinear_mba_candidate cost !result
+           else semilinear_mba_candidate_with_atoms cost !result
+         with
         | Some candidate
           when Rewrite.accepts_compositional ~pass:"dag-semilinear-mba"
                  ~equalities:[] ~semilinear_mba_equalities:[ !result, candidate ]
+                 !result candidate -> result := candidate
+        | _ -> ());
+        (match !result with
+        | E.Binary { f = E.Plus; x; y; _ }
+          when expression_cost <= 16_384 && cost !result <= 24
+               && pure_bitwise x && pure_bitwise y ->
+            let candidate = E.binary E.Xor x y in
+            if Rewrite.samples_agree !result candidate
+               && Rewrite.accepts_compositional ~allow_equal_cost:true
+                    ~pass:"dag-disjoint-sum-xor" ~equalities:[]
+                    ~linear_mba_equalities:[ !result, candidate ]
+                    !result candidate
+            then result := candidate
+        | _ -> ());
+        (match
+           if expression_cost <= 16_384 && cost !result <= 512
+           then recursive_bitwise_ac_candidate !result else None
+         with
+        | Some (candidate, linear_mba_equalities)
+          when Rewrite.accepts_compositional ~allow_equal_cost:true
+                 ~pass:"dag-bitwise-ac" ~equalities:[] ~linear_mba_equalities
                  !result candidate -> result := candidate
         | _ -> ());
         if Greysynth_utils.Utils.dag_size_bounded ~limit:512 !result <= 512 then (
@@ -660,18 +703,20 @@ let run ?deadline expression =
                   || cost !current < 4 || cost !current > 16_384
                then None
                else
-                 match
+                 let proposals =
                    linear_candidates_with_rings cost !current
                    |> List.sort (fun (left, _, _) (right, _, _) ->
                           Int.compare (cost left) (cost right))
-                 with
-                 | (candidate, ring_equalities, rewritten_source) :: _
-                   when Rewrite.accepts_compositional
+                 in
+                 Option.map (fun (candidate, _, _) -> candidate)
+                   (List.find_opt
+                      (fun (candidate, ring_equalities, rewritten_source) ->
+                        Rewrite.accepts_compositional
                           ~pass:"normalize-linear-mba" ~equalities:[]
                           ~ring_equalities
                           ~linear_mba_equalities:[ rewritten_source, candidate ]
-                          !current candidate -> Some candidate
-                 | _ -> None
+                          !current candidate)
+                      proposals)
              in
              let decomposed =
                match lowk_decomposed with

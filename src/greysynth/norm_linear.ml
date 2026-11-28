@@ -34,7 +34,7 @@ let rec demorgan_not expression =
 
 let rec linear_candidates_with_rings ?(opaque_atoms = [])
     ?(max_atoms = !c_normalization_max_atoms) ?(semantic_bitwise = false)
-    ?(ring_bridges = true) cost expression =
+    ?(ring_bridges = true) ?(bitwise_stops = true) cost expression =
   let width = E.sizeof expression in
   let modulus = Z.shift_left Z.one width in
   let mask = Z.pred modulus in
@@ -95,14 +95,16 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
     | _ -> original
   in
   let bitwise_linear_atoms = Nodes.create 32 in
-  let scan_linear_seen = Nodes.create 128 and scan_bitwise_seen = Nodes.create 128 in
+  let scan_linear_seen = Nodes.create 128 and scan_bitwise_seen = Nodes.create 128
+  and scan_count = ref 0 in
   let linear_position = function
     | E.Unary { f = E.Minus; _ }
     | E.Binary { f = (E.Plus | E.Minus | E.Mul | E.Lsl); _ } -> true
     | _ -> false
   in
   let rec scan_bitwise node =
-    if not (Nodes.mem scan_bitwise_seen node) then (
+    if !scan_count < 64 && not (Nodes.mem scan_bitwise_seen node) then (
+      incr scan_count;
       Nodes.add scan_bitwise_seen node ();
       match node with
       | E.Cst value when Bitvector.is_zeros value || Bitvector.is_fill value -> ()
@@ -113,7 +115,8 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
           Nodes.replace bitwise_linear_atoms (canonical_ac_atom value) ()
       | _ -> ())
   and scan_linear node =
-    if not (Nodes.mem scan_linear_seen node) then (
+    if !scan_count < 64 && not (Nodes.mem scan_linear_seen node) then (
+      incr scan_count;
       Nodes.add scan_linear_seen node ();
       match node with
       | E.Cst _ -> ()
@@ -131,9 +134,9 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
       | E.Binary { f = (E.And | E.Or | E.Xor); _ } -> scan_bitwise node
       | _ -> ())
   in
-  if ring_bridges then scan_linear expression;
+  if bitwise_stops then scan_linear expression;
   let is_bitwise_linear_atom expression =
-    ring_bridges
+    bitwise_stops
     && (Nodes.mem bitwise_linear_atoms expression
         || Nodes.mem bitwise_linear_atoms (canonical_ac_atom expression))
   in
@@ -662,19 +665,31 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
     let proposals =
       List.map (fun candidate -> candidate, ring_edges, rewritten_source) !results
     in
-    if proposals = [] && ring_bridges && Nodes.length bitwise_linear_atoms > 0 then
-      linear_candidates_with_rings ~opaque_atoms ~max_atoms ~semantic_bitwise
-        ~ring_bridges:false cost expression
+    if bitwise_stops && Nodes.length bitwise_linear_atoms > 0 then
+      let standard =
+        linear_candidates_with_rings ~opaque_atoms ~max_atoms ~semantic_bitwise
+          ~ring_bridges ~bitwise_stops:false cost expression
+      and compatible =
+        if ring_bridges then
+          linear_candidates_with_rings ~opaque_atoms ~max_atoms ~semantic_bitwise
+            ~ring_bridges:false ~bitwise_stops:false cost expression
+        else []
+      in
+      proposals @ standard @ compatible
+      |> List.sort_uniq (fun (left, _, _) (right, _, _) -> E.compare left right)
+      |> List.sort (fun (left, _, _) (right, _, _) ->
+             let order = Int.compare (cost left) (cost right) in
+             if order = 0 then E.compare left right else order)
     else proposals
   with Too_complex ->
-    if ring_bridges then
+    if bitwise_stops then
       linear_candidates_with_rings ~opaque_atoms ~max_atoms ~semantic_bitwise
-        ~ring_bridges:false cost expression
+        ~ring_bridges ~bitwise_stops:false cost expression
     else []
 
 let linear_candidates ?opaque_atoms ?max_atoms ?semantic_bitwise cost expression =
   linear_candidates_with_rings ?opaque_atoms ?max_atoms ?semantic_bitwise
-    ~ring_bridges:false cost expression
+    ~ring_bridges:false ~bitwise_stops:false cost expression
   |> List.map (fun (candidate, _, _) -> candidate)
 
 let is_semantically_bitwise cost expression =

@@ -25,7 +25,7 @@ let has_nonuniform_bitwise_constant expression =
   inspect false expression;
   !found
 
-let semilinear_mba_candidate cost expression =
+let semilinear_mba_candidate_with_atoms ?(opaque_atoms = []) cost expression =
   let width = E.sizeof expression in
   if width > 128 || cost expression > 4096
      || Greysynth_utils.Utils.dag_size_bounded ~limit:1024 expression > 1024
@@ -56,7 +56,8 @@ let semilinear_mba_candidate cost expression =
       let seen = if under_bitwise then bitwise_seen else linear_seen in
       if not (Nodes.mem seen node) then (
         Nodes.add seen node ();
-        if under_bitwise then
+        if List.exists (E.is_equal node) opaque_atoms then add_opaque node
+        else if under_bitwise then
           match node with
           | E.Cst value ->
               let z = Bitvector.value_of value in
@@ -270,6 +271,49 @@ let semilinear_mba_candidate cost expression =
             then best := Some candidate)
           !candidates;
         !best
+
+let semilinear_mba_candidate cost expression =
+  match semilinear_mba_candidate_with_atoms cost expression with
+  | Some _ as result -> result
+  | None when not (has_nonuniform_bitwise_constant expression) -> None
+  | None ->
+      let frequencies = Nodes.create 128 and expanded = Nodes.create 128 in
+      let rec count node =
+        Nodes.replace frequencies node
+          (1 + Option.value (Nodes.find_opt frequencies node) ~default:0);
+        if not (Nodes.mem expanded node) then (
+          Nodes.add expanded node ();
+          match node with
+          | E.Unary { x; _ } -> count x
+          | E.Binary { x; y; _ } -> count x; count y
+          | E.Ite { c; t; e; _ } -> count c; count t; count e
+          | _ -> ())
+      in
+      count expression;
+      let rec take count = function
+        | _ when count = 0 -> []
+        | [] -> []
+        | head :: tail -> head :: take (count - 1) tail
+      in
+      let opaque_atoms =
+        Nodes.fold
+          (fun node frequency result ->
+            if frequency >= 2 && E.sizeof node = E.sizeof expression
+               && cost node >= 3
+               && (match node with
+                   | E.Cst _ -> false
+                   | E.Binary { f = (E.And | E.Or | E.Xor);
+                                x = E.Cst _; _ }
+                   | E.Binary { f = (E.And | E.Or | E.Xor);
+                                y = E.Cst _; _ } -> false
+                   | _ -> true)
+            then node :: result else result)
+          frequencies []
+        |> List.sort (fun left right -> Int.compare (cost right) (cost left))
+        |> take 4
+      in
+      if opaque_atoms = [] then None
+      else semilinear_mba_candidate_with_atoms ~opaque_atoms cost expression
 
 let abstract_slice_candidate expression =
   let low_mask bits = Z.pred (Z.shift_left Z.one bits) in
@@ -685,6 +729,36 @@ let nonlinear_product_identity_candidate expression =
         (match parse x y with Some _ as result -> result | None -> parse y x)
     | _ -> None
   in
+  let lifted_constant_intersection a b actual =
+    let cast = function
+      | E.Unary { f = E.Uext amount; x; _ } -> Some (`Unsigned, amount, x)
+      | E.Unary { f = E.Sext amount; x; _ } -> Some (`Signed, amount, x)
+      | _ -> None
+    in
+    match cast a, b, actual with
+    | Some (kind, amount_a, low_a), E.Cst wide_mask,
+      E.Unary { f = E.Uext amount;
+                x = E.Binary { f = E.And; x; y; _ }; _ }
+      when amount = amount_a ->
+        let low_mask =
+          match x, y with
+          | E.Cst value, other when same other low_a -> Some value
+          | other, E.Cst value when same other low_a -> Some value
+          | _ -> None
+        in
+        Option.bind low_mask (fun value ->
+            let low_width = E.sizeof low_a in
+            let low_bits = Z.pred (Z.shift_left Z.one low_width) in
+            let low_value = Bitvector.value_of value
+            and wide_value = Bitvector.value_of wide_mask in
+            let matches =
+              match kind with
+              | `Unsigned -> Z.equal low_value (Z.logand wide_value low_bits)
+              | `Signed -> Z.equal low_value wide_value
+            in
+            if matches then Some [ actual, E.binary E.And a b ] else None)
+    | _ -> None
+  in
   let rec lifted_intersection a b actual =
     if commutative E.And a b actual then Some []
     else
@@ -695,20 +769,9 @@ let nonlinear_product_identity_candidate expression =
         when amount = amount_a && amount = amount_b
              && commutative E.And low_a low_b low_and ->
           Some [ actual, E.binary E.And a b ]
-      | E.Unary { f = E.Uext amount_a; x = low_a; _ }, E.Cst wide_mask,
-        E.Unary { f = E.Uext amount;
-                  x = E.Binary { f = E.And; x; y; _ }; _ }
-        when amount = amount_a ->
-          let low_mask =
-            match x, y with
-            | E.Cst value, other when same other low_a -> Some value
-            | other, E.Cst value when same other low_a -> Some value
-            | _ -> None
-          in
-          Option.bind low_mask (fun value ->
-              if Z.equal (Bitvector.value_of value) (Bitvector.value_of wide_mask)
-              then Some [ actual, E.binary E.And a b ] else None)
-      | E.Cst _, E.Unary { f = E.Uext _; _ }, _ ->
+      | (E.Unary { f = (E.Uext _ | E.Sext _); _ }), E.Cst _, _ ->
+          lifted_constant_intersection a b actual
+      | E.Cst _, (E.Unary { f = (E.Uext _ | E.Sext _); _ }), _ ->
           lifted_intersection b a actual
       | _ -> None
   in

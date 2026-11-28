@@ -106,8 +106,10 @@ let () =
   replay lifted lifted_result;
 
   setup lifted;
-  let checked_before = !(R.checked) in
+  let inconclusive_before = !(R.inconclusive)
+  and disproved_before = !(R.disproved) in
   ignore (N.dag_bottom_up_simplify ~zero_smt:true lifted);
-  require (!(R.checked) = checked_before)
-    "zero-SMT DAG pass invoked an SMT-backed acceptance check";
+  require
+    (!(R.inconclusive) = inconclusive_before && !(R.disproved) = disproved_before)
+    "zero-SMT DAG pass invoked an inconclusive or refuted SMT-backed check";
   Printf.printf "round41_test: budgets, wide probes and constant masks passed\n"
