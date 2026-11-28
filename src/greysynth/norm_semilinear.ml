@@ -27,8 +27,8 @@ let has_nonuniform_bitwise_constant expression =
 
 let gf2_masked_xor_candidate cost expression =
   let width = E.sizeof expression in
-  if width > 128 || cost expression < 11 || cost expression > 32_768
-     || Greysynth_utils.Utils.dag_size_bounded ~limit:4096 expression > 4096
+  if width > 128 || cost expression < 11 || cost expression > 65_536
+     || Greysynth_utils.Utils.dag_size_bounded ~limit:8192 expression > 8192
   then None
   else
     let mask = Z.pred (Z.shift_left Z.one width) in
@@ -89,7 +89,7 @@ let gf2_masked_xor_candidate cost expression =
                 else Z.zero, [ node, mask ]
             | atom -> Z.zero, [ atom, mask ]
           in
-          if List.length (snd result) > 48 then raise Too_complex;
+          if List.length (snd result) > 64 then raise Too_complex;
           Nodes.add memo node result; result
     in
     try

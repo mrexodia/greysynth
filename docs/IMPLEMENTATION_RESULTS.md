@@ -2791,6 +2791,29 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-60 asymmetric two-variable linear basis
+
+Round 60 fixes the two-variable truth-table indexing used by the `{x,y,x|y}`
+and `{x,y,x&y}` reconstructors and extends masked-GF2 producer limits to 64
+terms, cost 65,536, and DAG size 8,192. `test/round60_test.ml` and the complete
+warning-clean `make test` gate pass.
+
+Final artifacts are `/tmp/r60-smoke/out.jsonl`, `/tmp/r60-leeky-dev64/out.jsonl`,
+`/tmp/r60-l5/out.jsonl`, and `/tmp/r60-core/out.jsonl`. All 1,444 rows establish
+with zero refutations, unknowns, errors, or audit timeouts.
+
+| Gate | Established | Exact <= GT | Quality before -> after | Strict decreases |
+|---|---:|---:|---:|---:|
+| Leeky dev (all rows) | 884/884 | 531* | 8.4523x -> 1.7892x | 877/884 |
+| Shrunk Tigress L5 | 170/170 | 5 | 12.5127x -> 11.5052x | 170/170 |
+| Refreshed core hard | 328/328 | 67 | 7.1129x -> 4.4441x | 328/328 |
+| Regression smoke | 62/62 | 56** | 0.7846x -> 0.8034x | 62/62 |
+
+`*` Leeky count includes four controls. `**` Smoke exact counts cover 58 usable
+GT rows. Round 60 improves core exactness and L5 quality while retaining the
+dev record range and every strict-decrease gate. Smoke remains narrowly above
+the requested quality threshold.
+
 ## Round-59 universal constant absorption
 
 Round 59 adds universal two's-complement absorption during linear-MBA synthesis:

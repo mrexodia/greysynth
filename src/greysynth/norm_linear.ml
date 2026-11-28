@@ -674,17 +674,16 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
             | _ -> ())
       | _ -> ());
       if count = 2 then (
-        let v01 = shifted.(1) and v10 = shifted.(2) and v11 = shifted.(3) in
+        let v10 = shifted.(1) and v01 = shifted.(2) and v11 = shifted.(3) in
         let cx = normalize (Z.sub v11 v01)
         and cy = normalize (Z.sub v11 v10)
         and cor = normalize (Z.sub (Z.add v10 v01) v11) in
         offer_linear_sum offset
           [ cx, atoms.(0); cy, atoms.(1);
             cor, E.binary E.Or atoms.(0) atoms.(1) ];
-        let cand = normalize (Z.sub v10 v11) in
+        let cand = normalize (Z.sub (Z.sub v11 v10) v01) in
         offer_linear_sum offset
-          [ normalize (Z.sub v11 v01), atoms.(0);
-            normalize (Z.sub v11 v10), atoms.(1);
+          [ v10, atoms.(0); v01, atoms.(1);
             cand, E.binary E.And atoms.(0) atoms.(1) ])
     );
     if not !saw_nonlinear && count <= min 4 !c_normalization_max_atoms

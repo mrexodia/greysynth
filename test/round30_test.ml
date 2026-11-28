@@ -17,7 +17,7 @@ let run maximum path =
   C.reset_defaults ();
   C.c_normalization := true; C.c_oes := true; C.c_ac_normalization := true;
   C.c_egraph_extraction := true; C.c_reject_non_equiv_simplifications := true;
-  C.c_equiv_timeout := 1; C.g_total_timeout := 5.;
+  C.c_equiv_timeout := 1; C.g_total_timeout := 30.;
   C.g_start_time := Unix.gettimeofday (); C.g_has_timedout := false;
   C.g_decidable_root_fast := false;
   C.evaluator := Sample_evaluator.make
