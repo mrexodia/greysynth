@@ -257,12 +257,12 @@
  (flags (:standard -open Binsec -open Libsse -open Libterm))
  (deps
   ../datasets/hard_cases/regression_smoke/tigress_l8/tigress_lvl_8__target_1016.json
-  ../datasets/hard_cases/core_hard/tigress_l6/tigress_lvl_6__target_375.json
+  ../datasets/hard_cases/all_non_exact/tigress_l6/tigress_lvl_6__target_375.json
   ../datasets/leeky/adapted/dev_64/208deb497106ed9f_w64.json)
  (action
   (run %{test}
    %{dep:../datasets/hard_cases/regression_smoke/tigress_l8/tigress_lvl_8__target_1016.json}
-   %{dep:../datasets/hard_cases/core_hard/tigress_l6/tigress_lvl_6__target_375.json}
+   %{dep:../datasets/hard_cases/all_non_exact/tigress_l6/tigress_lvl_6__target_375.json}
    %{dep:../datasets/leeky/adapted/dev_64/208deb497106ed9f_w64.json})))
 
 (test
@@ -273,12 +273,32 @@
  (flags (:standard -open Binsec -open Libsse -open Libterm))
  (deps
   ../datasets/hard_cases/regression_smoke/tigress_l8/tigress_lvl_8__target_1016.json
-  ../datasets/hard_cases/core_hard/tigress_l6/tigress_lvl_6__target_375.json
+  ../datasets/hard_cases/all_non_exact/tigress_l6/tigress_lvl_6__target_375.json
   ../datasets/leeky/adapted/dev_64/208deb497106ed9f_w64.json
-  ../datasets/hard_cases/core_hard/pldi_poly/pldi_poly__line_0000160.json)
+  ../datasets/hard_cases/all_non_exact/pldi_poly/pldi_poly__line_0000682.json)
  (action
   (run %{test}
    %{dep:../datasets/hard_cases/regression_smoke/tigress_l8/tigress_lvl_8__target_1016.json}
-   %{dep:../datasets/hard_cases/core_hard/tigress_l6/tigress_lvl_6__target_375.json}
+   %{dep:../datasets/hard_cases/all_non_exact/tigress_l6/tigress_lvl_6__target_375.json}
    %{dep:../datasets/leeky/adapted/dev_64/208deb497106ed9f_w64.json}
-   %{dep:../datasets/hard_cases/core_hard/pldi_poly/pldi_poly__line_0000160.json})))
+   %{dep:../datasets/hard_cases/all_non_exact/pldi_poly/pldi_poly__line_0000682.json})))
+
+(test
+ (name round52_test)
+ (modules round52_test)
+ (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
+            greysynth.string_to_sexpr binsec.smt binsec.sse.term yojson unix)
+ (flags (:standard -open Binsec -open Libsse -open Libterm))
+ (deps
+  ../datasets/hard_cases/all_non_exact/mba_flatten/mba_flatten__line_0001870.json
+  ../datasets/hard_cases/all_non_exact/pldi_poly/pldi_poly__line_0000682.json
+  ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1349.json
+  ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_6350.json
+  ../datasets/hard_cases/all_non_exact/c_mba_obfuscator/mba_obfuscator__target_483.json)
+ (action
+  (run %{test}
+   %{dep:../datasets/hard_cases/all_non_exact/mba_flatten/mba_flatten__line_0001870.json}
+   %{dep:../datasets/hard_cases/all_non_exact/pldi_poly/pldi_poly__line_0000682.json}
+   %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1349.json}
+   %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_6350.json}
+   %{dep:../datasets/hard_cases/all_non_exact/c_mba_obfuscator/mba_obfuscator__target_483.json})))

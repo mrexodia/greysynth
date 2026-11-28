@@ -222,6 +222,12 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
                         ~semilinear_mba_equalities !result candidate) ->
             result := candidate
         | _ -> ());
+        (match common_factor_pullout_candidate cost !result with
+        | Some candidate
+          when Rewrite.accepts_compositional ~pass:"dag-factor-pullout"
+                 ~equalities:[] ~ring_equalities:[ !result, candidate ]
+                 !result candidate -> result := candidate
+        | _ -> ());
         let accept_linear (candidate, ring_equalities, rewritten_source) =
           Rewrite.accepts_compositional ~pass:"dag-linear-mba"
             ~equalities:[] ~ring_equalities

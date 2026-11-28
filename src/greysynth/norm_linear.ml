@@ -98,6 +98,15 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
   and linear_candidates_seen = Nodes.create 32 in
   let scan_linear_seen = Nodes.create 128 and scan_bitwise_seen = Nodes.create 128
   and scan_count = ref 0 in
+  let scaled_shift = function
+    | (E.Binary { f = E.Lsl; x; y = E.Cst count; _ } as original) ->
+        let count = Bitvector.value_of count in
+        if Z.gt count Z.zero && Z.lt count (Z.of_int width) then
+          let coefficient = constant width (Z.shift_left Z.one (Z.to_int count)) in
+          Some (original, canonical_ac_atom (E.binary E.Mul coefficient x))
+        else None
+    | _ -> None
+  in
   let linear_position = function
     | E.Unary { f = E.Minus; _ }
     | E.Binary { f = (E.Plus | E.Minus | E.Mul | E.Lsl); _ } -> true
@@ -113,7 +122,9 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
       | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } ->
           scan_bitwise x; scan_bitwise y
       | value when linear_position value ->
-          Nodes.replace bitwise_linear_atoms (canonical_ac_atom value) ()
+          Nodes.replace bitwise_linear_atoms (canonical_ac_atom value) ();
+          Option.iter (fun (_, scaled) ->
+              Nodes.replace bitwise_linear_atoms scaled ()) (scaled_shift value)
       | _ -> ())
   and scan_linear node =
     if !scan_count < 64 && not (Nodes.mem scan_linear_seen node) then (
@@ -131,14 +142,16 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
           add_linear node; scan_linear x; scan_linear y
       | E.Binary { f = E.Mul; x; y; _ } ->
           (match constant_value x, constant_value y with
-          | Some _, _ -> scan_linear y
-          | _, Some _ -> scan_linear x
+          | Some _, _ -> add_linear node; scan_linear y
+          | _, Some _ -> add_linear node; scan_linear x
           | _ ->
               (match if ring_bridges then extract_product_scalar node else None with
               | Some (_, base, _) -> Nodes.replace linear_candidates_seen base ()
               | None -> add_linear node))
       | E.Binary { f = E.Lsl; x; y; _ } ->
           add_linear node;
+          Option.iter (fun (_, scaled) ->
+              Nodes.replace linear_candidates_seen scaled ()) (scaled_shift node);
           (match constant_value y with Some _ -> scan_linear x | None -> ())
       | E.Binary { f = (E.And | E.Or | E.Xor); _ } -> scan_bitwise node
       | _ -> ())
@@ -191,8 +204,12 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
           else match expression with
           | E.Binary { f = E.Mul; x; y; _ } -> (
               match constant_value x, constant_value y with
-              | Some k, _ -> Scale (Bitvector.value_of k, linear y)
-              | _, Some k -> Scale (Bitvector.value_of k, linear x)
+              | Some k, _ ->
+                  if is_bitwise_linear_atom expression then atom expression
+                  else Scale (Bitvector.value_of k, linear y)
+              | _, Some k ->
+                  if is_bitwise_linear_atom expression then atom expression
+                  else Scale (Bitvector.value_of k, linear x)
               | _ ->
                   (match if ring_bridges then extract_product_scalar expression else None with
                   | Some (coefficient, base, rewritten) ->
@@ -209,9 +226,16 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
           | E.Binary { f = E.Lsl; x; y; _ } -> (
               match constant_value y with
               | Some count ->
-                  let count = bounded_count width count in
-                  if count >= width then Number Z.zero
-                  else Scale (Z.shift_left Z.one count, linear x)
+                  if is_bitwise_linear_atom expression then atom expression
+                  else
+                    (match scaled_shift expression with
+                    | Some (_, scaled) when Nodes.mem bitwise_linear_atoms scaled ->
+                        record_ring expression scaled;
+                        atom scaled
+                    | _ ->
+                        let count = bounded_count width count in
+                        if count >= width then Number Z.zero
+                        else Scale (Z.shift_left Z.one count, linear x))
               | None -> atom expression)
           | _ -> boolean expression
         in
@@ -557,6 +581,52 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
       match grouped with
       | [] -> ()
       | terms -> offer (build_balanced E.Plus terms));
+    if not !saw_nonlinear && count <= min 4 !c_normalization_max_atoms then (
+      let offset = target.(0) in
+      let shifted = Array.map (fun value -> normalize (Z.sub value offset)) target in
+      let shifted_distinct =
+        Array.to_list shifted |> List.sort_uniq Z.compare
+      in
+      let add_offset candidate =
+        if Z.equal offset Z.zero then candidate
+        else E.binary E.Plus (constant width offset) candidate
+      in
+      let indicator value =
+        let truth = Array.map (Z.equal value) shifted in
+        boolean_candidates truth
+        |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+        |> function candidate :: _ -> Some candidate | [] -> None
+      in
+      (match shifted_distinct with
+      | [ zero; first; second ] when Z.equal zero Z.zero ->
+          (match indicator first, indicator second with
+          | Some first_boolean, Some second_boolean ->
+              offer (add_offset
+                (E.binary E.Plus (scale first first_boolean)
+                   (scale second second_boolean)));
+              if Z.equal (normalize (Z.add first second)) Z.zero then
+                offer (add_offset
+                  (scale first (E.binary E.Minus first_boolean second_boolean)))
+          | _ -> ())
+      | [ zero; first; second; combined ] when Z.equal zero Z.zero ->
+          if Z.equal combined (normalize (Z.add first second)) then
+            let first_truth = Array.map
+                (fun value -> Z.equal value first || Z.equal value combined) shifted
+            and second_truth = Array.map
+                (fun value -> Z.equal value second || Z.equal value combined) shifted in
+            (match
+               boolean_candidates first_truth
+               |> List.sort (fun left right -> Int.compare (cost left) (cost right)),
+               boolean_candidates second_truth
+               |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+             with
+            | first_boolean :: _, second_boolean :: _ ->
+                offer (add_offset
+                  (E.binary E.Plus (scale first first_boolean)
+                     (scale second second_boolean)))
+            | _ -> ())
+      | _ -> ());
+    );
     if not !saw_nonlinear && count <= min 4 !c_normalization_max_atoms
        && Z.equal target.(0) Z.zero && List.length distinct = 4
     then (
@@ -648,6 +718,78 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
           | Some old -> E.binary E.Plus old (scale coefficient term)))
     done;
     offer (Option.value !result ~default:(zeros width));
+    let signed coefficient =
+      let coefficient = normalize coefficient in
+      if Z.testbit coefficient (width - 1) then Z.sub coefficient modulus
+      else coefficient
+    in
+    let monomial subset =
+      if subset = 0 then constant width Z.one
+      else
+        Array.to_list atoms
+        |> List.mapi (fun index atom -> index, atom)
+        |> List.filter_map (fun (index, atom) ->
+               if subset land (1 lsl index) = 0 then None else Some atom)
+        |> build_balanced E.And
+    in
+    let buckets = ref [] in
+    let add_bucket magnitude positive term =
+      let rec merge prefix = function
+        | [] ->
+            buckets := List.rev_append prefix
+                [ magnitude, (if positive then [ term ] else []),
+                  (if positive then [] else [ term ]) ]
+        | (old, positives, negatives) :: rest when Z.equal old magnitude ->
+            buckets := List.rev_append prefix
+                ((old,
+                  (if positive then term :: positives else positives),
+                  (if positive then negatives else term :: negatives)) :: rest)
+        | item :: rest -> merge (item :: prefix) rest
+      in
+      merge [] !buckets
+    in
+    Array.iteri (fun subset coefficient ->
+        let coefficient = signed coefficient in
+        if not (Z.equal coefficient Z.zero) then
+          add_bucket (Z.abs coefficient) (Z.sign coefficient > 0) (monomial subset))
+      coefficients;
+    let sum_terms = function
+      | [] -> zeros width
+      | [ value ] -> value
+      | values -> build_balanced E.Plus values
+    in
+    let grouped =
+      List.map
+        (fun (magnitude, positives, negatives) ->
+          let positive = sum_terms positives and negative = sum_terms negatives in
+          let body =
+            if negatives = [] then positive
+            else if positives = [] then E.unary E.Minus negative
+            else E.binary E.Minus positive negative
+          in
+          scale magnitude body)
+        !buckets
+    in
+    if grouped <> [] then offer (sum_terms grouped);
+    let nonzero_signed =
+      Array.to_list coefficients |> List.map signed
+      |> List.filter (fun value -> not (Z.equal value Z.zero))
+    in
+    let gcd =
+      List.fold_left (fun result value -> Z.gcd result (Z.abs value))
+        Z.zero nonzero_signed
+    in
+    if Z.gt gcd Z.one
+       && List.for_all (fun value -> Z.leq (Z.abs value) (Z.of_int 65536)) nonzero_signed
+    then (
+      let inner_terms = ref [] in
+      Array.iteri (fun subset coefficient ->
+          let coefficient = signed coefficient in
+          if not (Z.equal coefficient Z.zero) then
+            inner_terms := scale (normalize (Z.div coefficient gcd)) (monomial subset)
+                           :: !inner_terms)
+        coefficients;
+      if !inner_terms <> [] then offer (scale gcd (sum_terms !inner_terms)));
     let memo = Nodes.create 128 and active = Nodes.create 32 in
     let rec substitute node =
       if Nodes.mem active node then node

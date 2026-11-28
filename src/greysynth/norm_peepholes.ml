@@ -712,6 +712,109 @@ let lowk_restrict_pushdown expression =
         Some (candidate, pushed, bridges @ List.rev !equalities,
               inner, !annihilated))
 
+let common_factor_pullout_candidate cost expression =
+  if cost expression > 2048 then None
+  else
+    let rec balanced operation = function
+      | [] -> invalid_arg "factor pullout: empty expression"
+      | [ value ] -> value
+      | values ->
+          let count = List.length values in
+          let rec split n left rest =
+            if n = 0 then List.rev left, rest
+            else match rest with
+              | head :: tail -> split (n - 1) (head :: left) tail
+              | [] -> assert false
+          in
+          let left, right = split (count / 2) [] values in
+          E.binary operation (balanced operation left) (balanced operation right)
+    in
+    let rec additive sign node result =
+      if List.length result > 16 then result
+      else
+        match node with
+        | E.Binary { f = E.Plus; x; y; _ } ->
+            additive sign y (additive sign x result)
+        | E.Binary { f = E.Minus; x; y; _ } ->
+            additive (not sign) y (additive sign x result)
+        | E.Unary { f = E.Minus; x; _ } -> additive (not sign) x result
+        | term -> (sign, term) :: result
+    in
+    let rec factors node result =
+      if List.length result > 8 then result
+      else match node with
+        | E.Binary { f = E.Mul; x; y; _ } -> factors y (factors x result)
+        | factor -> factor :: result
+    in
+    let build_product width = function
+      | [] -> integer width 1
+      | [ value ] -> value
+      | values -> balanced E.Mul values
+    in
+    let build_sum width = function
+      | [] -> zeros width
+      | (sign, value) :: rest ->
+          let initial = if sign then value else E.unary E.Minus value in
+          List.fold_left (fun total (positive, term) ->
+              E.binary (if positive then E.Plus else E.Minus) total term)
+            initial rest
+    in
+    let intersection left right =
+      let rec take shared remaining = function
+        | [] -> List.rev shared, List.rev remaining
+        | value :: rest ->
+            let rec remove prefix = function
+              | [] -> None
+              | candidate :: tail when E.is_equal value candidate ->
+                  Some (List.rev_append prefix tail)
+              | candidate :: tail -> remove (candidate :: prefix) tail
+            in
+            (match remove [] right with
+            | Some _ -> take (value :: shared) remaining rest
+            | None -> take shared (value :: remaining) rest)
+      in
+      take [] [] left
+    in
+    let terms = List.rev (additive true expression []) in
+    if List.length terms < 2 || List.length terms > 16 then None
+    else
+      let width = E.sizeof expression in
+      let rec scan left_index = function
+        | [] -> None
+        | (left_sign, left) :: tail ->
+            let left_factors = factors left [] |> List.sort E.compare in
+            let rec pair offset = function
+              | [] -> None
+              | (right_sign, right) :: rest ->
+                  let right_factors = factors right [] |> List.sort E.compare in
+                  let shared, left_remaining = intersection left_factors right_factors in
+                  let _, right_remaining = intersection right_factors left_factors in
+                  let shared_expr = build_product width shared in
+                  if shared = [] || cost shared_expr < 3 then pair (offset + 1) rest
+                  else
+                    let left_body = build_product width left_remaining
+                    and right_body = build_product width right_remaining in
+                    let signed sign body = if sign then body else E.unary E.Minus body in
+                    let inner = E.binary E.Plus
+                        (signed left_sign left_body) (signed right_sign right_body) in
+                    let replacement = E.binary E.Mul shared_expr inner in
+                    let rebuilt =
+                      terms
+                      |> List.mapi (fun index term ->
+                             if index = left_index then Some (true, replacement)
+                             else if index = left_index + offset + 1 then None
+                             else Some term)
+                      |> List.filter_map Fun.id |> build_sum width
+                    in
+                    if cost rebuilt < cost expression then Some rebuilt
+                    else pair (offset + 1) rest
+            in
+            (match pair 0 tail with
+            | Some _ as result -> result
+            | None -> scan (left_index + 1) tail)
+      in
+      scan 0 terms
+
 let restrict_factoring_candidate expression =
   match expression with
   | E.Binary { f = (E.And | E.Or | E.Xor as operation);

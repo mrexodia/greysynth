@@ -2449,3 +2449,83 @@ usable GT; the one missing GT is in QSynth EA.
 `*` QSynth EA has 111/112 rows with usable GT, so aggregate exact counts cover
 1,982/1,983 newly audited rows and 2,233/2,234 complete frontier rows. All
 counts above are authoritative parallel results; no isolated replay was needed.
+
+## Round-52 factored linear reconstruction and distributive pullout
+
+Round 52 extends linear-MBA reconstruction with shifted three/four-value Boolean
+forms, common signed-coefficient buckets, and bounded signed-GCD extraction.
+Möbius terms with a shared magnitude are now combined into one signed inner sum
+and scaled once. The compatibility producer remains proof-gated by
+`linear_mba_mod2w`.
+
+Scalar multiplication and constant shifts now participate in boundary-overlap
+analysis. Constant-scaled multiplication is recorded as a direct linear
+candidate before descending, while constant shifts are paired with their
+power-of-two multiplication form through a ring bridge. Non-constant product
+scalar extraction still precedes stop handling.
+
+A bounded common-factor pullout pass handles additive terms sharing flat
+multiplicative factors and certifies every rewrite with `ring_mod2w`. It runs
+before DAG linear/semi-linear cleanup so newly exposed masked sums can simplify
+further. Older dataset-backed tests were updated to use the rebuilt frontier
+paths without rebuilding any dataset during this round.
+
+`test/round52_test.ml` exercises five full-pipeline frontier cases with
+independent replay. The selected cases improve as follows, but do not all reach
+the requested references:
+
+```text
+mba_flatten line 1870: 472 -> 16   (reference 11)
+PLDI Poly line 682:     63 -> 30   (reference 21)
+Tigress target 1349: 15770 -> 209  (reference 5)
+Tigress target 6350:  4747 -> 461  (reference 5)
+C-MBA target 483:     6686 -> 291  (reference 9)
+```
+
+The complete warning-clean `make test` gate passes. `src/proof/rewrite_proof.ml`
+is unchanged, and the held-out balanced set was not run.
+
+Final artifacts:
+
+```text
+/tmp/r52-smoke/out.jsonl
+/tmp/r52-l5/out.jsonl
+/tmp/r52-core/out.jsonl
+/tmp/r52-leeky-dev64/out.jsonl
+```
+
+All 1,475 rows establish with zero refutations, unknowns, errors, or audit
+timeout verdicts. Regression smoke returns 62/62 strict decreases, 55/58 exact,
+and `0.7995x`, satisfying the requested gate. Leeky dev establishes all 884
+rows; among 880 transformed rows, 839 strictly decrease and 505 reach or beat
+reference after a strict reduction. Aggregate dev quality improves from
+`2.3475x` to `2.1414x`; all four controls remain unchanged.
+
+| Leeky dev panel | Baseline hits -> R52 hits | Baseline quality -> R52 quality | R52 strict reductions |
+|---|---:|---:|---:|
+| mba-capabilities-v1 | 33 -> 30 | 3.3337x -> 3.0560x | 71/71 |
+| mba-capabilities-v2 | 34 -> 33 | 1.1037x -> 1.1759x | 43/44 |
+| mba-composition-v1 | 47 -> 49 | 1.1365x -> 1.1294x | 52/54 |
+| mba-extra-floor-v1 | 19 -> 29 | 1.4569x -> 1.1921x | 54/54 |
+| mba-frontier64-v1 | 3 -> 0 | 22.7000x -> 36.5433x | 67/96 |
+| mba-gaps-v1 | 55 -> 59 | 1.1124x -> 1.0406x | 72/72 |
+| mba-interactions-v1 | 23 -> 24 | 0.9364x -> 0.9332x | 33/33 |
+| mba-ladders-v1 | 39 -> 48 | 1.2743x -> 1.1087x | 72/72 |
+| mba-long-frontier-v1 | 44 -> 46 | 1.6318x -> 1.5733x | 70/72 |
+| mba-majority-v1 | 34 -> 36 | 1.3835x -> 1.1262x | 54/54 |
+| mba-projection-v1 | 51 -> 52 | 1.1375x -> 1.0992x | 54/54 |
+| mba-proof-context-v1 | 12 -> 24 | 1.5744x -> 1.0271x | 36/36 |
+| mba-stress64-v1 | 0 -> 9 | 11.2614x -> 5.6473x | 89/96 |
+| mba-tight-v1 | 68 -> 66 | 1.0377x -> 1.0395x | 72/72 |
+| **Overall transformed** | **462 -> 505** | **2.3475x -> 2.1414x** | **839/880** |
+
+| Regression gate | Established | Exact <= GT | Quality before -> after | Better / equal / worse | Strict decreases |
+|---|---:|---:|---:|---:|---:|
+| Shrunk Tigress L5 | 195/195 | 17 | 10.0348x -> 7.6053x | 69 / 97 / 29 | 193 |
+| Refreshed core hard | 334/334 | 43 | 7.0211x -> 5.3813x | 138 / 159 / 37 | 318 |
+| Regression smoke | 62/62 | 55* | 0.7846x -> 0.7995x | 6 / 50 / 6 | 62 |
+
+`*` Smoke exact counts cover 58 rows with usable GT. The strongest dev gains are
+in stress, projection, long-frontier, gaps, and proof-context. Frontier and
+capabilities regress, and the targeted scalar-boundary Tigress cases remain far
+above reference. These are retained as explicit follow-up items.
