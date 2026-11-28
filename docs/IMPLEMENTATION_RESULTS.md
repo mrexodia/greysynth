@@ -2748,3 +2748,45 @@ frontier, stress, L5/core, and smoke quality targets. The universal prepass
 strictly reduces more dev cases but changes several smoke outputs to larger
 verified local minima; stress diagnostic `7a3c5b...` remains the clearest
 partial-work blocker.
+
+## Round-55 masked-GF2 proof acceleration and universal bitwise prepass
+
+Round 55 adds exact masked-XOR normalization at roots and DAG nodes, plus a
+sound repeated-left-only-subterm abstraction in `abstract_pair`. A compound
+left-only node may be replaced by a fresh same-width variable only when it has
+at least two parent edges and contains no right-side node; failed abstractions
+still fall back to concrete solving. Positive and negative Bitwuzla cross-tests
+are permanent.
+
+All non-shared bitwise roots above cost 512 receive a 1.2-second zero-SMT pass;
+shared roots retain 1.5 seconds. Bitwise AC work is skipped above cost 128 in
+zero-SMT mode. Linear reconstruction adds `1+B -> -(~B)`, factor pullout accepts
+any strictly profitable shared factor, and ring-NOT expansion permits 1,024
+monomials. `test/round55_test.ml` independently replays masked-XOR
+normalization. The complete warning-clean `make test` gate passes.
+
+Final artifacts:
+
+```text
+/tmp/r55-smoke/out.jsonl
+/tmp/r55-leeky-dev64/out.jsonl
+/tmp/r55-l5/out.jsonl
+/tmp/r55-core/out.jsonl
+```
+
+All 1,444 rows establish with zero refutations, unknowns, errors, or audit
+timeouts. Results:
+
+| Gate | Established | Exact <= GT | Quality before -> after | Strict decreases |
+|---|---:|---:|---:|---:|
+| Leeky dev transformed | 880/880 | 517 | 2.3475x -> 1.9111x | 849/880 |
+| Shrunk Tigress L5 | 170/170 | 3 | 12.5127x -> 12.9920x | 167/170 |
+| Refreshed core hard | 328/328 | 20 | 7.1129x -> 6.1412x | 304/328 |
+| Regression smoke | 62/62 | 56* | 0.7846x -> 0.8018x | 62/62 |
+
+`*` Smoke exact counts cover 58 rows with usable GT. Leeky panel highlights are
+`mba-capabilities-v1` 30 hits at `2.3266x`, `mba-frontier64-v1` one hit at
+`19.5593x`, and `mba-stress64-v1` ten hits at `5.0352x`. The requested
+capabilities/frontier gains and smoke `<=0.79x` target are not met, while smoke
+sets a new exact-count record at 56/58. L5 regresses in aggregate and remains a
+priority follow-up.

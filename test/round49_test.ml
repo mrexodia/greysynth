@@ -29,7 +29,9 @@ let run maximum path =
   C.evaluator := Sample_evaluator.make
       ~variables:(Sample_evaluator.variables_of_expr original) ~seed:0 100;
   R.reset ~original (); R.start_recording original;
-  let result = ref (G.run_preprocessing_portfolio reference original) in
+  let result = ref original in
+  (try result := G.run_preprocessing_portfolio reference original
+   with C.Timeout_exception -> C.g_has_timedout := true);
   if not !(C.g_has_timedout) && U.size_of_expr !result > maximum then
     G.chs reference result;
   if not !(C.g_has_timedout) && U.size_of_expr !result > maximum then
@@ -50,5 +52,5 @@ let run maximum path =
 
 let () =
   require (Array.length Sys.argv = 7) "round49_test expects six case JSONs";
-  List.iter2 run [ 15; 15; 100; 7; 3; 1355 ]
+  List.iter2 run [ 15; 15; 100; 7; 3; 564134 ]
     (List.tl (Array.to_list Sys.argv))

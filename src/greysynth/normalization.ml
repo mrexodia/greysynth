@@ -406,7 +406,8 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
         | _ -> ());
         (match !result with
         | E.Binary { f = (E.Plus | E.Minus | E.Mul); _ }
-          when cost !result <= 256 && contains_probe_shell !result ->
+          when cost !result <= 256 && (not zero_smt || cost !result <= 128)
+               && contains_probe_shell !result ->
             (match recursive_bitwise_ac_candidate !result with
             | Some (candidate, linear_mba_equalities, ring_equalities)
               when Rewrite.accepts_compositional ~allow_equal_cost:true

@@ -586,7 +586,9 @@ let run_preprocessing gt input =
       && has_product_of_linear_mbas 0 !best
     in
     let local_budget =
-      if shared then 1.5 else if Normalization.has_bitwise_operator !best then 1.2
+      if shared then 1.5
+      else if Normalization.has_bitwise_operator !best
+              && not (Normalization.linear_mba_compatible !best) then 1.2
       else if exposed_product then 1.0 else 0.0 in
     let local_deadline = Unix.gettimeofday () +. local_budget in
     let rounds = ref 0 and improving = ref true in
@@ -601,6 +603,14 @@ let run_preprocessing gt input =
       let after_size = size_of_expr !best and after_dag = dag_size_of_expr !best in
       improving := after_size < before_size || after_dag < before_dag
     done);
+  (match Normalization.gf2_masked_xor_candidate size_of_expr !best with
+  | Some candidate
+    when Rewrite.accepts_compositional ~pass:"post-dag-gf2-masked-xor"
+           ~equalities:[] ~semilinear_mba_equalities:[ !best, candidate ]
+           !best candidate
+         || Rewrite.accepts ~timeout:0.50 ~pass:"post-dag-gf2-masked-xor-smt"
+              !best candidate -> best := candidate
+  | _ -> ());
   let run_small_dag () =
     if not !g_has_timedout && size_of_expr !best >= 15
        && size_of_expr !best <= 512
