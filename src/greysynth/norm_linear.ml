@@ -303,6 +303,39 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
       else if Z.equal coefficient mask then E.unary E.Minus value
       else E.binary E.Mul value (constant width coefficient)
     in
+    let offer_linear_sum offset terms =
+      let terms = List.filter (fun (coefficient, _) ->
+          not (Z.equal (normalize coefficient) Z.zero)) terms in
+      let build values =
+        let values =
+          (if Z.equal (normalize offset) Z.zero then []
+           else [ constant width (normalize offset) ])
+          @ List.map (fun (coefficient, body) ->
+                scale (normalize coefficient) body) values
+        in
+        match values with
+        | [] -> zeros width
+        | [ value ] -> value
+        | values -> build_balanced E.Plus values
+      in
+      offer (build terms);
+      if not (Z.equal (normalize offset) Z.zero) then
+        List.iteri (fun index (coefficient, body) ->
+            if Z.equal (normalize coefficient) (normalize offset) then
+              let absorbed =
+                scale (normalize (Z.neg offset)) (demorgan_not body)
+              in
+              let remaining =
+                terms |> List.mapi (fun i term -> i, term)
+                |> List.filter_map (fun (i, term) ->
+                       if i = index then None else Some term)
+                |> List.map (fun (c, value) -> scale (normalize c) value)
+              in
+              offer (match remaining with
+                | [] -> absorbed
+                | values -> build_balanced E.Plus (absorbed :: values)))
+          terms
+    in
     let combine op identity terms =
       match terms with [] -> identity | terms -> build_balanced op terms
     in
@@ -617,9 +650,8 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
       | [ zero; first; second ] when Z.equal zero Z.zero ->
           (match indicator first, indicator second with
           | Some first_boolean, Some second_boolean ->
-              offer (add_offset
-                (E.binary E.Plus (scale first first_boolean)
-                   (scale second second_boolean)));
+              offer_linear_sum offset
+                [ first, first_boolean; second, second_boolean ];
               if Z.equal (normalize (Z.add first second)) Z.zero then
                 offer (add_offset
                   (scale first (E.binary E.Minus first_boolean second_boolean)))
@@ -637,11 +669,23 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
                |> List.sort (fun left right -> Int.compare (cost left) (cost right))
              with
             | first_boolean :: _, second_boolean :: _ ->
-                offer (add_offset
-                  (E.binary E.Plus (scale first first_boolean)
-                     (scale second second_boolean)))
+                offer_linear_sum offset
+                  [ first, first_boolean; second, second_boolean ]
             | _ -> ())
       | _ -> ());
+      if count = 2 then (
+        let v01 = shifted.(1) and v10 = shifted.(2) and v11 = shifted.(3) in
+        let cx = normalize (Z.sub v11 v01)
+        and cy = normalize (Z.sub v11 v10)
+        and cor = normalize (Z.sub (Z.add v10 v01) v11) in
+        offer_linear_sum offset
+          [ cx, atoms.(0); cy, atoms.(1);
+            cor, E.binary E.Or atoms.(0) atoms.(1) ];
+        let cand = normalize (Z.sub v10 v11) in
+        offer_linear_sum offset
+          [ normalize (Z.sub v11 v01), atoms.(0);
+            normalize (Z.sub v11 v10), atoms.(1);
+            cand, E.binary E.And atoms.(0) atoms.(1) ])
     );
     if not !saw_nonlinear && count <= min 4 !c_normalization_max_atoms
        && Z.equal target.(0) Z.zero && List.length distinct = 4
@@ -791,6 +835,15 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
       Array.to_list coefficients |> List.map signed
       |> List.filter (fun value -> not (Z.equal value Z.zero))
     in
+    if not (Z.equal coefficients.(0) Z.zero)
+       && List.length nonzero_signed <= 4
+    then (
+      let terms = ref [] in
+      Array.iteri (fun subset coefficient ->
+          if subset <> 0 && not (Z.equal coefficient Z.zero) then
+            terms := (signed coefficient, monomial subset) :: !terms)
+        coefficients;
+      offer_linear_sum (signed coefficients.(0)) !terms);
     let gcd =
       List.fold_left (fun result value -> Z.gcd result (Z.abs value))
         Z.zero nonzero_signed

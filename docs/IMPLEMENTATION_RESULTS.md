@@ -2791,6 +2791,29 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-59 universal constant absorption
+
+Round 59 adds universal two's-complement absorption during linear-MBA synthesis:
+`c + c*B -> (-c)*(~B)`. The helper is used by shifted-value reconstruction,
+small Möbius sums, and a two-variable `{x,y,x|y}` / `{x,y,x&y}` basis.
+`test/round59_test.ml` and the complete warning-clean `make test` gate pass.
+
+Final artifacts are `/tmp/r59-smoke/out.jsonl`, `/tmp/r59-leeky-dev64/out.jsonl`,
+`/tmp/r59-l5/out.jsonl`, and `/tmp/r59-core/out.jsonl`. All 1,444 rows establish
+with zero refutations, unknowns, errors, or audit timeouts.
+
+| Gate | Established | Exact <= GT | Quality before -> after | Strict decreases |
+|---|---:|---:|---:|---:|
+| Leeky dev (all rows) | 884/884 | 525* | 8.4523x -> 1.8078x | 877/884 |
+| Shrunk Tigress L5 | 170/170 | 3 | 12.5127x -> 12.1490x | 170/170 |
+| Refreshed core hard | 328/328 | 57 | 7.1129x -> 4.6052x | 328/328 |
+| Regression smoke | 62/62 | 56** | 0.7846x -> 0.8018x | 62/62 |
+
+`*` Leeky count includes four controls. `**` Smoke exact counts cover 58 usable
+GT rows. Round 59 substantially improves core exactness and dev quality while
+preserving all strict-decrease gates. Smoke remains narrowly above the requested
+quality threshold, and L5 remains the largest unresolved frontier.
+
 ## Round-58 timeout-safe partial work and bounded bitwise AC
 
 Round 58 seals timeout unwinding in preprocessing and DAG traversal. Any

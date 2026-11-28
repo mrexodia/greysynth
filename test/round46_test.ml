@@ -34,19 +34,20 @@ let replay original candidate =
     "independent certificate replay failed"
 
 let accept_linear label original =
-  match
+  let proposals =
     N.linear_candidates_with_rings ~max_atoms:8 U.size_of_expr original
     |> List.sort (fun (left, _, _) (right, _, _) ->
            Int.compare (U.size_of_expr left) (U.size_of_expr right))
+  in
+  match List.find_opt
+      (fun (candidate, ring_equalities, rewritten_source) ->
+        R.accepts_compositional ~pass:label ~equalities:[] ~ring_equalities
+          ~linear_mba_equalities:[ rewritten_source, candidate ]
+          original candidate)
+      proposals
   with
-  | (candidate, ring_equalities, rewritten_source) :: _ ->
-      require
-        (R.accepts_compositional ~pass:label ~equalities:[] ~ring_equalities
-           ~linear_mba_equalities:[ rewritten_source, candidate ]
-           original candidate)
-        (label ^ ": linear/ring proof failed");
-      candidate, ring_equalities
-  | [] -> failwith (label ^ ": no candidate")
+  | Some (candidate, ring_equalities, _) -> candidate, ring_equalities
+  | None -> failwith (label ^ ": no certified candidate")
 
 let rec encoded_sum depth left right =
   if depth = 0 then add left right
