@@ -302,3 +302,25 @@
    %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1349.json}
    %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_6350.json}
    %{dep:../datasets/hard_cases/all_non_exact/c_mba_obfuscator/mba_obfuscator__target_483.json})))
+
+(test
+ (name round53_test)
+ (modules round53_test)
+ (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
+            greysynth.string_to_sexpr binsec.smt binsec.sse.term yojson unix)
+ (flags (:standard -open Binsec -open Libsse -open Libterm))
+ (deps
+  ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1349.json
+  ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1417.json
+  ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_2923.json
+  ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_4853.json
+  ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1776.json
+  ../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1514.json)
+ (action
+  (run %{test}
+   %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1349.json}
+   %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1417.json}
+   %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_2923.json}
+   %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_4853.json}
+   %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1776.json}
+   %{dep:../datasets/hard_cases/all_non_exact/tigress_l5/tigress_lvl_5__target_1514.json})))

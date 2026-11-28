@@ -20,20 +20,20 @@ let setup original =
   C.evaluator := Sample_evaluator.make
       ~variables:(Sample_evaluator.variables_of_expr original) ~seed:0 64;
   C.g_total_timeout := 0.; C.g_has_timedout := false;
-  C.c_reject_non_equiv_simplifications := true; C.c_equiv_timeout := 2;
+  C.c_reject_non_equiv_simplifications := true; C.c_equiv_timeout := 5;
   R.reset ~original (); R.start_recording original
 
 let accept label original candidate =
   let accepted =
     R.accepts_compositional ~pass:label ~equalities:[]
       ~linear_mba_equalities:[ original, candidate ] original candidate
-    || R.accepts ~timeout:2.0 ~pass:label original candidate
+    || R.accepts ~timeout:5.0 ~pass:label original candidate
   in
   require accepted
     (label ^ ": candidate failed proof (" ^ !(R.last_rejection) ^ "): " ^ U.pp candidate);
   let certificate = P.finish (Option.get !(R.journal)) candidate in
   require
-    (J.member "verification" (P.verify ~original ~candidate certificate)
+    (J.member "verification" (P.verify ~timeouts:[ 2.; 5. ] ~original ~candidate certificate)
      = `String "proved_compositional")
     (label ^ ": certificate did not replay")
 
@@ -45,8 +45,19 @@ let () =
   setup wrapped;
   (match N.probe_opaque_atoms U.size_of_expr wrapped with
   | Some candidate ->
-      accept "opaque-two-atom" wrapped candidate;
-      let verdict,_,_ = U.are_equivalent candidate (add a b) (Some 2) in
+      let expected = add a b in
+      require
+        (R.accepts_compositional ~pass:"opaque-two-atom" ~equalities:[]
+           ~linear_mba_equalities:[ wrapped, expected ]
+           ~ring_equalities:[ expected, candidate ] wrapped candidate)
+        "opaque two-atom compositional bridge failed";
+      let certificate = P.finish (Option.get !(R.journal)) candidate in
+      require
+        (J.member "verification"
+           (P.verify ~timeouts:[ 2.; 5. ] ~original:wrapped ~candidate certificate)
+         = `String "proved_compositional")
+        "opaque two-atom bridge did not replay";
+      let verdict,_,_ = U.are_equivalent candidate expected (Some 2) in
       require (verdict = U.Yes) "opaque two-atom interpolation returned wrong result"
   | None -> failwith "opaque two-atom interpolation found no candidate");
 

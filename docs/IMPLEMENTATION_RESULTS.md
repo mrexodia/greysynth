@@ -2529,3 +2529,75 @@ reference after a strict reduction. Aggregate dev quality improves from
 in stress, projection, long-frontier, gaps, and proof-context. Frontier and
 capabilities regress, and the targeted scalar-boundary Tigress cases remain far
 above reference. These are retained as explicit follow-up items.
+
+## Round-53 multi-mode opaque probing and complement bridges
+
+Round 53 exposes every successful opaque abstraction mode through
+`probe_opaque_atoms_list`. Operator, arithmetic, shared, and maximal-repeated
+candidates are deduplicated and sorted by cost; root probing tries up to three
+candidates rather than allowing the first unprovable abstraction to shadow the
+rest. Two-atom templates retain sum/difference/bitwise forms, while three-atom
+probes add sum, signed-sum, and single-atom templates.
+
+Post-normalization roots between cost 9 and 1024 receive a reserved 0.75-second
+probe attempt when global budgets permit. Accepted candidates immediately run
+product peeling, semi-linear cleanup, and one zero-SMT DAG pass. This closes the
+32/64-bit product-shell diagnostics `target_1349` and `target_1417` exactly.
+
+A ring-NOT bridge rewrites ring-position `~A` to `-1-A` through
+`linear_mba_mod2w` before ring normalization. Complementary slicing now also
+bridges `uext(~low)` to `(2^low_width-1)-uext(low)` when the positive extension
+occurs in the same expression. DAG complementary-slice proofs are forbidden in
+zero-SMT mode and explicitly capped at 0.15 seconds. Existing extension/mask
+and product peeling paths close targets 2923 and 4853 exactly.
+
+`test/round53_test.ml` covers six full-pipeline Tigress diagnostics with
+independent replay. Four reach exact size 5; wide target 1776 reduces to 568 and
+target 1514 reduces to 115. The complete warning-clean `make test` gate passes.
+`src/proof/rewrite_proof.ml` is unchanged, and the held-out balanced set was not
+run.
+
+Final artifacts:
+
+```text
+/tmp/r53-smoke/out.jsonl
+/tmp/r53-l5/out.jsonl
+/tmp/r53-core/out.jsonl
+/tmp/r53-leeky-dev64/out.jsonl
+```
+
+All 1,475 rows establish with zero refutations, unknowns, errors, or audit
+timeout verdicts. Leeky dev establishes all 884 rows; among 880 transformed
+rows, 857 strictly decrease and 509 reach or beat reference after a strict
+reduction. Aggregate quality improves from `2.3475x` to `1.9969x`; all four
+controls remain unchanged.
+
+| Leeky dev panel | Baseline hits -> R53 hits | Baseline quality -> R53 quality | R53 strict reductions |
+|---|---:|---:|---:|
+| mba-capabilities-v1 | 33 -> 30 | 3.3337x -> 3.0560x | 71/71 |
+| mba-capabilities-v2 | 34 -> 33 | 1.1037x -> 1.1759x | 43/44 |
+| mba-composition-v1 | 47 -> 49 | 1.1365x -> 1.1294x | 52/54 |
+| mba-extra-floor-v1 | 19 -> 29 | 1.4569x -> 1.1921x | 54/54 |
+| mba-frontier64-v1 | 3 -> 2 | 22.7000x -> 19.7809x | 82/96 |
+| mba-gaps-v1 | 55 -> 59 | 1.1124x -> 1.0367x | 72/72 |
+| mba-interactions-v1 | 23 -> 24 | 0.9364x -> 0.9332x | 33/33 |
+| mba-ladders-v1 | 39 -> 49 | 1.2743x -> 1.1045x | 72/72 |
+| mba-long-frontier-v1 | 44 -> 49 | 1.6318x -> 1.4359x | 72/72 |
+| mba-majority-v1 | 34 -> 36 | 1.3835x -> 1.1262x | 54/54 |
+| mba-projection-v1 | 51 -> 52 | 1.1375x -> 1.0992x | 54/54 |
+| mba-proof-context-v1 | 12 -> 24 | 1.5744x -> 1.0271x | 36/36 |
+| mba-stress64-v1 | 0 -> 7 | 11.2614x -> 5.9239x | 90/96 |
+| mba-tight-v1 | 68 -> 66 | 1.0377x -> 1.0395x | 72/72 |
+| **Overall transformed** | **462 -> 509** | **2.3475x -> 1.9969x** | **857/880** |
+
+| Regression gate | Established | Exact <= GT | Quality before -> after | Better / equal / worse | Strict decreases |
+|---|---:|---:|---:|---:|---:|
+| Shrunk Tigress L5 | 195/195 | 25 | 10.0348x -> 9.0348x | 67 / 50 / 78 | 194 |
+| Refreshed core hard | 334/334 | 51 | 7.0211x -> 4.3354x | 157 / 126 / 51 | 324 |
+| Regression smoke | 62/62 | 55* | 0.7846x -> 0.8107x | 4 / 50 / 8 | 62 |
+
+`*` Smoke exact counts cover 58 rows with usable GT. Round 53 sets a new dev
+aggregate quality record and meets the dev/core quality goals. The smoke exact
+and strict-decrease goals pass, but quality narrowly misses `0.80x` at
+`0.8107x`. The L5 exact/geomean goals also remain unmet; wide complementary
+cases such as target 1776 need further ring exposure.

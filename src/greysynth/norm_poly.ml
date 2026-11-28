@@ -463,6 +463,42 @@ let ring_polynomial_candidate ?(max_operations = 50_000)
       if cost candidate < cost expression then Some candidate else None
   with Ring_candidate_too_complex -> None
 
+let ring_not_bridge_candidate cost expression =
+  if cost expression > 2048
+     || Greysynth_utils.Utils.dag_size_bounded ~limit:512 expression > 512
+  then None
+  else
+    let memo = Nodes.create 128 and linear_mba_equalities = ref [] in
+    let rec rewrite node =
+      match Nodes.find_opt memo node with
+      | Some result -> result
+      | None ->
+          let result =
+            match node with
+            | E.Unary { f = E.Minus; x; _ } -> E.unary E.Minus (rewrite x)
+            | E.Binary { f = (E.Plus | E.Minus | E.Mul as operation); x; y; _ } ->
+                E.binary operation (rewrite x) (rewrite y)
+            | E.Unary { f = E.Not; x; _ } as original ->
+                let replacement =
+                  E.binary E.Minus (constant (E.sizeof original) (Z.neg Z.one)) x
+                in
+                linear_mba_equalities :=
+                  (original, replacement) :: !linear_mba_equalities;
+                replacement
+            | value -> value
+          in
+          Nodes.add memo node result;
+          result
+    in
+    let substituted = rewrite expression in
+    if !linear_mba_equalities = [] then None
+    else
+      Option.bind (ring_polynomial_candidate cost substituted) (fun candidate ->
+          if cost candidate < cost expression then
+            Some (candidate, List.rev !linear_mba_equalities,
+                  [ substituted, candidate ])
+          else None)
+
 let complementary_slice_refine_candidate cost expression =
   Option.bind (complementary_slice_candidate cost expression)
     (fun (substituted, equalities, _) ->

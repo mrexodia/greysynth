@@ -288,8 +288,11 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
         if Greysynth_utils.Utils.dag_size_bounded ~limit:512 !result <= 512 then (
           (match complementary_slice_refine_candidate cost !result with
           | Some (candidate, equalities, ring_equalities)
-            when Rewrite.accepts_compositional ~pass:"dag-complementary-slice"
-                   ~equalities ~ring_equalities !result candidate ->
+            when not zero_smt
+                 && try_smt (fun () ->
+                        Rewrite.accepts_compositional ~timeout:0.15
+                          ~pass:"dag-complementary-slice" ~equalities
+                          ~ring_equalities !result candidate) ->
               result := candidate
           | _ -> ());
           (match mask_lift_candidate cost !result with
@@ -385,6 +388,12 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
         | Some (candidate, equalities, poly_equalities)
           when Rewrite.accepts_compositional ~pass:"dag-poly-mod2w"
                  ~equalities ~poly_equalities !result candidate -> result := candidate
+        | _ -> ());
+        (match ring_not_bridge_candidate cost !result with
+        | Some (candidate, linear_mba_equalities, ring_equalities)
+          when Rewrite.accepts_compositional ~pass:"dag-ring-not-mod2w"
+                 ~equalities:[] ~linear_mba_equalities ~ring_equalities
+                 !result candidate -> result := candidate
         | _ -> ());
         (match !result with
         | E.Binary { f = (E.Plus | E.Minus | E.Mul); _ }

@@ -582,7 +582,21 @@ let mask_lift_candidate cost expression =
 let complementary_slice_candidate _cost expression =
   if Greysynth_utils.Utils.dag_size_bounded ~limit:2048 expression > 2048 then None
   else
-    let equalities = ref [] and memo = Nodes.create 64 in
+    let equalities = ref [] and memo = Nodes.create 64
+    and positive_extensions = Nodes.create 32 and seen = Nodes.create 128 in
+    let rec collect node =
+      if not (Nodes.mem seen node) then (
+        Nodes.add seen node ();
+        (match node with
+        | E.Unary { f = E.Uext amount; x; _ } ->
+            Nodes.replace positive_extensions (E.unary (E.Uext amount) x) ();
+            collect x
+        | E.Unary { x; _ } -> collect x
+        | E.Binary { x; y; _ } -> collect x; collect y
+        | E.Ite { c; t; e; _ } -> collect c; collect t; collect e
+        | _ -> ()))
+    in
+    collect expression;
     let rec rewrite node =
       match Nodes.find_opt memo node with
       | Some result -> result
@@ -606,6 +620,19 @@ let complementary_slice_candidate _cost expression =
                 let replacement =
                   E.binary E.Minus
                     (constant (E.sizeof base) (Z.pred (Z.shift_left Z.one (hi + 1))))
+                    positive
+                in
+                equalities := (rebuilt, replacement) :: !equalities;
+                replacement
+            | E.Unary { f = E.Uext amount;
+                        x = E.Unary { f = E.Not; x = low; _ }; _ }
+              when amount > 0
+                   && Nodes.mem positive_extensions (E.unary (E.Uext amount) low) ->
+                let positive = E.unary (E.Uext amount) low in
+                let replacement =
+                  E.binary E.Minus
+                    (constant (E.sizeof rebuilt)
+                       (Z.pred (Z.shift_left Z.one (E.sizeof low))))
                     positive
                 in
                 equalities := (rebuilt, replacement) :: !equalities;

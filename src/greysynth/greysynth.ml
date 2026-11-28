@@ -235,7 +235,15 @@ let run_preprocessing gt input =
     else
       let now = Unix.gettimeofday () in
       let remaining = !g_total_timeout -. (now -. !g_start_time) in
-      if remaining <= 0. then None else Some (now +. (0.60 *. remaining))
+      if remaining <= 0. then None
+      else
+        let ordinary = now +. (0.60 *. remaining) in
+        let reserved =
+          if !g_total_timeout >= 4. && size_of_expr !best <= 2048
+          then !g_start_time +. !g_total_timeout -. 0.85
+          else ordinary
+        in
+        Some (min ordinary reserved)
   in
   let run_oes () =
     if !c_oes && not !oes_done && not !g_has_timedout then (
@@ -346,7 +354,13 @@ let run_preprocessing gt input =
     then ()
     else
       let opaque =
-        Normalization.probe_opaque_atoms ~max_cost:2048 size_of_expr !best
+        Normalization.probe_opaque_atoms_list ~max_cost:max_size size_of_expr !best
+        |> (fun values ->
+             let rec take count = function
+               | _ when count = 0 -> []
+               | [] -> []
+               | head :: tail -> head :: take (count - 1) tail
+             in take 3 values)
       and small =
         if current_size > 256 then []
         else
@@ -356,42 +370,47 @@ let run_preprocessing gt input =
           |> List.filter_map Fun.id
       in
       let candidates =
-        Option.to_list opaque @ small
+        opaque @ small
+        |> List.sort_uniq Sexpr.Expr.compare
         |> List.sort (fun left right ->
                Int.compare (size_of_expr left) (size_of_expr right))
       in
-      match candidates with
-      | candidate :: _ ->
-          let accepted =
-            Rewrite.accepts_compositional ~pass:"root-semantic-probe-linear"
-              ~equalities:[] ~linear_mba_equalities:[ !best, candidate ]
-              !best candidate
-            || Rewrite.accepts_compositional ~pass:"root-semantic-probe-semilinear"
-                 ~equalities:[] ~semilinear_mba_equalities:[ !best, candidate ]
-                 !best candidate
-            || Rewrite.accepts ~timeout ~pass:"root-semantic-probe" !best candidate
-          in
-          if accepted then (
-            best := candidate;
-            (match Normalization.nonlinear_product_identity_candidate !best with
-            | Some (peeled, equalities, linear_mba_equalities,
-                    semilinear_mba_equalities, ring_equalities)
-              when Rewrite.accepts_compositional ~pass:"root-probe-product-peel"
-                     ~equalities ~ring_equalities ~linear_mba_equalities
-                     ~semilinear_mba_equalities !best peeled -> best := peeled
-            | _ -> ());
-            (match
-               if size_of_expr input <= 16_384
-               then Normalization.semilinear_mba_candidate size_of_expr !best
-               else Normalization.semilinear_mba_candidate_with_atoms size_of_expr !best
-             with
-            | Some semilinear
-              when Rewrite.accepts_compositional ~pass:"root-probe-semilinear"
-                     ~equalities:[]
-                     ~semilinear_mba_equalities:[ !best, semilinear ]
-                     !best semilinear -> best := semilinear
-            | _ -> ()))
-      | _ -> ()
+      let rec try_candidates = function
+        | [] -> ()
+        | candidate :: rest ->
+            let accepted =
+              Rewrite.accepts_compositional ~pass:"root-semantic-probe-linear"
+                ~equalities:[] ~linear_mba_equalities:[ !best, candidate ]
+                !best candidate
+              || Rewrite.accepts_compositional ~pass:"root-semantic-probe-semilinear"
+                   ~equalities:[] ~semilinear_mba_equalities:[ !best, candidate ]
+                   !best candidate
+              || Rewrite.accepts ~timeout ~pass:"root-semantic-probe" !best candidate
+            in
+            if not accepted then try_candidates rest
+            else (
+              best := candidate;
+              (match Normalization.nonlinear_product_identity_candidate !best with
+              | Some (peeled, equalities, linear_mba_equalities,
+                      semilinear_mba_equalities, ring_equalities)
+                when Rewrite.accepts_compositional ~pass:"root-probe-product-peel"
+                       ~equalities ~ring_equalities ~linear_mba_equalities
+                       ~semilinear_mba_equalities !best peeled -> best := peeled
+              | _ -> ());
+              (match
+                 if size_of_expr input <= 16_384
+                 then Normalization.semilinear_mba_candidate size_of_expr !best
+                 else Normalization.semilinear_mba_candidate_with_atoms size_of_expr !best
+               with
+              | Some semilinear
+                when Rewrite.accepts_compositional ~pass:"root-probe-semilinear"
+                       ~equalities:[]
+                       ~semilinear_mba_equalities:[ !best, semilinear ]
+                       !best semilinear -> best := semilinear
+              | _ -> ());
+              best := Normalization.dag_bottom_up_simplify ~zero_smt:true !best)
+      in
+      try_candidates candidates
   in
   let run_root_semilinear () =
     match
@@ -677,6 +696,9 @@ let run_preprocessing gt input =
       best := run_normalization ?deadline:(normalization_deadline ()) !best;
       check_equiv gt ~tag:"normalization" log_normalization_is_equiv !best);
     if size_of_expr !best > 7 then run_small_dag ();
+    if not !g_has_timedout && size_of_expr !best >= 9
+       && size_of_expr !best <= 1024
+    then run_root_semantic_probes ~max_size:1024 ~timeout:0.75 ();
     run_oes ()
   in
   if !c_egraph_extraction && size_of_expr !best > 128

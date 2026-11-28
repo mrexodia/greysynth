@@ -866,11 +866,11 @@ let probe_semantic_poly cost expression =
            |> List.find_opt (fun candidate -> Rewrite.samples_agree expression candidate)
          with _ -> None))
 
-let probe_opaque_atoms ?(max_cost = 512) ?(maximal_repeated = true)
+let probe_opaque_atoms_list ?(max_cost = 512) ?(maximal_repeated = true)
     cost expression =
   if cost expression < 9 || cost expression > max_cost
      || Greysynth_utils.Utils.dag_size_bounded ~limit:256 expression > 256
-  then None
+  then []
   else
     let width = E.sizeof expression and frequencies = Nodes.create 128
     and expanded = Nodes.create 128 in
@@ -1092,9 +1092,21 @@ let probe_opaque_atoms ?(max_cost = 512) ?(maximal_repeated = true)
                   E.binary E.And x y; E.binary E.Xor x y ]
                 |> List.map (fun body -> offset body c0)
             in
+            let ternary_templates =
+              if count <> 3 then []
+              else
+                let x = variables.(0) and y = variables.(1) and z = variables.(2)
+                and c0 = normalize coefficients.(0) in
+                [ E.binary E.Plus (E.binary E.Plus x y) z;
+                  E.binary E.Minus (E.binary E.Plus x y) z;
+                  E.binary E.Plus (E.binary E.Minus x y) z;
+                  E.binary E.Minus (E.binary E.Plus y z) x;
+                  x; y; z ]
+                |> List.map (fun body -> offset body c0)
+            in
             let abstract_candidates =
               raw :: (linear_candidates ~max_atoms:3 cost raw
-                      @ analytical @ binary_templates)
+                      @ analytical @ binary_templates @ ternary_templates)
             in
             let full_width_value sample_index variable_index =
               let rec fill shift state result =
@@ -1136,12 +1148,13 @@ let probe_opaque_atoms ?(max_cost = 512) ?(maximal_repeated = true)
             |> function candidate :: _ -> Some candidate | [] -> None
           with _ -> None
     in
-    match attempt `Arithmetic with
-    | Some _ as result -> result
-    | None ->
-        (match attempt `Shared with
-        | Some _ as result -> result
-        | None ->
-            (match attempt `Operator with
-            | Some _ as result -> result
-            | None -> if maximal_repeated then attempt `Maximal else None))
+    [ attempt `Operator; attempt `Arithmetic; attempt `Shared;
+      if maximal_repeated then attempt `Maximal else None ]
+    |> List.filter_map Fun.id
+    |> List.sort_uniq E.compare
+    |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+
+let probe_opaque_atoms ?max_cost ?maximal_repeated cost expression =
+  match probe_opaque_atoms_list ?max_cost ?maximal_repeated cost expression with
+  | candidate :: _ -> Some candidate
+  | [] -> None
