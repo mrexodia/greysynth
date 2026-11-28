@@ -25,7 +25,7 @@ let has_nonuniform_bitwise_constant expression =
   inspect false expression;
   !found
 
-let gf2_masked_xor_candidate cost expression =
+let gf2_masked_xor_candidate ?(canonical_atom = Fun.id) cost expression =
   let width = E.sizeof expression in
   if width > 128 || cost expression < 11 || cost expression > 65_536
      || Greysynth_utils.Utils.dag_size_bounded ~limit:8192 expression > 8192
@@ -86,8 +86,8 @@ let gf2_masked_xor_candidate cost expression =
                   simplified := true;
                   if operation = E.And then Z.zero, []
                   else let cx, tx = left and cy, ty = right in Z.logxor cx cy, merge tx ty)
-                else Z.zero, [ node, mask ]
-            | atom -> Z.zero, [ atom, mask ]
+                else Z.zero, [ canonical_atom node, mask ]
+            | atom -> Z.zero, [ canonical_atom atom, mask ]
           in
           if List.length (snd result) > 64 then raise Too_complex;
           Nodes.add memo node result; result
@@ -111,6 +111,16 @@ let gf2_masked_xor_candidate cost expression =
     with Too_complex -> None
 
 let gf2_masked_xor_candidate_with_bridges cost expression =
+  let root_ok = match expression with
+    | E.Unary { f = E.Not; _ }
+    | E.Binary { f = (E.Xor | E.And | E.Or); _ } -> true
+    | _ -> false
+  in
+  if not root_ok || E.sizeof expression > 128 || cost expression < 11
+     || cost expression > 65_536
+     || Greysynth_utils.Utils.dag_size_bounded ~limit:8192 expression > 8192
+  then None
+  else
   let memo = Nodes.create 256 and replacements = Nodes.create 64
   and ring_equalities = ref [] and linear_mba_equalities = ref [] in
   let rec flatten operation acc = function
@@ -152,10 +162,33 @@ let gf2_masked_xor_candidate_with_bridges cost expression =
         in
         Nodes.add memo node result; result
   in
-  let rewritten_source = canonical 0 expression in
-  match gf2_masked_xor_candidate cost rewritten_source with
+  match gf2_masked_xor_candidate ~canonical_atom:(canonical 0) cost expression with
   | None -> None
   | Some candidate ->
+      let rewritten_source =
+        if Nodes.length replacements = 0 then expression
+        else
+          let rebuilt = Nodes.create 256 and active = Nodes.create 64 in
+          let rec substitute node =
+            if Nodes.mem active node then node
+            else match Nodes.find_opt replacements node with
+              | Some value -> value
+              | None ->
+                  (match Nodes.find_opt rebuilt node with
+                  | Some value -> value
+                  | None ->
+                      Nodes.add active node ();
+                      let value = match node with
+                        | E.Unary { f; x; _ } -> E.unary f (substitute x)
+                        | E.Binary { f; x; y; _ } ->
+                            E.binary f (substitute x) (substitute y)
+                        | E.Ite { c; t; e; _ } ->
+                            E.ite (substitute c) (substitute t) (substitute e)
+                        | _ -> node
+                      in
+                      Nodes.remove active node; Nodes.add rebuilt node value; value)
+          in substitute expression
+      in
       Some (candidate, List.rev !ring_equalities,
             List.rev !linear_mba_equalities, rewritten_source)
 

@@ -2791,6 +2791,30 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-64 opaque-only AC canonicalization for masked GF2
+
+Round 64 moves AC canonicalization from the GF2 root to opaque-atom interning.
+The outer masked-XOR spine is parsed without a depth limit; only opaque atoms
+receive bounded depth-8/arity-8 canonicalization and corresponding ring or
+linear bridges. Rewritten sources are materialized only after a successful,
+strictly cheaper GF2 candidate, with an O(1) no-replacement path.
+`test/round64_test.ml` covers a depth-20 AC-permuted cancellation.
+
+Artifacts are `/tmp/r64-smoke/out.jsonl`, `/tmp/r64-leeky-dev64/out.jsonl`,
+`/tmp/r64-l5/out.jsonl`, and `/tmp/r64-core/out.jsonl`. All completed rows prove
+with zero refutations; one core row timed out under contention.
+
+| Gate | Established | Exact <= GT | Quality before -> after | Strict decreases |
+|---|---:|---:|---:|---:|
+| Leeky dev (all rows) | 884/884 | 531* | 8.4523x -> 1.7800x | 877/884 |
+| Shrunk Tigress L5 | 165/165 | 2 | 12.3980x -> 11.8397x | 165/165 |
+| Refreshed core hard | 276/277 | 16 | 7.7752x -> 7.6951x | 276/277 |
+| Regression smoke | 62/62 | 56** | 0.7846x -> 0.8041x | 62/62 |
+
+`*` Includes controls. `**` Smoke exact counts cover 58 usable-GT rows. Dev
+quality improves slightly; the pruned L5/core frontiers remain difficult and
+one core contention timeout remains.
+
 ## Round-63 AC-unified masked-GF2 producer
 
 Round 63 adds a bounded recursive AC canonicalizer to the masked-GF2 producer.
