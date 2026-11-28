@@ -264,3 +264,21 @@
    %{dep:../datasets/hard_cases/regression_smoke/tigress_l8/tigress_lvl_8__target_1016.json}
    %{dep:../datasets/hard_cases/core_hard/tigress_l6/tigress_lvl_6__target_375.json}
    %{dep:../datasets/leeky/adapted/dev_64/208deb497106ed9f_w64.json})))
+
+(test
+ (name round51_test)
+ (modules round51_test)
+ (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
+            greysynth.string_to_sexpr binsec.smt binsec.sse.term yojson unix)
+ (flags (:standard -open Binsec -open Libsse -open Libterm))
+ (deps
+  ../datasets/hard_cases/regression_smoke/tigress_l8/tigress_lvl_8__target_1016.json
+  ../datasets/hard_cases/core_hard/tigress_l6/tigress_lvl_6__target_375.json
+  ../datasets/leeky/adapted/dev_64/208deb497106ed9f_w64.json
+  ../datasets/hard_cases/core_hard/pldi_poly/pldi_poly__line_0000160.json)
+ (action
+  (run %{test}
+   %{dep:../datasets/hard_cases/regression_smoke/tigress_l8/tigress_lvl_8__target_1016.json}
+   %{dep:../datasets/hard_cases/core_hard/tigress_l6/tigress_lvl_6__target_375.json}
+   %{dep:../datasets/leeky/adapted/dev_64/208deb497106ed9f_w64.json}
+   %{dep:../datasets/hard_cases/core_hard/pldi_poly/pldi_poly__line_0000160.json})))

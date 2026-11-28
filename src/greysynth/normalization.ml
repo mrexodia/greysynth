@@ -61,7 +61,7 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
   let cost = Greysynth_utils.Utils.size_of_expr in
   let expression_cost = cost expression in
   let soft_stopped = ref false and smt_spent = ref 0.0
-  and opaque_probe_calls = ref 0 in
+  and opaque_probe_calls = ref 0 and lowk_calls = ref 0 in
   let probe_shell_memo = Nodes.create 128 in
   let rec contains_probe_shell node =
     match Nodes.find_opt probe_shell_memo node with
@@ -197,14 +197,16 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
           when try_smt (fun () -> Rewrite.accepts ~timeout:0.15
                  ~pass:"dag-abstract-slice" !result candidate) -> result := candidate
         | _ -> ());
-        if not zero_smt then
+        if not zero_smt && cost !result <= 256 && !lowk_calls < 6 then
           (match lowk_restrict_homomorphism_candidate cost !result with
-          | Some (candidate, equalities, linear_mba_equalities, ring_equalities)
-            when try_smt (fun () ->
-                     Rewrite.accepts_compositional ~pass:"dag-lowk-homomorphism"
-                       ~equalities ~linear_mba_equalities ~ring_equalities
-                       !result candidate) -> result := candidate
-          | _ -> ());
+          | Some (candidate, equalities, linear_mba_equalities, ring_equalities) ->
+              incr lowk_calls;
+              if try_smt (fun () ->
+                   Rewrite.accepts_compositional ~timeout:0.15
+                     ~pass:"dag-lowk-homomorphism" ~equalities
+                     ~linear_mba_equalities ~ring_equalities !result candidate)
+              then result := candidate
+          | None -> ());
         (match nonlinear_product_identity_candidate !result with
         | Some (candidate, [], linear_mba_equalities,
                 semilinear_mba_equalities, ring_equalities)

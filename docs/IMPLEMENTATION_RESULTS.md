@@ -2327,3 +2327,77 @@ Against the Round-44 zero-tuning held-out baseline (`50/112` hits, `2.2599x`,
 build gains one reference hit and improves established-case quality, while one
 transformed row times out and strict-reduction coverage drops to 108/112. Per
 the anti-overfitting rule, the timeout was not replayed or investigated.
+
+## Round-51 bounded low-k proofs and arity-aware phase ordering
+
+Round 51 closes the unbounded `dag-lowk-homomorphism` path. Bounded-SMT DAG
+passes now consider low-k candidates only through cost 256, attempt at most six
+per pass, and give every compositional check an explicit 0.15-second timeout.
+This prevents one low-k subtree from consuming the full solver and global
+budgets before previously proved DAG work is committed.
+
+The pre-root small/medium zero-SMT loop is restored for roots with at most eight
+variables. Higher-arity roots reach disjoint-component and root linear grouping
+first, while the post-`Normalization.run` loop remains unrestricted. Linear
+boundary scanning returns to 64 nodes. Pure polynomial roots retain the early
+zero-SMT polynomial pass.
+
+The requested literal 16,384 normalization window was tested but caused the
+1.3-million-node Tigress flagship to time out at a 13,466-node intermediate.
+The final implementation therefore uses a conservative 10,000-cost operational
+window. `tigress_lvl_8__target_1016` recovers beyond the requested bound to size
+9, while `tigress_lvl_6__target_375` remains at size 123 in the authoritative
+parallel core run and the projection diagnostic remains at size 42.
+
+`test/round51_test.ml` covers the giant Tigress flagship, target 375, the
+projection diagnostic, and an exact PLDI polynomial case through the full
+pipeline with independent replay. The complete warning-clean `make test` gate
+passes. `src/proof/rewrite_proof.ml` is unchanged, and the held-out balanced set
+was not run in Round 51.
+
+Final artifacts:
+
+```text
+/tmp/r51-smoke/out.jsonl
+/tmp/r51-leeky-dev64/out.jsonl
+/tmp/r51-l5/out.jsonl
+/tmp/r51-core/out.jsonl
+```
+
+All 1,539 rows establish with zero refutations, unknowns, errors, or audit
+timeout verdicts. Leeky dev establishes all 884 rows; among 880 transformed
+rows, 840 strictly decrease and 490 reach or beat reference after a strict
+reduction. Aggregate quality changes from `2.3475x` to `2.2539x`; all four
+controls remain unchanged.
+
+| Leeky dev panel | Baseline hits -> R51 hits | Baseline quality -> R51 quality | R51 strict reductions |
+|---|---:|---:|---:|
+| mba-capabilities-v1 | 33 -> 33 | 3.3337x -> 3.3321x | 71/71 |
+| mba-capabilities-v2 | 34 -> 36 | 1.1037x -> 1.0929x | 43/44 |
+| mba-composition-v1 | 47 -> 47 | 1.1365x -> 1.1365x | 52/54 |
+| mba-extra-floor-v1 | 19 -> 29 | 1.4569x -> 1.1921x | 54/54 |
+| mba-frontier64-v1 | 3 -> 0 | 22.7000x -> 39.4817x | 69/96 |
+| mba-gaps-v1 | 55 -> 57 | 1.1124x -> 1.0668x | 72/72 |
+| mba-interactions-v1 | 23 -> 22 | 0.9364x -> 0.9484x | 33/33 |
+| mba-ladders-v1 | 39 -> 48 | 1.2743x -> 1.1088x | 72/72 |
+| mba-long-frontier-v1 | 44 -> 39 | 1.6318x -> 1.6869x | 70/72 |
+| mba-majority-v1 | 34 -> 36 | 1.3835x -> 1.1262x | 54/54 |
+| mba-projection-v1 | 51 -> 47 | 1.1375x -> 1.3021x | 54/54 |
+| mba-proof-context-v1 | 12 -> 24 | 1.5744x -> 1.0271x | 36/36 |
+| mba-stress64-v1 | 0 -> 3 | 11.2614x -> 6.8719x | 88/96 |
+| mba-tight-v1 | 68 -> 69 | 1.0377x -> 1.0262x | 72/72 |
+| **Overall transformed** | **462 -> 490** | **2.3475x -> 2.2539x** | **840/880** |
+
+| Regression gate | Established | Exact <= GT | Quality before -> after | Better / equal / worse | Strict decreases |
+|---|---:|---:|---:|---:|---:|
+| Shrunk Tigress L5 | 251/251 | 56 | 10.5590x -> 5.8743x | 150 / 39 / 62 | 251 |
+| Refreshed core hard | 342/342 | 71* | 7.0702x -> 4.5849x | 161 / 144 / 36 | 332 |
+| Regression smoke | 62/62 | 54* | 0.7846x -> 0.8026x | 5 / 51 / 6 | 62 |
+
+`*` Core exact counts cover 341 rows with usable GT; smoke exact counts cover 58.
+Round 51 meets the requested strict-decrease and exact-count gates for smoke,
+Tigress L5, and core hard. Smoke quality narrowly misses the `0.795x` target at
+`0.8026x`; dev quality/hits, projection recovery, target 375 exactness, and the
+core `<4.4x` target also remain unmet. The strongest result is the restoration
+of all 251 shrunk L5 rows to strict decreases with 56 new exact-or-better
+outputs, alongside 71 core exacts and the Tigress flagship reaching size 9.

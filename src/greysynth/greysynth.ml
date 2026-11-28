@@ -589,6 +589,8 @@ let run_preprocessing gt input =
                     || not (Sexpr.Expr.is_equal !best before)
       done)
   in
+  if List.length (Sample_evaluator.variables_of_expr !best) <= 8 then
+    run_small_dag ();
   run_root_minterm_poly ();
   run_root_partial_linear_sum ();
   run_root_semilinear ();
@@ -603,7 +605,6 @@ let run_preprocessing gt input =
   run_root_complementary_slice ();
   run_root_complementary_atoms ();
   run_root_correlated_null ();
-  run_small_dag ();
   let input_dag_size = dag_size_of_expr !best in
   if (size_of_expr !best > 256 || input_dag_size > 128) && input_dag_size <= 2048
   then (
