@@ -2791,6 +2791,29 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-65 Shannon and separable Boolean synthesis
+
+Round 65 adds cost-minimizing XOR/OR Shannon MUX candidates, exact four-variable
+2+2 separable Boolean decomposition across all disjoint pairings, and additional
+zero-SMT NOT/arithmetic pushdowns. `test/round65_test.ml` covers the new NOT-plus
+identity.
+
+Artifacts are `/tmp/r65-smoke/out.jsonl`, `/tmp/r65-leeky-dev64/out.jsonl`,
+`/tmp/r65-l5/out.jsonl`, and `/tmp/r65-core/out.jsonl`. Parallel runs have zero
+refutations; one core row timed out under contention.
+
+| Gate | Established | Exact <= GT | Quality before -> after | Strict decreases |
+|---|---:|---:|---:|---:|
+| Leeky dev (all rows) | 884/884 | 577* | 8.4523x -> 1.7973x | 877/884 |
+| Shrunk Tigress L5 | 165/165 | 6 | 12.3980x -> 11.5133x | 165/165 |
+| Refreshed core hard | 276/277 | 27 | 7.7752x -> 7.4461x | 276/277 |
+| Regression smoke | 62/62 | 56** | 0.7846x -> 0.8041x | 62/62 |
+
+`*` Includes controls. `**` Smoke exact counts cover 58 usable-GT rows. Round 65
+sets a large new dev exact-count record while preserving all strict smoke/L5
+rows. Smoke remains narrowly above target and the pruned core frontier has one
+contention timeout.
+
 ## Round-64 opaque-only AC canonicalization for masked GF2
 
 Round 64 moves AC canonicalization from the GF2 root to opaque-atom interning.

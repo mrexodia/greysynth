@@ -52,6 +52,22 @@ let not_pushdown_candidate cost expression =
         let candidates =
           demorgan_not x ::
           (match x with
+          | E.Binary { f = E.Plus; x = E.Unary { f = E.Not; x = a; _ }; y = b; _ }
+          | E.Binary { f = E.Plus; x = b; y = E.Unary { f = E.Not; x = a; _ }; _ } ->
+              [ E.binary E.Minus a b ]
+          | E.Binary { f = E.Minus;
+                       x = E.Unary { f = E.Not; x = a; _ };
+                       y = E.Unary { f = E.Not; x = b; _ }; _ } ->
+              [ E.binary E.Minus b a ]
+          | E.Binary { f = E.Minus;
+                       x = E.Unary { f = E.Not; x = a; _ };
+                       y = E.Binary { f = E.Plus;
+                             x = E.Unary { f = E.Not; x = b; _ }; y = c; _ }; _ }
+          | E.Binary { f = E.Minus;
+                       x = E.Unary { f = E.Not; x = a; _ };
+                       y = E.Binary { f = E.Plus;
+                             x = c; y = E.Unary { f = E.Not; x = b; _ }; _ }; _ } ->
+              [ E.binary E.Minus (E.binary E.Minus b a) c ]
           | E.Binary { f = E.Minus; x = left; y = right; _ } ->
               [ E.binary E.Plus right (demorgan_not left) ]
           | _ -> [])
@@ -465,8 +481,51 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
           if f0 = 15 then
             shannon := E.binary E.Or (demorgan_not pivot_atom) s1 :: !shannon;
           if f1 = (15 lxor f0) then
-            shannon := E.binary E.Xor pivot_atom s0 :: !shannon
+            shannon := E.binary E.Xor pivot_atom s0 :: !shannon;
+          shannon := E.binary E.Xor
+              (E.binary E.And pivot_atom (E.binary E.Xor s0 s1)) s0 :: !shannon;
+          if f0 land (15 lxor f1) = 0 then
+            shannon := E.binary E.Or s0 (E.binary E.And pivot_atom s1) :: !shannon
         done);
+      if count = 4 && cost expression <= 128 then (
+        let synth2 u v bits =
+          match bits with
+          | 0 -> zeros width | 15 -> constant width mask
+          | 10 -> u | 12 -> v | 5 -> demorgan_not u | 3 -> demorgan_not v
+          | 8 -> E.binary E.And u v | 14 -> E.binary E.Or u v
+          | 6 -> E.binary E.Xor u v | 9 -> demorgan_not (E.binary E.Xor u v)
+          | 2 -> E.binary E.And u (demorgan_not v)
+          | 4 -> E.binary E.And (demorgan_not u) v
+          | 11 -> E.binary E.Or u (demorgan_not v)
+          | 13 -> E.binary E.Or (demorgan_not u) v
+          | 7 -> demorgan_not (E.binary E.And u v)
+          | 1 -> demorgan_not (E.binary E.Or u v)
+          | _ -> zeros width
+        in
+        List.iter (fun (u0, u1, v0, v1) ->
+          List.iter (fun operation ->
+            for gbits = 0 to 15 do
+              for hbits = 0 to 15 do
+                let valid = ref true in
+                for assignment = 0 to 15 do
+                  let ui = (if assignment land (1 lsl u0) <> 0 then 1 else 0)
+                           lor (if assignment land (1 lsl u1) <> 0 then 2 else 0)
+                  and vi = (if assignment land (1 lsl v0) <> 0 then 1 else 0)
+                           lor (if assignment land (1 lsl v1) <> 0 then 2 else 0) in
+                  let g = gbits land (1 lsl ui) <> 0
+                  and h = hbits land (1 lsl vi) <> 0 in
+                  let value = if operation = E.Xor then g <> h
+                    else if operation = E.Or then g || h else g && h in
+                  if value <> truth.(assignment) then valid := false
+                done;
+                if !valid then
+                  shannon := E.binary operation
+                      (synth2 atoms.(u0) atoms.(u1) gbits)
+                      (synth2 atoms.(v0) atoms.(v1) hbits) :: !shannon
+              done
+            done)
+            [ E.Xor; E.Or; E.And ])
+          [ 0,1,2,3; 0,2,1,3; 0,3,1,2 ]);
       [ combine E.Or (zeros width) minterms;
         combine E.And (constant width mask) clauses;
         anf ] @ !shannon
@@ -589,7 +648,11 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
           if f0 = 0 then booleans := E.binary E.And p s1 :: !booleans;
           if f1 = 15 then booleans := E.binary E.Or p s0 :: !booleans;
           if f0 = 15 then booleans := E.binary E.Or (demorgan_not p) s1 :: !booleans;
-          if f1 = (15 lxor f0) then booleans := E.binary E.Xor p s0 :: !booleans
+          if f1 = (15 lxor f0) then booleans := E.binary E.Xor p s0 :: !booleans;
+          booleans := E.binary E.Xor
+              (E.binary E.And p (E.binary E.Xor s0 s1)) s0 :: !booleans;
+          if f0 land (15 lxor f1) = 0 then
+            booleans := E.binary E.Or s0 (E.binary E.And p s1) :: !booleans
         done);
       List.iter (fun boolean ->
           let delta0 = normalize (Z.sub v1 v0) in
