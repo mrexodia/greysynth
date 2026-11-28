@@ -2791,6 +2791,19 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-67 sprint: mask-bucket linear partitioning
+
+Round 67 partitions large additive expressions by their unique non-uniform
+bitwise masks, simplifies each multi-term bucket independently with bounded
+linear-MBA recovery, and reconnects the partition through ring and linear proof
+edges. The pass runs at DAG and root levels with zero SMT.
+
+`test/round67_test.ml` passes. The fast smoke gate `/tmp/r67-smoke/out.jsonl`
+establishes all 62 rows with zero refutations, 62 strict decreases, 57/58
+exact-or-better, and quality `0.8005x`. The repository-wide test alias remains
+blocked by stale pruned-dataset fixtures and contention-sensitive historical
+assertions; the new targeted test and warning-clean build pass.
+
 ## Round-66 Shannon MUX and separable Boolean polish
 
 Round 66 adds cost-minimized Shannon XOR/OR MUX forms, exact four-variable 2+2

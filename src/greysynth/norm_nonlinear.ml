@@ -717,6 +717,78 @@ let partial_linear_sum_candidate cost expression =
           ring_equalities := linear_ring_edges @ !ring_equalities;
           Some (candidate, List.rev !ring_equalities, linear_equalities)
 
+let mask_bucket_linear_sum_candidate cost expression =
+  let root_ok = match expression with
+    | E.Binary { f = (E.Plus | E.Minus); _ } -> true | _ -> false in
+  if not root_ok || cost expression < 24 || cost expression > 32_768
+     || Greysynth_utils.Utils.dag_size_bounded ~limit:2048 expression > 2048
+  then None
+  else
+    let rec flatten sign node result =
+      if List.length result > 128 then result else
+      match node with
+      | E.Binary { f = E.Plus; x; y; _ } -> flatten sign y (flatten sign x result)
+      | E.Binary { f = E.Minus; x; y; _ } ->
+          flatten (not sign) y (flatten sign x result)
+      | E.Unary { f = E.Minus; x; _ } -> flatten (not sign) x result
+      | term -> (if sign then term else E.unary E.Minus term) :: result
+    in
+    let terms = List.rev (flatten true expression []) in
+    if List.length terms < 4 || List.length terms > 128 then None else
+    let term_mask term =
+      let masks = ref [] and seen = Nodes.create 32 in
+      let rec walk under node =
+        if List.length !masks <= 2 && not (Nodes.mem seen node) then (
+          Nodes.add seen node ();
+          match node with
+          | E.Cst value when under
+            && not (Bitvector.is_zeros value || Bitvector.is_fill value) ->
+              let value = Bitvector.value_of value in
+              if not (List.mem value !masks) then masks := value :: !masks
+          | E.Unary { f = E.Not; x; _ } -> walk under x
+          | E.Binary { f = (E.And | E.Or | E.Xor); x; y; _ } -> walk true x; walk true y
+          | E.Unary { x; _ } -> walk false x
+          | E.Binary { x; y; _ } -> walk false x; walk false y
+          | _ -> ())
+      in walk false term;
+      match !masks with [ value ] -> Some value | _ -> None
+    in
+    let buckets = ref [] and rest = ref [] in
+    List.iter (fun term -> match term_mask term with
+      | None -> rest := term :: !rest
+      | Some mask ->
+          let rec add prefix = function
+            | [] -> buckets := List.rev_append prefix [ mask, [ term ] ]
+            | (old, values) :: tail when Z.equal old mask ->
+                buckets := List.rev_append prefix ((old, term :: values) :: tail)
+            | item :: tail -> add (item :: prefix) tail
+          in add [] !buckets) terms;
+    let width = E.sizeof expression in
+    let sum = function [] -> zeros width | [ value ] -> value
+      | values -> build_balanced E.Plus values in
+    let useful, singletons = List.partition (fun (_, values) -> List.length values >= 2) !buckets in
+    let rest = List.concat_map snd singletons @ !rest in
+    if useful = [] then None else
+    let improved = ref false and rings = ref [] and linears = ref [] in
+    let pairs = List.map (fun (_, values) ->
+      let original = sum values in
+      let proposals = linear_candidates_with_rings ~max_atoms:6 cost original
+        |> List.filter (fun (candidate, _, _) -> cost candidate < cost original
+             && Rewrite.samples_agree original candidate)
+        |> List.sort (fun (a,_,_) (b,_,_) -> Int.compare (cost a) (cost b)) in
+      match proposals with
+      | (candidate, edges, rewritten) :: _ ->
+          improved := true; rings := edges @ !rings;
+          linears := (rewritten, candidate) :: !linears;
+          original, candidate
+      | [] -> original, original) useful in
+    if not !improved then None else
+    let rest_sum = if rest = [] then [] else [ sum rest ] in
+    let partitioned = sum (List.map fst pairs @ rest_sum)
+    and candidate = sum (List.map snd pairs @ rest_sum) in
+    if cost candidate >= cost expression then None
+    else Some (candidate, (expression, partitioned) :: !rings, !linears)
+
 let rec product_partition_candidate expression =
   let same = E.is_equal in
   let commutative_operator = function

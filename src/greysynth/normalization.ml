@@ -279,6 +279,13 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
               |> List.find_opt (fun candidate ->
                      accept_linear (candidate, [], !result))
               |> Option.iter (fun candidate -> result := candidate)));
+        if not (should_stop ()) && cost !result >= 24 && cost !result <= 32_768 then
+          (match mask_bucket_linear_sum_candidate cost !result with
+          | Some (candidate, ring_equalities, linear_mba_equalities)
+            when Rewrite.accepts_compositional ~pass:"dag-mask-bucket-linear"
+                   ~equalities:[] ~ring_equalities ~linear_mba_equalities
+                   !result candidate -> result := candidate
+          | _ -> ());
         (match if cost !result >= 15
            then gf2_masked_xor_candidate_with_bridges cost !result else None with
         | Some (candidate, ring_equalities, linear_mba_equalities, rewritten_source)

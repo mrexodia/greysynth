@@ -276,6 +276,12 @@ let run_preprocessing gt input =
     | _ -> ()
   in
   let run_root_partial_linear_sum () =
+    (match Normalization.mask_bucket_linear_sum_candidate size_of_expr !best with
+    | Some (candidate, ring_equalities, linear_mba_equalities)
+      when Rewrite.accepts_compositional ~pass:"root-mask-bucket-linear"
+             ~equalities:[] ~ring_equalities ~linear_mba_equalities
+             !best candidate -> best := candidate
+    | _ -> ());
     match Normalization.partial_linear_sum_candidate size_of_expr !best with
     | Some (candidate, ring_equalities, linear_mba_equalities)
       when Rewrite.accepts_compositional ~pass:"root-partial-linear-sum"
