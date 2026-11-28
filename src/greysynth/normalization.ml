@@ -237,7 +237,7 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
             then 6 else 4
           in
           let proposals =
-            if expression_cost <= 16_384 && contains_probe_shell !result then
+            if expression_cost <= 512 && contains_probe_shell !result then
               linear_candidates_with_rings ~max_atoms cost !result
             else
               linear_candidates ~max_atoms cost !result
@@ -250,7 +250,12 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
           in
           (match List.find_opt accept_linear proposals with
           | Some (candidate, _, _) -> result := candidate
-          | None -> ()));
+          | None ->
+              linear_candidates ~max_atoms cost !result
+              |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+              |> List.find_opt (fun candidate ->
+                     accept_linear (candidate, [], !result))
+              |> Option.iter (fun candidate -> result := candidate)));
         (match
            if expression_cost <= 16_384 then semilinear_mba_candidate cost !result
            else semilinear_mba_candidate_with_atoms cost !result
@@ -702,27 +707,40 @@ let run ?deadline expression =
              in
              let linear_decomposed =
                if not (E.is_equal !current expression)
-                  || cost !current < 4 || cost !current > 512
+                  || cost !current < 4 || cost !current > 10_000
                then None
                else
+                 let enhanced =
+                   cost !current <= 512 && has_bitwise_operator !current
+                 in
                  let proposals =
-                   (if has_bitwise_operator !current then
-                      linear_candidates_with_rings cost !current
-                    else
-                      linear_candidates cost !current
-                      |> List.map (fun candidate -> candidate, [], !current))
+                   (if enhanced then linear_candidates_with_rings cost !current
+                    else linear_candidates cost !current
+                         |> List.map (fun candidate -> candidate, [], !current))
                    |> List.sort (fun (left, _, _) (right, _, _) ->
                           Int.compare (cost left) (cost right))
                  in
-                 Option.map (fun (candidate, _, _) -> candidate)
-                   (List.find_opt
-                      (fun (candidate, ring_equalities, rewritten_source) ->
-                        Rewrite.accepts_compositional
-                          ~pass:"normalize-linear-mba" ~equalities:[]
-                          ~ring_equalities
-                          ~linear_mba_equalities:[ rewritten_source, candidate ]
-                          !current candidate)
-                      proposals)
+                 let accepted =
+                   List.find_opt
+                     (fun (candidate, ring_equalities, rewritten_source) ->
+                       Rewrite.accepts_compositional
+                         ~pass:"normalize-linear-mba" ~equalities:[]
+                         ~ring_equalities
+                         ~linear_mba_equalities:[ rewritten_source, candidate ]
+                         !current candidate)
+                     proposals
+                 in
+                 (match accepted with
+                 | Some (candidate, _, _) -> Some candidate
+                 | None when enhanced ->
+                     linear_candidates cost !current
+                     |> List.sort (fun left right -> Int.compare (cost left) (cost right))
+                     |> List.find_opt (fun candidate ->
+                            Rewrite.accepts_compositional
+                              ~pass:"normalize-linear-mba-fallback" ~equalities:[]
+                              ~linear_mba_equalities:[ !current, candidate ]
+                              !current candidate)
+                 | None -> None)
              in
              let decomposed =
                match lowk_decomposed with

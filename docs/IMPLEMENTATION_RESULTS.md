@@ -2224,3 +2224,106 @@ rows take larger but verified local minima under eight-worker scheduling.
 Projection and long-frontier remain the main dev regressions; the requested
 majority/proof-context/extra-floor jumps improve substantially but do not reach
 the aspirational panel targets.
+
+## Round-50 pipeline ordering and milestone held-out evaluation
+
+Round 50 raises the linear normalization window for medium roots while retaining
+a conservative 10,000-cost operational guard: the literal 16,384 window caused
+the established 1.3-million-node Tigress flagship to exhaust its five-second
+budget after shrinking to a 13,466-node intermediate. The resulting bounded
+window recovers medium Tigress reductions while preserving
+`tigress_lvl_8__target_1016 -> 13`. Candidate search now falls back lazily to the
+compatibility linear producer only when the enhanced candidate list does not
+certify.
+
+The first small/medium zero-SMT DAG loop was moved after root minterm,
+PolySim, disjoint-component, linear-group, complementary-atom, and
+correlated-null passes. The post-`Normalization.run` loop remains. Producer
+boundary scanning was raised from 64 to 256 nodes. Pure polynomial roots receive
+an early zero-SMT polynomial reduction, which restores the multivariate smoke
+case under parallel load.
+
+`test/round50_test.ml` exercises the giant Tigress flagship, target 375, and the
+projection diagnostic through the full pipeline. The flagship remains exact;
+target 375 reduces to 117–130 rather than its size-5 reference, and the
+projection diagnostic reduces to 42 rather than 11. These misses are retained
+explicitly. The complete warning-clean `make test` gate passes, and
+`src/proof/rewrite_proof.ml` is unchanged.
+
+Final non-held-out artifacts:
+
+```text
+/tmp/r50-smoke/out.jsonl
+/tmp/r50-leeky-dev64/out.jsonl
+/tmp/r50-l5/out.jsonl
+/tmp/r50-core/out.jsonl
+```
+
+All 1,539 non-held-out rows establish with zero refutations, unknowns, errors,
+or audit timeout verdicts. Leeky dev establishes all 884 rows; among 880
+transformed rows, 812 strictly decrease and 489 reach or beat reference after a
+strict reduction. Aggregate quality changes from `2.3475x` to `2.3306x`; all
+four controls remain unchanged.
+
+| Leeky dev panel | Baseline hits -> R50 hits | Baseline quality -> R50 quality | R50 strict reductions |
+|---|---:|---:|---:|
+| mba-capabilities-v1 | 33 -> 33 | 3.3337x -> 3.3356x | 71/71 |
+| mba-capabilities-v2 | 34 -> 34 | 1.1037x -> 1.1000x | 43/44 |
+| mba-composition-v1 | 47 -> 47 | 1.1365x -> 1.1300x | 52/54 |
+| mba-extra-floor-v1 | 19 -> 30 | 1.4569x -> 1.1429x | 54/54 |
+| mba-frontier64-v1 | 3 -> 1 | 22.7000x -> 47.0650x | 47/96 |
+| mba-gaps-v1 | 55 -> 53 | 1.1124x -> 1.1984x | 71/72 |
+| mba-interactions-v1 | 23 -> 23 | 0.9364x -> 0.9368x | 33/33 |
+| mba-ladders-v1 | 39 -> 48 | 1.2743x -> 1.1363x | 72/72 |
+| mba-long-frontier-v1 | 44 -> 40 | 1.6318x -> 1.6668x | 70/72 |
+| mba-majority-v1 | 34 -> 37 | 1.3835x -> 1.0900x | 54/54 |
+| mba-projection-v1 | 51 -> 45 | 1.1375x -> 1.3651x | 54/54 |
+| mba-proof-context-v1 | 12 -> 24 | 1.5744x -> 1.0290x | 36/36 |
+| mba-stress64-v1 | 0 -> 5 | 11.2614x -> 7.2619x | 83/96 |
+| mba-tight-v1 | 68 -> 69 | 1.0377x -> 1.0226x | 72/72 |
+| **Overall transformed** | **462 -> 489** | **2.3475x -> 2.3306x** | **812/880** |
+
+| Regression gate | Established | Exact <= GT | Quality before -> after | Better / equal / worse | Strict decreases |
+|---|---:|---:|---:|---:|---:|
+| Shrunk Tigress L5 | 251/251 | 51 | 10.5590x -> 6.8170x | 140 / 38 / 73 | 249 |
+| Refreshed core hard | 342/342 | 35* | 7.0702x -> 5.4095x | 123 / 182 / 36 | 325 |
+| Regression smoke | 62/62 | 53* | 0.7846x -> 0.9113x | 5 / 50 / 7 | 62 |
+
+`*` Core exact counts cover 341 rows with usable GT; smoke exact counts cover 58.
+The requested smoke, dev, Tigress, and core quality targets are not met despite
+zero refutations and full establishment. Projection and frontier regressions
+remain the dominant dev failures.
+
+### Milestone-50 held-out balanced64 evaluation
+
+The frozen Round-50 build was evaluated exactly once on the 120-case held-out
+balanced panel. No individual held-out expression or result was inspected, and
+no code or configuration was changed afterward.
+
+```text
+/tmp/r50-leeky-heldout/out.jsonl
+```
+
+Aggregate-only results:
+
+```text
+Total:                    120
+Established:              119/120
+Direct/compositional:     32 / 87
+Refuted/error/unknown:    0 / 0 / 0
+Audit timeout:            1
+Transformed established:  111/112
+Strict transformed:       108/112
+Reference hits:           51/112 (45.5%)
+Transformed quality:      1.8835x over 111 established transformed rows
+Controls established:     8/8
+Controls <= reference:    8/8
+Controls unchanged:       8/8
+Control quality:          1.0000x
+```
+
+Against the Round-44 zero-tuning held-out baseline (`50/112` hits, `2.2599x`,
+`111/112` strict transformed, `8/8` unchanged controls), the frozen Round-50
+build gains one reference hit and improves established-case quality, while one
+transformed row times out and strict-reduction coverage drops to 108/112. Per
+the anti-overfitting rule, the timeout was not replayed or investigated.

@@ -104,7 +104,7 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
     | _ -> false
   in
   let rec scan_bitwise node =
-    if !scan_count < 64 && not (Nodes.mem scan_bitwise_seen node) then (
+    if !scan_count < 256 && not (Nodes.mem scan_bitwise_seen node) then (
       incr scan_count;
       Nodes.add scan_bitwise_seen node ();
       match node with
@@ -116,7 +116,7 @@ let rec linear_candidates_with_rings ?(opaque_atoms = [])
           Nodes.replace bitwise_linear_atoms (canonical_ac_atom value) ()
       | _ -> ())
   and scan_linear node =
-    if !scan_count < 64 && not (Nodes.mem scan_linear_seen node) then (
+    if !scan_count < 256 && not (Nodes.mem scan_linear_seen node) then (
       incr scan_count;
       Nodes.add scan_linear_seen node ();
       let add_linear value =

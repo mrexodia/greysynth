@@ -309,7 +309,7 @@ let run_preprocessing gt input =
            || (allow_opaque && contains_bitwise !best))
     then
       let proposals =
-        if size_of_expr input <= 16_384 && contains_bitwise !best then
+        if size_of_expr input <= 512 && contains_bitwise !best then
           Normalization.linear_candidates_with_rings ~max_atoms:8 size_of_expr !best
         else
           Normalization.linear_candidates ~max_atoms:8 size_of_expr !best
@@ -329,7 +329,15 @@ let run_preprocessing gt input =
          proposals
        with
       | Some (candidate, _, _) -> best := candidate
-      | None -> ())
+      | None ->
+          Normalization.linear_candidates ~max_atoms:8 size_of_expr !best
+          |> List.sort (fun left right ->
+                 Int.compare (size_of_expr left) (size_of_expr right))
+          |> List.find_opt (fun candidate ->
+                 Rewrite.accepts_compositional ~pass:"root-linear-group-fallback"
+                   ~equalities:[] ~linear_mba_equalities:[ !best, candidate ]
+                   !best candidate)
+          |> Option.iter (fun candidate -> best := candidate))
   in
   let run_root_semantic_probes ?(max_size = 2048) ?(timeout = 0.80) () =
     let current_size = size_of_expr !best in
@@ -581,7 +589,6 @@ let run_preprocessing gt input =
                     || not (Sexpr.Expr.is_equal !best before)
       done)
   in
-  run_small_dag ();
   run_root_minterm_poly ();
   run_root_partial_linear_sum ();
   run_root_semilinear ();
@@ -596,6 +603,7 @@ let run_preprocessing gt input =
   run_root_complementary_slice ();
   run_root_complementary_atoms ();
   run_root_correlated_null ();
+  run_small_dag ();
   let input_dag_size = dag_size_of_expr !best in
   if (size_of_expr !best > 256 || input_dag_size > 128) && input_dag_size <= 2048
   then (
