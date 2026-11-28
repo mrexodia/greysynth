@@ -519,10 +519,11 @@ let run_preprocessing gt input =
      && dag_size_bounded ~limit:4096 !best <= 4096
      && not !g_has_timedout
   then best := Normalization.dag_constant_cast_simplify !best;
-  (match Normalization.gf2_masked_xor_candidate size_of_expr !best with
-  | Some candidate
+  (match Normalization.gf2_masked_xor_candidate_with_bridges size_of_expr !best with
+  | Some (candidate, ring_equalities, linear_mba_equalities, rewritten_source)
     when Rewrite.accepts_compositional ~pass:"root-gf2-masked-xor"
-           ~equalities:[] ~semilinear_mba_equalities:[ !best, candidate ]
+           ~equalities:[] ~ring_equalities ~linear_mba_equalities
+           ~semilinear_mba_equalities:[ rewritten_source, candidate ]
            !best candidate -> best := candidate
   | _ -> ());
   if size_of_expr !best > 512 && size_of_expr !best <= 16_384
@@ -602,10 +603,11 @@ let run_preprocessing gt input =
       let after_size = size_of_expr !best and after_dag = dag_size_of_expr !best in
       improving := after_size < before_size || after_dag < before_dag
     done);
-  (match Normalization.gf2_masked_xor_candidate size_of_expr !best with
-  | Some candidate
+  (match Normalization.gf2_masked_xor_candidate_with_bridges size_of_expr !best with
+  | Some (candidate, ring_equalities, linear_mba_equalities, rewritten_source)
     when Rewrite.accepts_compositional ~pass:"post-dag-gf2-masked-xor"
-           ~equalities:[] ~semilinear_mba_equalities:[ !best, candidate ]
+           ~equalities:[] ~ring_equalities ~linear_mba_equalities
+           ~semilinear_mba_equalities:[ rewritten_source, candidate ]
            !best candidate -> best := candidate
   | _ -> ());
   let run_small_dag () =

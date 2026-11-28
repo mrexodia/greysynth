@@ -279,10 +279,12 @@ let dag_bottom_up_simplify ?(minimal = false) ?(zero_smt = false)
               |> List.find_opt (fun candidate ->
                      accept_linear (candidate, [], !result))
               |> Option.iter (fun candidate -> result := candidate)));
-        (match if cost !result >= 15 then gf2_masked_xor_candidate cost !result else None with
-        | Some candidate
+        (match if cost !result >= 15
+           then gf2_masked_xor_candidate_with_bridges cost !result else None with
+        | Some (candidate, ring_equalities, linear_mba_equalities, rewritten_source)
           when Rewrite.accepts_compositional ~pass:"dag-gf2-masked-xor"
-                 ~equalities:[] ~semilinear_mba_equalities:[ !result, candidate ]
+                 ~equalities:[] ~ring_equalities ~linear_mba_equalities
+                 ~semilinear_mba_equalities:[ rewritten_source, candidate ]
                  !result candidate -> result := candidate
         | _ -> ());
         (match

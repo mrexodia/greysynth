@@ -385,3 +385,10 @@
  (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
             binsec.smt binsec.sse.term yojson unix)
  (flags (:standard -open Binsec -open Libsse -open Libterm)))
+
+(test
+ (name round63_test)
+ (modules round63_test)
+ (libraries greysynth.core greysynth.utils greysynth.sample_evaluator
+            binsec.smt binsec.sse.term yojson unix)
+ (flags (:standard -open Binsec -open Libsse -open Libterm)))

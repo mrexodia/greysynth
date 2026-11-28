@@ -2791,6 +2791,28 @@ all proofs fail-closed, but misses the requested smoke quality, L5, core, and
 capabilities/frontier targets. L5 quality regresses and remains the primary
 follow-up.
 
+## Round-63 AC-unified masked-GF2 producer
+
+Round 63 adds a bounded recursive AC canonicalizer to the masked-GF2 producer.
+Opaque `Plus`/`Mul` atoms carry ring bridges, bitwise `And`/`Or`/`Xor` atoms
+carry linear-MBA bridges, and all three GF2 pipeline call sites certify the
+rewritten source compositionally with zero SMT. `test/round63_test.ml` passes.
+
+Artifacts are `/tmp/r63-smoke/out.jsonl`, `/tmp/r63-leeky-dev64/out.jsonl`,
+`/tmp/r63-l5/out.jsonl`, and `/tmp/r63-core/out.jsonl`. Parallel runs have zero
+refutations; one core row timed out under contention.
+
+| Gate | Established | Exact <= GT | Quality before -> after | Strict decreases |
+|---|---:|---:|---:|---:|
+| Leeky dev (all rows) | 884/884 | 530* | 8.4523x -> 1.8034x | 876/884 |
+| Shrunk Tigress L5 | 165/165 | 2 | 12.3980x -> 11.8937x | 165/165 |
+| Refreshed core hard | 276/277 | 16 | 7.7752x -> 7.6060x | 276/277 |
+| Regression smoke | 62/62 | 56** | 0.7846x -> 0.8041x | 62/62 |
+
+`*` Includes controls. `**` Smoke exact counts cover 58 usable-GT rows. The dev
+aggregate remains near the record, while smoke narrowly misses and the pruned
+L5/core frontiers remain difficult.
+
 ## Round-62 constant-absorption fix
 
 Round 62 fixes the absorbed-sum builder so the absorbed `(-c, ~B)` term is

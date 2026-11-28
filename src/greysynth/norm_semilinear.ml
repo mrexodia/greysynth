@@ -110,6 +110,55 @@ let gf2_masked_xor_candidate cost expression =
         if cost candidate < cost expression then Some candidate else None
     with Too_complex -> None
 
+let gf2_masked_xor_candidate_with_bridges cost expression =
+  let memo = Nodes.create 256 and replacements = Nodes.create 64
+  and ring_equalities = ref [] and linear_mba_equalities = ref [] in
+  let rec flatten operation acc = function
+    | E.Binary { f; x; y; _ } when f = operation ->
+        flatten operation (flatten operation acc x) y
+    | value -> value :: acc
+  in
+  let rec canonical depth node =
+    match Nodes.find_opt memo node with
+    | Some result -> result
+    | None ->
+        let rebuilt =
+          if depth >= 8 then node
+          else match node with
+            | E.Unary { f; x; _ } -> E.unary f (canonical (depth + 1) x)
+            | E.Binary { f; x; y; _ } ->
+                E.binary f (canonical (depth + 1) x) (canonical (depth + 1) y)
+            | E.Ite { c; t; e; _ } ->
+                E.ite (canonical (depth + 1) c) (canonical (depth + 1) t)
+                  (canonical (depth + 1) e)
+            | _ -> node
+        in
+        let result =
+          match rebuilt with
+          | E.Binary { f = (E.Plus | E.Mul as operation); _ }
+          | E.Binary { f = (E.And | E.Or | E.Xor as operation); _ } ->
+              let terms = flatten operation [] rebuilt in
+              if List.length terms > 8 then rebuilt
+              else
+                let candidate = build_balanced operation (List.sort E.compare terms) in
+                if not (E.is_equal rebuilt candidate) then (
+                  Nodes.replace replacements rebuilt candidate;
+                  if operation = E.Plus || operation = E.Mul
+                  then ring_equalities := (rebuilt, candidate) :: !ring_equalities
+                  else linear_mba_equalities :=
+                         (rebuilt, candidate) :: !linear_mba_equalities);
+                candidate
+          | _ -> rebuilt
+        in
+        Nodes.add memo node result; result
+  in
+  let rewritten_source = canonical 0 expression in
+  match gf2_masked_xor_candidate cost rewritten_source with
+  | None -> None
+  | Some candidate ->
+      Some (candidate, List.rev !ring_equalities,
+            List.rev !linear_mba_equalities, rewritten_source)
+
 let semilinear_mba_candidate_with_atoms ?(opaque_atoms = [])
     ?has_nonuniform cost expression =
   let width = E.sizeof expression in
